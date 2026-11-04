@@ -100,6 +100,54 @@ def imports(path):
 
 def audit(exe, sdk, system):
     repo = Path(__file__).resolve().parents[2]
+    source_receipt = sdk / 'sdk/thumbgen-sdk.json'
+    owners, packages = {}, {}
+    if source_receipt.is_file():
+        source = json.loads(source_receipt.read_text(encoding='utf-8'))
+        lock = repo / 'dependencies/windows-source-sdk.json'
+        if (source.get('kind') != 'thumbgen-windows-source-sdk' or source['source_lock_sha256'] != digest(lock)
+                or source['source_lock'] != json.loads(lock.read_text(encoding='utf-8-sig'))):
+            raise ValueError('Source SDK profile/lock differs')
+        versions = {item['package']: item.get('version') for item in source['source_lock']['dependencies']}
+        versions.update(OpenImageIO=source['source_lock']['oiio_tag'].lstrip('v'),
+                        nlohmann_json=source['source_lock']['nlohmann_json']['version'])
+        for item in source['sources']:
+            packages[item['package']] = dict(name=item['package'], version=versions[item['package']],
+                                             source_commit=item['commit'], url=item['repository'])
+        packages['MSVC-runtime'] = dict(name='MSVC-runtime', license='LicenseRef-MicrosoftVisualCppRuntime',
+                                       source='Visual Studio redistributable; see SDK receipt')
+        for relative, item in source['artifacts'].items():
+            if relative.lower().endswith('.dll'):
+                owners[relative.lower()] = packages[item['component']], item
+        sdk_receipt = dict(lock_sha256=source['source_lock_sha256'])
+        search = (sdk / 'sdk/bin', sdk / 'oiio-deps/dist/bin')
+        # Static/header-only dependencies also require notice/source accounting.
+        used_packages = set(packages)
+        profile = 'source'
+    else:
+        owners, packages, sdk_receipt = conda_metadata(repo, sdk)
+        search = (sdk / 'Library/bin', sdk)
+        used_packages = {'nlohmann_json'}
+        profile = 'conda'
+    # Fixed SDK locations only, never the calling shell's PATH/current directory.
+    available = {}
+    for directory in search:
+        for path in sorted(directory.glob('*.dll')):
+            name = path.name.lower()
+            if name in available and digest(available[name]) != digest(path):
+                raise ValueError('Ambiguous SDK DLL: ' + path.name)
+            available.setdefault(name, path)
+    report = resolve(exe, sdk, system, available, owners, packages, used_packages)
+    report.update(schema_version=1, exe_sha256=digest(exe), sdk_lock_sha256=sdk_receipt['lock_sha256'],
+                  sdk_profile=profile, recipe_sha256=digest(Path(__file__).resolve()), architecture='AMD64',
+                  redistribution_ready=False, minimum_platform_verified=False,
+                  limitations=['Declared normal/delay imports only; runtime LoadLibrary/plugins and export forwarders require separate execution validation.',
+                               'System32 availability is checked on the current development host, not the minimum target OS.',
+                               'Component metadata is an index, not complete license/notice or corresponding-source compliance.'])
+    return report
+
+
+def conda_metadata(repo, sdk):
     spec = importlib.util.spec_from_file_location('thumbgen_verify_sdk', repo / 'scripts/verify-sdk.py')
     verifier = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(verifier)
@@ -115,16 +163,11 @@ def audit(exe, sdk, system):
                 if key in owners:
                     raise ValueError('Multiple DLL owners: ' + relative)
                 owners[key] = record, item
-    # Fixed SDK locations only, never the calling shell's PATH/current directory.
-    available = {}
-    for directory in (sdk / 'Library/bin', sdk):
-        for path in sorted(directory.glob('*.dll')):
-            name = path.name.lower()
-            if name in available and digest(available[name]) != digest(path):
-                raise ValueError('Ambiguous SDK DLL: ' + path.name)
-            available.setdefault(name, path)
+    return owners, packages, sdk_receipt
+
+
+def resolve(exe, sdk, system, available, owners, packages, used_packages):
     queue, resolved, external = [exe], {}, {}
-    used_packages = {'nlohmann_json'}  # Header-only direct product dependency.
     while queue:
         path = queue.pop(0)
         key = path.name.lower()
@@ -136,7 +179,7 @@ def audit(exe, sdk, system):
             owner, entry = owners[path.relative_to(sdk).as_posix().lower()]
             expected = entry.get('sha256_in_prefix') or entry.get('sha256')
             if not expected or checksum != expected:
-                raise ValueError('Installed DLL contents differ from package metadata: ' + str(path))
+                raise ValueError('Installed DLL contents differ from SDK receipt/metadata: ' + str(path))
             record['package'] = owner['name']
             used_packages.add(owner['name'])
         resolved[key] = record
@@ -163,15 +206,9 @@ def audit(exe, sdk, system):
     components = []
     for name in sorted(used_packages):
         package = packages[name]
-        components.append({key: package.get(key) for key in ('name', 'version', 'build', 'license', 'url', 'sha256')})
-    return dict(schema_version=1, exe_sha256=digest(exe), sdk_lock_sha256=sdk_receipt['lock_sha256'],
-                recipe_sha256=digest(Path(__file__).resolve()), architecture='AMD64',
-                files=[resolved[key] for key in sorted(resolved)],
-                system_dependencies=[external[key] for key in sorted(external)], components=components,
-                redistribution_ready=False, minimum_platform_verified=False,
-                limitations=['Declared normal/delay imports only; runtime LoadLibrary/plugins and export forwarders require separate execution validation.',
-                             'System32 availability is checked on the current development host, not the minimum target OS.',
-                             'Package license metadata is an index, not complete license/notice or corresponding-source compliance.'])
+        components.append({key: package.get(key) for key in ('name', 'version', 'build', 'license', 'url', 'sha256', 'source_commit')})
+    return dict(files=[resolved[key] for key in sorted(resolved)],
+                system_dependencies=[external[key] for key in sorted(external)], components=components)
 
 
 if __name__ == '__main__':

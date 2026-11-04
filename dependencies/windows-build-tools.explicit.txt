@@ -1,0 +1,2 @@
+@EXPLICIT
+https://conda.anaconda.org/conda-forge/win-64/nasm-2.16.03-hfd05255_1.conda#cce00ed17e684bf84c8cc592de578fedfb93b2d2357256c41c262b67ceacf6e7
