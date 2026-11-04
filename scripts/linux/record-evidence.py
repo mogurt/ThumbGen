@@ -1,6 +1,7 @@
 """Record actual source identities, build flags and staged artifact hashes."""
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -25,7 +26,7 @@ for root in (cache / 'oiio-deps', cache / 'oiio-build', cache / 'thumbgen-build'
         if any('-march=native' in value or '-mtune=native' in value for value in values):
             raise SystemExit('Host CPU flags detected: ' + str(path))
         flags[str(path)] = values
-stage = repo / '.deps/linux/validation'
+stage = Path(os.environ.get('THUMBGEN_VALIDATION_DIR', repo / '.deps/linux/validation')).resolve()
 build_identity = json.loads(run(str(stage / 'bin/thumbgen'), '--version', '--json'))['build']
 artifacts = {}
 for directory in ('bin', 'lib'):

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
-stage="$repo/.deps/linux/validation"
+stage=${THUMBGEN_VALIDATION_DIR:-"$repo/.deps/linux/validation"}
 python=${THUMBGEN_TEST_PYTHON:-python3}
 if test -z "${THUMBGEN_TEST_PYTHON:-}"; then
     for candidate in /home/builder/thumbgen-cache/tools/python-3.11.11/bin/python3 "$HOME/thumbgen-test-tools/python-3.11.11/bin/python3"; do

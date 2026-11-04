@@ -1,5 +1,6 @@
 """Stage test artifacts and non-glibc runtime closure; this is not a release packager."""
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -8,14 +9,15 @@ import re
 
 cache = Path(sys.argv[1]).resolve()
 repo = Path(__file__).resolve().parents[2]
-stage = repo / '.deps/linux/validation'
+stage = Path(os.environ.get('THUMBGEN_VALIDATION_DIR', repo / '.deps/linux/validation')).resolve()
 stage.mkdir(parents=True, exist_ok=True)
 for directory in ('bin', 'lib', 'tests', 'schemas', 'tools'):
     (stage / directory).mkdir(exist_ok=True)
-binaries = ('thumbgen', 'thumbgen_core_tests', 'thumbgen_image_matrix')
+binaries = ('thumbgen', 'thumbgen_core_tests', 'thumbgen_image_matrix', 'thumbgen_budget_tests', 'thumbgen_process_tests')
 for name in binaries:
     shutil.copy2(cache / 'thumbgen-build' / name, stage / 'bin' / name)
-audit = json.loads((cache / 'logs/abi.json').read_text())
+logs = Path(os.environ.get('THUMBGEN_BUILD_LOG_DIR', cache / 'logs'))
+audit = json.loads((logs / 'abi.json').read_text())
 if audit['failures']:
     raise SystemExit('ABI audit failed; refusing staging')
 # glibc components must always come from the target OS.

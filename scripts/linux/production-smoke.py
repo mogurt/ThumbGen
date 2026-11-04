@@ -16,7 +16,7 @@ parser.add_argument('--asset-root', required=True, type=Path)
 parser.add_argument('--readonly-root', required=True, type=Path)
 args = parser.parse_args()
 repo = Path(__file__).resolve().parents[2]
-stage = repo / '.deps/linux/validation'
+stage = Path(os.environ.get('THUMBGEN_VALIDATION_DIR', repo / '.deps/linux/validation')).resolve()
 label = os.environ.get('WSL_DISTRO_NAME', 'linux')
 destination = stage / 'results' / label / ('production-' + uuid.uuid4().hex[:8])
 destination.mkdir(parents=True)
