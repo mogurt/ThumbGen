@@ -106,7 +106,15 @@
             "conversion_failed",
             "sequence_selection_changed",
             "sequence_selection_conflict",
-            "sequence_part_identity_required"
+            "sequence_part_identity_required",
+            "output_stat_failed",
+            "output_symlink",
+            "output_not_regular",
+            "output_aliases_input",
+            "temporary_create_failed",
+            "source_stat_failed",
+            "source_changed",
+            "invalid_output_policy"
           ]
         },
         "message": {
@@ -119,6 +127,9 @@
             "colour",
             "decode"
           ]
+        },
+        "retryable": {
+          "type": "boolean"
         }
       },
       "required": [
@@ -160,6 +171,13 @@
                 "png",
                 "webp"
               ]
+            },
+            "existing_policy": {
+              "enum": [
+                "error",
+                "skip",
+                "replace"
+              ]
             }
           },
           "required": [
@@ -169,7 +187,8 @@
             "height",
             "resize_ms",
             "finish_ms",
-            "format"
+            "format",
+            "existing_policy"
           ],
           "additionalProperties": false
         },
@@ -188,14 +207,50 @@
             "resize_ms": {
               "type": "number",
               "minimum": 0
+            },
+            "existing_policy": {
+              "enum": [
+                "error",
+                "skip",
+                "replace"
+              ]
             }
           },
           "required": [
             "path",
             "status",
-            "error"
+            "error",
+            "existing_policy"
           ],
           "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "status": {
+              "const": "skipped"
+            },
+            "reason": {
+              "const": "output_exists"
+            },
+            "existing_policy": {
+              "const": "skip"
+            },
+            "resize_ms": {
+              "type": "number",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "path",
+            "status",
+            "reason",
+            "existing_policy"
+          ]
         }
       ]
     },
@@ -364,7 +419,8 @@
           "enum": [
             "success",
             "partial",
-            "failed"
+            "failed",
+            "skipped"
           ]
         },
         "outputs": {
@@ -473,6 +529,27 @@
         "sequence_id": {
           "type": "string",
           "minLength": 1
+        },
+        "source_check": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "method": {
+              "const": "identity_size_mtime"
+            },
+            "checks": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "stable": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "method",
+            "checks",
+            "stable"
+          ]
         }
       },
       "required": [
@@ -492,7 +569,10 @@
           "if": {
             "properties": {
               "status": {
-                "const": "success"
+                "enum": [
+                  "success",
+                  "skipped"
+                ]
               }
             }
           },
@@ -500,30 +580,11 @@
             "properties": {
               "ok": {
                 "const": true
-              },
-              "outputs": {
-                "minItems": 1,
-                "items": {
-                  "allOf": [
-                    {
-                      "$ref": "#/$defs/output"
-                    },
-                    {
-                      "properties": {
-                        "status": {
-                          "const": "success"
-                        }
-                      }
-                    }
-                  ]
-                }
               }
             },
             "required": [
               "selection",
-              "source",
-              "colour",
-              "selected_channels"
+              "source"
             ]
           },
           "else": {
@@ -552,6 +613,65 @@
           "if": {
             "properties": {
               "status": {
+                "const": "success"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "colour"
+            ],
+            "properties": {
+              "outputs": {
+                "minItems": 1,
+                "items": {
+                  "properties": {
+                    "status": {
+                      "enum": [
+                        "success",
+                        "skipped"
+                      ]
+                    }
+                  }
+                },
+                "contains": {
+                  "properties": {
+                    "status": {
+                      "const": "success"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "skipped"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "outputs": {
+                "minItems": 1,
+                "items": {
+                  "properties": {
+                    "status": {
+                      "const": "skipped"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
                 "const": "partial"
               }
             }
@@ -564,7 +684,10 @@
                     "contains": {
                       "properties": {
                         "status": {
-                          "const": "success"
+                          "enum": [
+                            "success",
+                            "skipped"
+                          ]
                         }
                       }
                     }
@@ -595,18 +718,11 @@
             "properties": {
               "outputs": {
                 "items": {
-                  "allOf": [
-                    {
-                      "$ref": "#/$defs/output"
-                    },
-                    {
-                      "properties": {
-                        "status": {
-                          "const": "failed"
-                        }
-                      }
+                  "properties": {
+                    "status": {
+                      "const": "failed"
                     }
-                  ]
+                  }
                 }
               }
             }
@@ -657,18 +773,27 @@
             "not_attempted": {
               "type": "integer",
               "minimum": 0
+            },
+            "skipped": {
+              "type": "integer",
+              "minimum": 0
             }
           },
           "required": [
             "total",
             "success",
             "failed",
-            "not_attempted"
+            "not_attempted",
+            "skipped"
           ],
           "additionalProperties": false
         },
         "elapsed_ms": {
           "type": "number",
+          "minimum": 0
+        },
+        "skipped": {
+          "type": "integer",
           "minimum": 0
         }
       },
@@ -680,7 +805,8 @@
         "partial",
         "failed",
         "output_counts",
-        "elapsed_ms"
+        "elapsed_ms",
+        "skipped"
       ],
       "additionalProperties": false
     },

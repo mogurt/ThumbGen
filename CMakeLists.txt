@@ -17,7 +17,7 @@ if(Git_FOUND AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.git")
 endif()
 configure_file(src/build_info.h.in generated/build_info.h @ONLY)
 
-add_library(thumbgen_core STATIC src/core.cpp src/selection.cpp)
+add_library(thumbgen_core STATIC src/core.cpp src/selection.cpp src/files.cpp)
 target_compile_features(thumbgen_core PUBLIC cxx_std_17)
 target_include_directories(thumbgen_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_include_directories(thumbgen_core PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
@@ -90,13 +90,21 @@ if(BUILD_TESTING)
         data_beauty_z data_beauty_normal data_beauty_crypto data_root_priority data_ambiguous data_explicit
         data_missing_part data_missing_group data_black data_visible
         primary_black_beauty primary_black_root primary_root_strategy primary_combined primary_tie primary_denoised
-        sequence_missing sequence_no_upgrade sequence_conflict sequence_alpha_changed sequence_independent)
+        sequence_missing sequence_no_upgrade sequence_conflict sequence_alpha_changed sequence_independent
+        io_error io_skip io_replace io_partial io_hardlink io_race_error io_race_skip io_race_replace
+        io_source_decode io_source_identity io_source_commit io_source_partial io_cleanup_foreign)
+    if(UNIX)
+        list(APPEND THUMBGEN_IMAGE_CASES io_symlink io_write_limit io_permission)
+    endif()
     foreach(image_case IN LISTS THUMBGEN_IMAGE_CASES)
         add_test(NAME image_${image_case} COMMAND thumbgen_image_matrix ${image_case})
         set_tests_properties(image_${image_case} PROPERTIES LABELS "image-matrix" TIMEOUT 30
             ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:OpenImageIO::OpenImageIO>;LD_LIBRARY_PATH=path_list_prepend:$<TARGET_FILE_DIR:OpenImageIO::OpenImageIO>")
     endforeach()
+    if(UNIX)
+        set_tests_properties(image_io_permission PROPERTIES SKIP_RETURN_CODE 77)
+    endif()
     if(MSVC)
         target_compile_options(thumbgen_image_matrix PRIVATE /W4 /utf-8 /permissive-)
     endif()

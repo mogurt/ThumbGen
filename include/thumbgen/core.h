@@ -1,6 +1,7 @@
 #pragma once
 #include <nlohmann/json.hpp>
 #include <memory>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -15,6 +16,7 @@ struct Options {
 struct Output {
     std::string path, format = "jpeg";
     int width = 1024, height = 1024, quality = 90;
+    std::string existing = "error";
 };
 struct Job {
     std::string id, input, sequence_id;
@@ -24,7 +26,9 @@ struct Job {
 // Internal interface, not a stable public C++ ABI.
 class Engine {
 public:
-    Engine();
+    // Internal phase observer; used by native integration tests and future scheduling.
+    using Observer = std::function<void(const std::string&,const Job&)>;
+    explicit Engine(Observer observer = {});
     ~Engine();
     Json inspect(const std::string& input);
     Json convert(const Job& job);

@@ -1,4 +1,5 @@
 #include <thumbgen/core.h>
+#include "files.h"
 #include <algorithm>
 #include <cctype>
 #include <chrono>
@@ -32,8 +33,9 @@ static void usage() {
         "  --input-space SPACE, --ocio-config FILE, --display NAME --view NAME\n"
         "  --channels RGB|GRAY|GROUP, --part N or --part-name NAME\n"
         "  --selection-policy primary|root_rgb, --threads N, --max-decode-mib N\n"
+        "  --existing error|skip|replace (default: error)\n"
         "Defaults: balanced, JPEG Q90, fit 1024x1024 without upscaling, black background.\n"
-        "No output overwriting. Exit: 0 success, 1 internal, 2 usage, 3 partial, 4 all failed.\n";
+        "Default: no output overwriting. Exit: 0 success, 1 internal, 2 usage, 3 partial, 4 all failed.\n";
 }
 static void keys(const Json& object,const std::set<std::string>& allowed) {
     if(!object.is_object())throw std::invalid_argument("expected an object");
@@ -78,7 +80,11 @@ static void validate_options(const Options& o) {
 }
 static Options options(const Json& values,bool partial=false) {
     keys(values,{"preset","input_space","background","ocio_config","display","view","channels","part_name","selection_policy",
-        "part","threads","max_decode_mib","quality","format","size"});
+        "part","threads","max_decode_mib","quality","format","size","existing"});
+    if(values.contains("existing")) {
+        auto policy=values["existing"].get<std::string>();
+        if(policy!="error" && policy!="skip" && policy!="replace")throw std::invalid_argument("invalid existing policy");
+    }
     for(const char* key:{"part","threads","max_decode_mib","quality"})
         if(values.contains(key)&&!values[key].is_number_integer())throw std::invalid_argument(std::string(key)+" must be an integer");
     for(auto bound:{std::make_pair("part",2147483647),std::make_pair("threads",256),
@@ -116,12 +122,14 @@ static std::string infer_format(const std::string& path) {
     throw std::invalid_argument("output extension must be jpg, jpeg, png or webp");
 }
 static Output output(const Json& object,const Json& defaults,const fs::path& base,const Options& o) {
-    keys(object,{"path","format","quality","size"});
+    keys(object,{"path","format","quality","size","existing"});
     if(object.contains("quality")&&!object["quality"].is_number_integer())throw std::invalid_argument("quality must be an integer");
     if(object.contains("quality") && (object["quality"].get<long double>()<1 || object["quality"].get<long double>()>100))
         throw std::invalid_argument("quality must be in 1..100");
     Output out;
     out.path=path_string(base,object.at("path").get<std::string>());
+    out.existing=object.value("existing",defaults.value("existing",std::string("error")));
+    if(out.existing!="error" && out.existing!="skip" && out.existing!="replace")throw std::invalid_argument("invalid existing policy");
     out.format=object.value("format",defaults.value("format",infer_format(out.path)));
     if(out.format=="jpg")out.format="jpeg";
     if(out.format!=infer_format(out.path))throw std::invalid_argument("format disagrees with output extension");
@@ -148,7 +156,11 @@ struct PathLess {
 static void preflight(const std::vector<Job>& jobs) {
     std::set<std::string> ids;
     std::set<std::string,PathLess> outputs,inputs;
-    for(const auto& job:jobs)inputs.insert(identity(fs::u8path(job.input)));
+    std::set<std::string> input_files,output_files;
+    for(const auto& job:jobs) {
+        inputs.insert(identity(fs::u8path(job.input)));
+        auto key=thumbgen::detail::file_identity(fs::u8path(job.input));if(!key.empty())input_files.insert(key);
+    }
     for(const auto& job:jobs) {
         if(job.id.empty()||!ids.insert(job.id).second)throw std::invalid_argument("empty or duplicate job id");
         if(job.outputs.empty())throw std::invalid_argument("each job needs at least one output");
@@ -156,6 +168,11 @@ static void preflight(const std::vector<Job>& jobs) {
             auto key=identity(fs::u8path(out.path));
             if(inputs.count(key))throw std::invalid_argument("output aliases an input path");
             if(!outputs.insert(key).second)throw std::invalid_argument("duplicate output path");
+            auto file=thumbgen::detail::file_identity(fs::u8path(out.path));
+            if(!file.empty()) {
+                if(input_files.count(file))throw std::invalid_argument("output hard-links or aliases an input file");
+                if(!output_files.insert(file).second)throw std::invalid_argument("outputs refer to the same existing file");
+            }
         }
     }
 }
@@ -194,7 +211,7 @@ static int execute(const std::vector<std::string>& args) {
     bool json_mode=std::find(args.begin(),args.end(),"--json")!=args.end();
     auto error=[&](const char* code,const std::exception& e,int exit_code) {
         if(json_mode)std::cout<<Json({{"schema_version",1},{"type","error"},
-            {"error",{{"code",code},{"message",e.what()}}}}).dump()<<std::endl;
+            {"error",{{"code",code},{"message",e.what()}}}}).dump(-1,' ',false,Json::error_handler_t::replace)<<std::endl;
         else std::cerr<<"thumbgen: "<<e.what()<<std::endl;
         return exit_code;
     };
@@ -206,7 +223,7 @@ static int execute(const std::vector<std::string>& args) {
             for(size_t i=2;i<args.size();++i)if(args[i]!="--json")throw std::invalid_argument("unexpected argument");
             auto data=thumbgen::Engine::capabilities();
             if(command=="--version")data={{"schema_version",1},{"type","version"},{"version",data["version"]},{"oiio_version",data["oiio_version"]},{"build",data["build"]}};
-            std::cout<<data.dump(json_mode?-1:2)<<std::endl;return 0;
+            std::cout<<data.dump(json_mode?-1:2,' ',false,Json::error_handler_t::replace)<<std::endl;return 0;
         }
         if(command!="convert"&&command!="batch"&&command!="inspect")throw std::invalid_argument("unknown command: "+command);
         Json values=Json::object();std::vector<std::pair<int,int>> sizes;
@@ -224,6 +241,7 @@ static int execute(const std::vector<std::string>& args) {
             else if(flag=="--part")values["part"]=number(value());
             else if(flag=="--part-name")values["part_name"]=value();
             else if(flag=="--selection-policy")values["selection_policy"]=value();
+            else if(flag=="--existing")values["existing"]=value();
             else if(flag=="--max-decode-mib")values["max_decode_mib"]=number(value());
             else if(flag=="--preset")values["preset"]=value();
             else if(flag=="--format")values["format"]=value();
@@ -241,7 +259,7 @@ static int execute(const std::vector<std::string>& args) {
             if(input.empty()||!values.empty()||!sizes.empty()||!output_dir.empty()||!output_file.empty()||!manifest_file.empty())
                 throw std::invalid_argument("inspect expects only INPUT and optional --json");
             auto r=engine.inspect(path_string(fs::current_path(),input));
-            std::cout<<r.dump(json_mode?-1:2)<<std::endl;return r["ok"].get<bool>()?0:4;
+            std::cout<<r.dump(json_mode?-1:2,' ',false,Json::error_handler_t::replace)<<std::endl;return r["ok"].get<bool>()?0:4;
         }
         std::vector<Job> jobs;
         if(command=="batch") {
@@ -264,26 +282,31 @@ static int execute(const std::vector<std::string>& args) {
             jobs.push_back(std::move(job));preflight(jobs);
         }
         const auto batch_start=std::chrono::steady_clock::now();
-        size_t success=0,partial=0,failed=0,outputs_total=0,outputs_success=0,outputs_failed=0;
+        size_t success=0,partial=0,failed=0,skipped=0,outputs_total=0,outputs_success=0,outputs_failed=0,outputs_skipped=0;
         for(const auto& job:jobs) {
             outputs_total+=job.outputs.size();
             auto r=engine.convert(job);
             if(r["status"]=="success")++success;
             else if(r["status"]=="partial")++partial;
+            else if(r["status"]=="skipped")++skipped;
             else ++failed;
-            for(const auto& out:r["outputs"])if(out["status"]=="success")++outputs_success;else ++outputs_failed;
-            if(json_mode)std::cout<<r.dump()<<std::endl;
+            for(const auto& out:r["outputs"]) {
+                if(out["status"]=="success")++outputs_success;
+                else if(out["status"]=="skipped")++outputs_skipped;
+                else ++outputs_failed;
+            }
+            if(json_mode)std::cout<<r.dump(-1,' ',false,Json::error_handler_t::replace)<<std::endl;
             else std::cout<<job.input<<": "<<r["status"].get<std::string>()<<'\n';
             if(!r["ok"].get<bool>()&&!json_mode)std::cerr<<r.dump(2)<<'\n';
         }
         Json end{{"schema_version",1},{"type","summary"},{"total",jobs.size()},
-                 {"success",success},{"partial",partial},{"failed",failed},
+                 {"success",success},{"partial",partial},{"failed",failed},{"skipped",skipped},
                  {"output_counts",{{"total",outputs_total},{"success",outputs_success},{"failed",outputs_failed},
-                     {"not_attempted",outputs_total-outputs_success-outputs_failed}}},
+                     {"skipped",outputs_skipped},{"not_attempted",outputs_total-outputs_success-outputs_failed-outputs_skipped}}},
                  {"elapsed_ms",std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-batch_start).count()}};
         if(json_mode)std::cout<<end.dump()<<std::endl;
-        if(success==jobs.size())return 0;
-        return success||partial?3:4;
+        if(success+skipped==jobs.size())return 0;
+        return success||partial||skipped?3:4;
     }catch(const std::invalid_argument& e){return error("invalid_request",e,2);}
      catch(const std::out_of_range& e){return error("invalid_request",e,2);}
      catch(const Json::exception& e){return error("invalid_request",e,2);}

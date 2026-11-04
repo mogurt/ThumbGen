@@ -170,6 +170,46 @@
       "code": "sequence_part_identity_required",
       "category": "selection",
       "description": "multipart sequence requires a named part"
+    },
+    {
+      "code": "output_stat_failed",
+      "category": "output",
+      "description": "cannot query output path"
+    },
+    {
+      "code": "output_symlink",
+      "category": "output",
+      "description": "output leaf is a symbolic link"
+    },
+    {
+      "code": "output_not_regular",
+      "category": "output",
+      "description": "existing output is not a regular file"
+    },
+    {
+      "code": "output_aliases_input",
+      "category": "output",
+      "description": "output aliases input"
+    },
+    {
+      "code": "temporary_create_failed",
+      "category": "output",
+      "description": "cannot reserve temporary directory"
+    },
+    {
+      "code": "source_stat_failed",
+      "category": "input",
+      "description": "cannot query input identity/size/mtime"
+    },
+    {
+      "code": "source_changed",
+      "category": "input",
+      "description": "input changed during processing; safe to retry after producer finishes"
+    },
+    {
+      "code": "invalid_output_policy",
+      "category": "output",
+      "description": "invalid existing output policy"
     }
   ]
 }

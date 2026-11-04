@@ -46,12 +46,13 @@ class Protocol(unittest.TestCase):
         if rows[-1]['type']=='summary':
             end=rows[-1];results=rows[:-1]
             self.assertEqual(end['total'],len(results))
-            for state,key in [('success','success'),('partial','partial'),('failed','failed')]:
+            for state,key in [('success','success'),('partial','partial'),('failed','failed'),('skipped','skipped')]:
                 self.assertEqual(end[key],sum(r['status']==state for r in results))
             outputs=[out for r in results for out in r['outputs']]
             self.assertEqual(end['output_counts']['success'],sum(o['status']=='success' for o in outputs))
             self.assertEqual(end['output_counts']['failed'],sum(o['status']=='failed' for o in outputs))
-            self.assertEqual(end['output_counts']['total'],sum(end['output_counts'][k] for k in ['success','failed','not_attempted']))
+            self.assertEqual(end['output_counts']['skipped'],sum(o['status']=='skipped' for o in outputs))
+            self.assertEqual(end['output_counts']['total'],sum(end['output_counts'][k] for k in ['success','failed','skipped','not_attempted']))
         return rows
     def test_schema_and_registry(self):
         Draft202012Validator.check_schema(schema)
@@ -79,7 +80,7 @@ class Protocol(unittest.TestCase):
               {'id':'bad','input':str(self.root/'missing.exr'),'outputs':[{'path':str(self.root/'bad.png')}]}]
         path=self.root/'jobs.json';path.write_text(json.dumps({'schema_version':1,'jobs':jobs}))
         rows=self.records('batch','--manifest',path,exit=3)
-        self.assertEqual(rows[-1]['output_counts'],{'total':4,'success':2,'failed':1,'not_attempted':1})
+        self.assertEqual(rows[-1]['output_counts'],{'total':4,'success':2,'failed':1,'skipped':0,'not_attempted':1})
         self.assertEqual(existing.read_bytes(),b'keep')
     def test_schema_rejects_invalid_contracts(self):
         row=self.records('convert',self.input,'--output',self.root/'output.png')[0]
@@ -116,6 +117,85 @@ class Protocol(unittest.TestCase):
         self.records('batch','--manifest',path,exit=2)
     def test_stdin_boundary(self):
         self.records('batch','--manifest','-',exit=2,stdin='{"schema_version":1}')
+    def test_existing_policies_and_counts(self):
+        target=self.root/'existing.png';target.write_bytes(b'keep')
+        before=target.stat().st_mtime_ns
+        rows=self.records('convert',self.input,'--output',target,'--existing','skip')
+        self.assertEqual(rows[0]['status'],'skipped');self.assertNotIn('decode',rows[0]['timings_ms'])
+        self.assertEqual(rows[-1]['skipped'],1);self.assertEqual(rows[-1]['output_counts']['skipped'],1)
+        self.assertEqual(target.read_bytes(),b'keep');self.assertEqual(target.stat().st_mtime_ns,before)
+        rows=self.records('convert',self.input,'--output',target,'--existing','replace')
+        self.assertEqual(rows[0]['status'],'success');self.assertNotEqual(target.read_bytes(),b'keep')
+        target.write_bytes(b'keep')
+        jobs=[{'id':'mixed','input':str(self.input),'outputs':[
+            {'path':str(target),'existing':'skip'},{'path':str(self.root/'new.png'),'existing':'replace'}]}]
+        path=self.root/'policies.json';path.write_text(json.dumps({'schema_version':1,'defaults':{'existing':'error'},'jobs':jobs}))
+        rows=self.records('batch','--manifest',path)
+        self.assertEqual(rows[0]['status'],'success');self.assertEqual(rows[-1]['output_counts']['skipped'],1)
+        self.assertEqual(rows[-1]['output_counts']['success'],1)
+        self.records('convert',self.input,'--output',target,'--existing','invalid',exit=2)
+        self.assertFalse(list(self.root.rglob('.thumbgen-tmp-*')))
+    def test_hardlink_alias_preflight(self):
+        linked=self.root/'linked.png';os.link(self.input,linked)
+        original=self.input.read_bytes()
+        self.records('convert',self.input,'--output',linked,'--existing','replace',exit=2)
+        self.assertEqual(self.input.read_bytes(),original)
+        other=self.root/'other.png';other.write_bytes(b'other')
+        duplicate=self.root/'duplicate.png';os.link(other,duplicate)
+        path=self.root/'aliases.json';path.write_text(json.dumps({'schema_version':1,'jobs':[
+            {'id':'aliases','input':str(self.input),'outputs':[{'path':str(other)},{'path':str(duplicate)}]}]}))
+        self.records('batch','--manifest',path,exit=2)
+        self.assertEqual(other.read_bytes(),b'other')
+    def test_native_file_records(self):
+        cases=['io_error','io_skip','io_replace','io_partial','io_hardlink','io_race_error','io_race_skip','io_race_replace',
+               'io_source_decode','io_source_identity','io_source_commit','io_source_partial','io_cleanup_foreign']
+        if os.name!='nt':
+            cases+=['io_symlink','io_write_limit']
+            if os.geteuid()!=0:cases+=['io_permission']
+        for case in cases:
+            process=subprocess.run([str(args.matrix_exe),case],env=ENV,capture_output=True,text=True,encoding='utf-8',timeout=30)
+            self.assertEqual(process.returncode,0,(case,process.stdout,process.stderr))
+            for record in json.loads(process.stdout)['checks']['records']:validator.validate(record)
+    def test_long_paths_and_replacement(self):
+        base=self.root.joinpath(*['long-path-'+str(i)+'x'*42 for i in range(6)])
+        if os.name=='nt':base=Path('\\\\?\\'+str(base))
+        base.mkdir(parents=True)
+        source=base/'source.png';source.write_bytes(self.input.read_bytes())
+        target=base/'output.png';target.write_bytes(b'old-long-target')
+        rows=self.records('convert',source,'--output',target,'--existing','replace')
+        self.assertEqual(rows[0]['status'],'success');self.assertNotEqual(target.read_bytes(),b'old-long-target')
+        self.assertFalse(list(base.glob('.thumbgen-tmp-*')))
+        # Remove through the extended Windows path as well, without relying on
+        # the host's unprefixed long-path policy during TemporaryDirectory cleanup.
+        source.unlink();target.unlink()
+        for _ in range(6):base.rmdir();base=base.parent
+    def test_leaf_symlink_is_not_followed(self):
+        actual=self.root/'actual.png';actual.write_bytes(b'leave-actual')
+        linked=self.root/'link.png'
+        try:linked.symlink_to(actual)
+        except OSError as error:
+            if os.name=='nt' and getattr(error,'winerror',None)==1314:self.skipTest('Windows symlink privilege unavailable')
+            raise
+        rows=self.records('convert',self.input,'--output',linked,'--existing','replace',exit=4)
+        self.assertEqual(rows[0]['outputs'][0]['error']['code'],'output_symlink')
+        self.assertEqual(actual.read_bytes(),b'leave-actual');self.assertTrue(linked.is_symlink())
+    @unittest.skipUnless(os.name=='nt','Windows sharing semantics')
+    def test_replace_locked_target_preserves_old_file(self):
+        import ctypes
+        from ctypes import wintypes
+        target=self.root/'locked.png';target.write_bytes(b'locked-old')
+        create=ctypes.windll.kernel32.CreateFileW
+        create.argtypes=[wintypes.LPCWSTR,wintypes.DWORD,wintypes.DWORD,ctypes.c_void_p,wintypes.DWORD,wintypes.DWORD,wintypes.HANDLE]
+        create.restype=wintypes.HANDLE
+        handle=create(str(target),0x80000000,1,None,3,0,None) # READ, share READ only: no DELETE sharing.
+        self.assertNotEqual(handle,wintypes.HANDLE(-1).value)
+        try:
+            rows=self.records('convert',self.input,'--output',target,'--existing','replace',exit=4)
+            self.assertEqual(rows[0]['outputs'][0]['error']['code'],'commit_failed')
+            self.assertEqual(target.read_bytes(),b'locked-old')
+            self.assertFalse(list(self.root.rglob('.thumbgen-tmp-*')))
+        finally:
+            close=ctypes.windll.kernel32.CloseHandle;close.argtypes=[wintypes.HANDLE];close(handle)
     def test_json_lines_on_pipe(self):
         with subprocess.Popen([str(args.exe),'convert',str(self.input),'--output',str(self.root/'pipe.png'),'--json'],
                               env=ENV,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,encoding='utf-8') as process:

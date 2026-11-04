@@ -49,7 +49,8 @@
         "threads": {"type": "integer", "minimum": 1, "maximum": 256},
         "max_decode_mib": {"type": "integer", "minimum": 1, "maximum": 16384},
         "format": {"$ref": "#/$defs/format"},
-        "quality": {"$ref": "#/$defs/quality"}, "size": {"$ref": "#/$defs/size"}
+        "quality": {"$ref": "#/$defs/quality"}, "size": {"$ref": "#/$defs/size"},
+        "existing": {"enum": ["error", "skip", "replace"]}
       }
     },
     "output": {
@@ -58,7 +59,8 @@
       "properties": {
         "path": {"type": "string", "minLength": 1},
         "size": {"$ref": "#/$defs/size"}, "format": {"$ref": "#/$defs/format"},
-        "quality": {"$ref": "#/$defs/quality"}
+        "quality": {"$ref": "#/$defs/quality"},
+        "existing": {"enum": ["error", "skip", "replace"]}
       }
     }
   }

@@ -492,9 +492,14 @@ static Json primary_case(const fs::path& root,const std::string& name) {
     return {{"records",records}};
 }
 
+#include "io_cases.h"
+
 int main(int argc, char** argv) {
     if (argc != 2) { std::cerr << "expected one matrix case\n"; return 2; }
     const std::string name = argv[1];
+#ifndef _WIN32
+    if(name=="io_permission" && getuid()==0) {std::cerr<<"permission test requires an unprivileged user\n";return 77;}
+#endif
     const auto root = fs::temp_directory_path() / ("thumbgen-matrix-" + name + "-" +
         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     struct Cleanup { fs::path path; ~Cleanup() { std::error_code ec; fs::remove_all(path, ec); } } cleanup{root};
@@ -502,6 +507,7 @@ int main(int argc, char** argv) {
     try {
         fs::create_directory(root);
         if (name.rfind("orientation_", 0) == 0) record["checks"] = orientation_case(root, std::stoi(name.substr(12)));
+        else if (name.rfind("io_",0)==0) record["checks"] = io_case(root,name);
         else if (name.rfind("primary_", 0) == 0 || name.rfind("sequence_",0)==0) record["checks"] = primary_case(root,name);
         else if (name.rfind("data_", 0) == 0) record["checks"] = data_case(root,name);
         else if (name.rfind("colour_", 0) == 0) record["checks"] = colour_case(root, name);

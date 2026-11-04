@@ -1,15 +1,19 @@
 #include <thumbgen/core.h>
 #include "selection.h"
 #include "build_info.h"
+#include "files.h"
 #include <OpenImageIO/color.h>
 #include <OpenImageIO/imagebuf.h>
 #include <OpenImageIO/imagebufalgo.h>
 #include <OpenImageIO/imageio.h>
+#include <OpenImageIO/filesystem.h>
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cctype>
 #include <cmath>
+#include <cerrno>
+#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <limits>
@@ -26,10 +30,43 @@ namespace thumbgen {
 namespace fs = std::filesystem;
 namespace iba = OIIO::ImageBufAlgo;
 using Clock = std::chrono::steady_clock;
-struct Failure : std::runtime_error {
-    std::string code;
-    Failure(std::string c, std::string message) : std::runtime_error(message), code(std::move(c)) {}
-};
+using Failure=detail::FileFailure;
+// OIIO's IOFile does not propagate fflush/fclose errors. Keep ownership of
+// the stream, and latch short writes even when a codec ignores their result.
+static void write_preview(OIIO::ImageBuf& image,const fs::path& path) {
+    struct CheckedFile final : OIIO::Filesystem::IOFile {
+        int failure=0;
+        explicit CheckedFile(FILE* file):IOFile(file,Write) {}
+        // JPEG's IOFile fast path bypasses IOProxy and uses libjpeg's default
+        // fatal stdio error handler (exit on ENOSPC). A distinct proxy type
+        // selects OIIO's supported memory destination, followed by our checked
+        // write. PNG/WebP continue to write through the proxy directly.
+        const char* proxytype() const override {return "thumbgen_checked";}
+        void failed() { if(!failure)failure=errno?errno:EIO; }
+        size_t write(const void* data,size_t size) override {
+            auto n=IOFile::write(data,size);if(n!=size)failed();return n;
+        }
+        size_t pwrite(const void* data,size_t size,int64_t offset) override {
+            auto n=IOFile::pwrite(data,size,offset);if(n!=size)failed();return n;
+        }
+        bool seek(int64_t offset) override {
+            auto ok=IOFile::seek(offset);if(!ok)failed();return ok;
+        }
+    };
+    std::unique_ptr<FILE,decltype(&std::fclose)> stream(
+        OIIO::Filesystem::fopen(path.u8string(),"w+b"),&std::fclose);
+    if(!stream)throw Failure("encode_failed",detail::error_message({errno,std::generic_category()}));
+    CheckedFile proxy(stream.get());
+    image.set_write_ioproxy(&proxy);
+    bool written;
+    try { written=image.write(path.u8string(),OIIO::TypeDesc::UINT8); }
+    catch(...) {image.set_write_ioproxy(nullptr);throw;}
+    image.set_write_ioproxy(nullptr);
+    if(std::fflush(stream.get())!=0 || std::ferror(stream.get()))proxy.failed();
+    if(std::fclose(stream.release())!=0)proxy.failed();
+    if(proxy.failure)throw Failure("encode_failed",detail::error_message({proxy.failure,std::generic_category()}));
+    if(!written)throw Failure("encode_failed",image.geterror());
+}
 static void check(bool ok, const OIIO::ImageBuf& image, const char* code) {
     if (!ok) throw Failure(code,image.geterror());
 }
@@ -52,6 +89,7 @@ static Json candidates_json(const OIIO::ImageSpec& spec,int part) {
 }
 
 struct Engine::Impl {
+    Engine::Observer observer;
     struct Pin {Json key,request;bool named;};
     std::map<std::string,Pin> sequences;
     std::map<std::string,std::unique_ptr<OIIO::ColorConfig>> configs;
@@ -65,7 +103,7 @@ struct Engine::Impl {
         auto* result=value.get();configs.emplace(name,std::move(value));return result;
     }
 };
-Engine::Engine() : impl_(std::make_unique<Impl>()) {}
+Engine::Engine(Observer observer) : impl_(std::make_unique<Impl>()) {impl_->observer=std::move(observer);}
 Engine::~Engine() = default;
 
 Json Engine::capabilities() {
@@ -116,12 +154,28 @@ Json Engine::convert(const Job& job) {
         OIIO::attribute("threads",job.options.threads);
         OIIO::attribute("exr_threads",job.options.threads);
         auto tick=Clock::now();
+        const auto source_path=fs::u8path(job.input);
+        detail::SourceStamp stamp;
+        try {stamp=detail::source_stamp(source_path);}
+        catch(const Failure& e) {
+            std::error_code ec;
+            if(!fs::exists(source_path,ec) && !ec)throw Failure("open_failed",e.what());
+            throw;
+        }
+        r["source_check"]={{"method","identity_size_mtime"},{"checks",0},{"stable",true}};
+        auto verify_source=[&]() {
+            r["source_check"]["checks"]=r["source_check"]["checks"].get<int>()+1;
+            if(!detail::source_matches(source_path,stamp)) {
+                r["source_check"]["stable"]=false;
+                throw Failure("source_changed","source identity, size or mtime changed during processing",true);
+            }
+        };
         OIIO::ImageSpec read_config;
         // Ask unassociated formats to return straight RGB. In particular WebP
         // and PNG otherwise associate their nonlinear RGB in different spaces.
         read_config.attribute("oiio:UnassociatedAlpha",1);
         auto in=OIIO::ImageInput::open(job.input,&read_config);
-        if(!in)throw Failure("open_failed",OIIO::geterror());
+        if(!in){auto error=OIIO::geterror();verify_source();throw Failure("open_failed",error);}
         stage="selection";
         OIIO::ImageSpec spec;
         std::vector<int> channels;
@@ -210,6 +264,18 @@ Json Engine::convert(const Job& job) {
         r["selected_channels"]=Json::array();
         for(int c:channels)r["selected_channels"].push_back(spec.channelnames[c]);
         r["timings_ms"]["open_select"]=ms(tick);
+        bool all_skip=!job.outputs.empty();
+        for(const auto& output:job.outputs) {
+            if(output.existing!="skip"){all_skip=false;break;}
+            try {if(!detail::existing_target(fs::u8path(output.path),source_path)){all_skip=false;break;}}
+            catch(const Failure&){all_skip=false;break;}
+        }
+        if(all_skip) {
+            verify_source();
+            in->close();
+            for(const auto& output:job.outputs)r["outputs"].push_back({{"path",output.path},{"status","skipped"},{"reason","output_exists"},{"existing_policy","skip"}});
+            r["status"]="skipped";r["ok"]=true;r["timings_ms"]["total"]=ms(started);return r;
+        }
         stage="colour";
         std::string config_name=job.options.ocio_config,config_basis="explicit";
         if(config_name.empty()) {
@@ -266,8 +332,11 @@ Json Engine::convert(const Job& job) {
         stage="decode";tick=Clock::now();
         std::vector<float> pixels(count);
         bool read_ok=in->read_image(part,0,first,end,OIIO::TypeDesc::FLOAT,pixels.data());
-        if(!read_ok)throw Failure("decode_failed",in->geterror());
+        const std::string read_error=read_ok?std::string{}:in->geterror();
         in->close();
+        if(impl_->observer)impl_->observer("decoded",job);
+        verify_source();
+        if(!read_ok)throw Failure("decode_failed",read_error);
         r["timings_ms"]["decode"]=ms(tick);
         r["decoded_mib"]=double(count*sizeof(float))/1048576;
         OIIO::ImageSpec subset=spec;
@@ -315,12 +384,18 @@ Json Engine::convert(const Job& job) {
         const std::string filter=job.options.preset=="fast"?"box":job.options.preset=="quality"?"lanczos3":"triangle";
         r["preset"]=job.options.preset;r["filter"]=filter;
         for(const auto& out:job.outputs) {
-            Json result{{"path",out.path},{"status","failed"}};
-            fs::path temp;
+            Json result{{"path",out.path},{"status","failed"},{"existing_policy",out.existing}};
+            std::unique_ptr<detail::TemporaryOutput> temp;
             try {
                 fs::path dest=fs::u8path(out.path);
-                if(fs::exists(dest))throw Failure("output_exists","output exists; no implicit overwrite");
-                fs::create_directories(dest.parent_path());
+                if(out.existing!="error" && out.existing!="skip" && out.existing!="replace")throw Failure("invalid_output_policy","invalid existing output policy");
+                bool exists=detail::existing_target(dest,source_path);
+                if(exists && out.existing=="error")throw Failure("output_exists","output already exists");
+                if(exists && out.existing=="skip") {
+                    verify_source();result["status"]="skipped";result["reason"]="output_exists";
+                    r["outputs"].push_back(result);continue;
+                }
+                verify_source();
                 const auto& s=working.spec();
                 double scale=std::min({double(out.width)/s.full_width,double(out.height)/s.full_height,1.0});
                 int w=std::max(1,int(std::lround(s.full_width*scale))),h=std::max(1,int(std::lround(s.full_height*scale)));
@@ -352,32 +427,30 @@ Json Engine::convert(const Job& job) {
                 }
                 preview.specmod().attribute("CompressionQuality",out.quality);
                 preview.specmod().attribute("oiio:ColorSpace",job.options.display.empty()?"sRGB":"display-referred");
-                static std::atomic<unsigned long long> serial{0};
-#ifdef _WIN32
-                auto pid=GetCurrentProcessId();
-#else
-                auto pid=getpid();
-#endif
-                temp=dest.parent_path()/fs::u8path("."+dest.filename().u8string()+".tmp-"+std::to_string(pid)+"-"+std::to_string(++serial)+"."+out.format);
-                check(preview.write(temp.u8string(),OIIO::TypeDesc::UINT8),preview,"encode_failed");
-#ifdef _WIN32
-                if(!MoveFileExW(temp.c_str(),dest.c_str(),MOVEFILE_WRITE_THROUGH))
-                    throw Failure("commit_failed","cannot commit output without overwriting existing file");
-#else
-                if(::link(temp.c_str(),dest.c_str())!=0)throw Failure("commit_failed","cannot commit output without overwriting existing file");
-                fs::remove(temp);
-#endif
-                result["status"]="success";result["width"]=w;result["height"]=h;
-                result["finish_ms"]=ms(tick);result["format"]=out.format;
-            }catch(const Failure& e){result["error"]={{"code",e.code},{"message",e.what()}};}
+                temp=std::make_unique<detail::TemporaryOutput>(dest,out.format);
+                write_preview(preview,temp->path());
+                if(impl_->observer)impl_->observer("encoded",job);
+                verify_source();
+                if(temp->commit(dest,source_path,out.existing)) {
+                    result["status"]="success";result["width"]=w;result["height"]=h;
+                    result["finish_ms"]=ms(tick);result["format"]=out.format;
+                } else {result["status"]="skipped";result["reason"]="output_exists";}
+            }catch(const Failure& e){result["error"]={{"code",e.code},{"message",e.what()},{"retryable",e.retryable}};}
+             catch(const fs::filesystem_error& e){result["error"]={{"code","output_failed"},{"message",detail::error_message(e.code())}};}
              catch(const std::exception& e){result["error"]={{"code","output_failed"},{"message",e.what()}};}
-            if(!temp.empty()){std::error_code ec;fs::remove(temp,ec);}
+            if(temp) {
+                auto error=temp->cleanup();
+                if(!error.empty())r["warnings"].push_back("temporary cleanup failed: "+temp->path().u8string()+": "+error);
+            }
             r["outputs"].push_back(result);
         }
-        size_t successes=0;for(const auto& output:r["outputs"])if(output["status"]=="success")++successes;
-        r["ok"]=successes==job.outputs.size();
-        r["status"]=r["ok"].get<bool>()?"success":successes?"partial":"failed";
-    }catch(const Failure& e){r["error"]={{"code",e.code},{"message",e.what()},{"stage",stage}};}
+        size_t successes=0,skips=0;for(const auto& output:r["outputs"]) {
+            if(output["status"]=="success")++successes;
+            if(output["status"]=="skipped")++skips;
+        }
+        r["ok"]=successes+skips==job.outputs.size();
+        r["status"]=skips==job.outputs.size()?"skipped":r["ok"].get<bool>()?"success":successes+skips?"partial":"failed";
+    }catch(const Failure& e){r["error"]={{"code",e.code},{"message",e.what()},{"stage",stage},{"retryable",e.retryable}};}
      catch(const std::exception& e){r["error"]={{"code","conversion_failed"},{"message",e.what()},{"stage",stage}};}
     r["timings_ms"]["total"]=ms(started);
     return r;
