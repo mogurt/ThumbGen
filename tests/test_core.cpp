@@ -63,6 +63,33 @@ int main() {
         auto within=engine.convert(job);require(within["error"]["code"]=="ambiguous_channels",within.dump());
         job.options.channels="Diffuse";
         auto selected=engine.convert(job);require(selected["ok"].get<bool>(),selected.dump());
+        // Named part identity survives part order changes in a sequence.
+        thumbgen::Engine sequence_engine;
+        for(int frame=0;frame<2;++frame) {
+            OIIO::ImageSpec beauty(2,2,3,OIIO::TypeDesc::FLOAT),normal=beauty;
+            beauty.attribute("oiio:subimagename","Beauty");normal.attribute("oiio:subimagename","normal");
+            OIIO::ImageSpec pair[2]={frame?normal:beauty,frame?beauty:normal};
+            path=(root/("ordered-"+std::to_string(frame)+".exr")).u8string();
+            out=OIIO::ImageOutput::create(path);require(bool(out),OIIO::geterror());
+            require(out->open(path,2,pair),out->geterror());require(out->write_image(OIIO::TypeDesc::FLOAT,pixels),"ordered first part");
+            require(out->open(path,pair[1],OIIO::ImageOutput::AppendSubimage),out->geterror());
+            require(out->write_image(OIIO::TypeDesc::FLOAT,pixels),"ordered second part");require(out->close(),"ordered close");
+            job.options.part=-1;job.options.part_name="Beauty";job.options.channels.clear();job.sequence_id="ordered";
+            job.input=path;job.outputs[0].path=(root/("ordered-"+std::to_string(frame)+".png")).u8string();
+            auto result=sequence_engine.convert(job);
+            require(result["ok"].get<bool>() && result["selection"]["chosen"]["part_name"]=="Beauty" && result["source"]["part"]==frame,result.dump());
+            require(result["selection"]["lock_status"]==(frame?"reused":"created"),result.dump());
+        }
+        // An unnamed multipage format has no stable semantic part identity.
+        path=(root/"unnamed-pages.tif").u8string();
+        OIIO::ImageSpec page(2,2,3,OIIO::TypeDesc::UINT8);
+        out=OIIO::ImageOutput::create(path);require(bool(out),OIIO::geterror());
+        require(out->open(path,page),out->geterror());require(out->write_image(OIIO::TypeDesc::FLOAT,pixels),"first TIFF page");
+        require(out->open(path,page,OIIO::ImageOutput::AppendSubimage),out->geterror());
+        require(out->write_image(OIIO::TypeDesc::FLOAT,pixels),"second TIFF page");require(out->close(),"TIFF close");
+        job.input=path;job.options.part=0;job.options.part_name.clear();job.sequence_id="unnamed";
+        job.outputs[0].path=(root/"unnamed.png").u8string();
+        auto unnamed=sequence_engine.convert(job);require(unnamed["error"]["code"]=="sequence_part_identity_required",unnamed.dump());
         std::cout<<"cropped display window and multipart selection passed\n";return 0;
     }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}
 }

@@ -52,6 +52,9 @@
           "items": {
             "type": "string"
           }
+        },
+        "primary": {
+          "type": "boolean"
         }
       },
       "required": [
@@ -60,7 +63,8 @@
         "group",
         "kind",
         "reason",
-        "channels"
+        "channels",
+        "primary"
       ],
       "additionalProperties": false
     },
@@ -99,7 +103,10 @@
             "encode_failed",
             "commit_failed",
             "output_failed",
-            "conversion_failed"
+            "conversion_failed",
+            "sequence_selection_changed",
+            "sequence_selection_conflict",
+            "sequence_part_identity_required"
           ]
         },
         "message": {
@@ -196,7 +203,7 @@
       "type": "object",
       "properties": {
         "policy": {
-          "const": "v1"
+          "const": "v2"
         },
         "basis": {
           "enum": [
@@ -214,12 +221,30 @@
         },
         "chosen": {
           "$ref": "#/$defs/candidate"
+        },
+        "strategy": {
+          "enum": [
+            "primary",
+            "root_rgb"
+          ]
+        },
+        "lock_status": {
+          "enum": [
+            "none",
+            "created",
+            "reused"
+          ]
+        },
+        "locked": {
+          "$ref": "#/$defs/selection_key"
         }
       },
       "required": [
         "policy",
         "basis",
-        "candidates"
+        "candidates",
+        "strategy",
+        "lock_status"
       ],
       "additionalProperties": false
     },
@@ -444,6 +469,10 @@
             "type": "number",
             "minimum": 0
           }
+        },
+        "sequence_id": {
+          "type": "string",
+          "minLength": 1
         }
       },
       "required": [
@@ -853,7 +882,7 @@
           "additionalProperties": false
         },
         "selection_policy": {
-          "const": "v1"
+          "const": "v2"
         },
         "libraries": {
           "type": "string"
@@ -954,6 +983,56 @@
         "error"
       ],
       "additionalProperties": false
+    },
+    "selection_key": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "part": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "part_name": {
+          "type": "string"
+        },
+        "group": {
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "colour",
+            "grey"
+          ]
+        },
+        "channels": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "part_name",
+        "group",
+        "kind",
+        "channels"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "part_name": {
+                "const": ""
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "part"
+            ]
+          }
+        }
+      ]
     }
   }
 }

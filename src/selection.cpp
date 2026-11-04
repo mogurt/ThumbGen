@@ -75,6 +75,15 @@ std::vector<Candidate> classify(const OIIO::ImageSpec& spec) {
 Json candidate_json(const OIIO::ImageSpec& spec,const Candidate& candidate,int part) {
     Json names=Json::array();for(int c:candidate.channels)names.push_back(spec.channelnames[c]);
     return {{"part",part},{"part_name",spec.get_string_attribute("oiio:subimagename")},
-        {"group",candidate.group},{"kind",candidate.kind},{"reason",candidate.reason},{"channels",names}};
+        {"group",candidate.group},{"kind",candidate.kind},{"reason",candidate.reason},{"channels",names},
+        {"primary",is_primary(spec,candidate)}};
+}
+bool is_primary(const OIIO::ImageSpec& spec,const Candidate& candidate) {
+    if(candidate.kind!="colour")return false;
+    auto main_name=[](std::string name) {
+        auto dot=name.rfind('.');if(dot!=std::string::npos)name=name.substr(dot+1);
+        name=lower(name);return name=="beauty" || name=="combined" || name=="rgba";
+    };
+    return main_name(candidate.group) || (candidate.group=="RGB" && main_name(std::string(spec.get_string_attribute("oiio:subimagename"))));
 }
 }

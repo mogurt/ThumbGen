@@ -30,7 +30,8 @@ static void usage() {
         "Options: --preset fast|balanced|quality, --format jpeg|png|webp, --quality 1..100\n"
         "  --size N or WxH (repeatable), --background black|white|transparent\n"
         "  --input-space SPACE, --ocio-config FILE, --display NAME --view NAME\n"
-        "  --channels RGB|GROUP, --part N, --threads N, --max-decode-mib N\n"
+        "  --channels RGB|GRAY|GROUP, --part N or --part-name NAME\n"
+        "  --selection-policy primary|root_rgb, --threads N, --max-decode-mib N\n"
         "Defaults: balanced, JPEG Q90, fit 1024x1024 without upscaling, black background.\n"
         "No output overwriting. Exit: 0 success, 1 internal, 2 usage, 3 partial, 4 all failed.\n";
 }
@@ -70,11 +71,13 @@ static void validate_options(const Options& o) {
     if(o.threads<1||o.threads>256)throw std::invalid_argument("threads must be in 1..256");
     if(o.max_decode_mib<1||o.max_decode_mib>16384)throw std::invalid_argument("max_decode_mib must be in 1..16384");
     if(o.part < -1)throw std::invalid_argument("part must be nonnegative");
+    if(o.part>=0 && !o.part_name.empty())throw std::invalid_argument("part and part_name are mutually exclusive");
+    if(o.selection_policy!="primary" && o.selection_policy!="root_rgb")throw std::invalid_argument("invalid selection_policy");
     if(o.input_space.empty())throw std::invalid_argument("input_space cannot be empty");
     if(o.display.empty()!=o.view.empty())throw std::invalid_argument("display and view must be specified together");
 }
 static Options options(const Json& values,bool partial=false) {
-    keys(values,{"preset","input_space","background","ocio_config","display","view","channels",
+    keys(values,{"preset","input_space","background","ocio_config","display","view","channels","part_name","selection_policy",
         "part","threads","max_decode_mib","quality","format","size"});
     for(const char* key:{"part","threads","max_decode_mib","quality"})
         if(values.contains(key)&&!values[key].is_number_integer())throw std::invalid_argument(std::string(key)+" must be an integer");
@@ -89,6 +92,8 @@ static Options options(const Json& values,bool partial=false) {
     o.preset=values.value("preset",o.preset);o.input_space=values.value("input_space",o.input_space);
     o.background=values.value("background",o.background);o.ocio_config=values.value("ocio_config",o.ocio_config);
     o.display=values.value("display",o.display);o.view=values.value("view",o.view);o.channels=values.value("channels",o.channels);
+    o.part_name=values.value("part_name",o.part_name);o.selection_policy=values.value("selection_policy",o.selection_policy);
+    if(values.contains("part_name") && o.part_name.empty())throw std::invalid_argument("part_name cannot be empty");
     o.part=values.value("part",o.part);o.threads=values.value("threads",o.threads);
     if(values.contains("max_decode_mib")) {
         auto value=values.at("max_decode_mib").get<long long>();
@@ -167,8 +172,12 @@ static std::vector<Job> manifest(const std::string& filename) {
     if(!root.at("jobs").is_array()||root["jobs"].empty())throw std::invalid_argument("jobs must be a nonempty array");
     std::vector<Job> jobs;
     for(const auto& object:root["jobs"]) {
-        keys(object,{"id","input","options","outputs"});
+        keys(object,{"id","input","sequence_id","options","outputs"});
         Job job;job.id=object.at("id").get<std::string>();
+        if(object.contains("sequence_id")) {
+            job.sequence_id=object.at("sequence_id").get<std::string>();
+            if(job.sequence_id.empty())throw std::invalid_argument("sequence_id cannot be empty");
+        }
         job.input=path_string(path.parent_path(),object.at("input").get<std::string>());
         auto override=object.value("options",Json::object());options(override,true);
         auto effective=defaults;effective.update(override);job.options=options(effective);
@@ -213,6 +222,8 @@ static int execute(const std::vector<std::string>& args) {
             else if(flag=="--quality")values["quality"]=number(value());
             else if(flag=="--threads")values["threads"]=number(value());
             else if(flag=="--part")values["part"]=number(value());
+            else if(flag=="--part-name")values["part_name"]=value();
+            else if(flag=="--selection-policy")values["selection_policy"]=value();
             else if(flag=="--max-decode-mib")values["max_decode_mib"]=number(value());
             else if(flag=="--preset")values["preset"]=value();
             else if(flag=="--format")values["format"]=value();

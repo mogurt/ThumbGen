@@ -155,6 +155,21 @@
       "code": "conversion_failed",
       "category": "internal",
       "description": "任务转换未预期异常"
+    },
+    {
+      "code": "sequence_selection_changed",
+      "category": "selection",
+      "description": "locked part/group/channel mapping is missing or ambiguous"
+    },
+    {
+      "code": "sequence_selection_conflict",
+      "category": "selection",
+      "description": "selection options changed within sequence_id"
+    },
+    {
+      "code": "sequence_part_identity_required",
+      "category": "selection",
+      "description": "multipart sequence requires a named part"
     }
   ]
 }

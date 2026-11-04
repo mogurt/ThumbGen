@@ -8,7 +8,7 @@ namespace thumbgen {
 using Json = nlohmann::json;
 struct Options {
     std::string preset = "balanced", input_space = "auto", background = "black";
-    std::string ocio_config, display, view, channels;
+    std::string ocio_config, display, view, channels, part_name, selection_policy = "primary";
     int part = -1, threads = 4;
     size_t max_decode_mib = 512;
 };
@@ -17,7 +17,7 @@ struct Output {
     int width = 1024, height = 1024, quality = 90;
 };
 struct Job {
-    std::string id, input;
+    std::string id, input, sequence_id;
     Options options;
     std::vector<Output> outputs;
 };

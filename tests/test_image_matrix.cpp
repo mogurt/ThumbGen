@@ -417,7 +417,8 @@ static Json data_case(const fs::path& root,const std::string& name) {
         require(result["ok"].get<bool>(),result.dump());
         auto chosen=result["selection"]["chosen"];
         if(name=="data_beauty_normal" || name=="data_beauty_crypto")require(chosen["group"]=="Beauty",result.dump());
-        if(name=="data_root_priority" || name=="data_beauty_z")require(chosen["group"]=="RGB",result.dump());
+        if(name=="data_root_priority")require(chosen["group"]=="Beauty",result.dump());
+        if(name=="data_beauty_z")require(chosen["group"]=="RGB",result.dump());
         if(name=="data_grey")require(chosen["kind"]=="grey",result.dump());
         if(name=="data_explicit")require(chosen["group"]=="Specular",result.dump());
         OIIO::ImageBuf image(job.outputs[0].path);require(image.read(),image.geterror());
@@ -430,6 +431,67 @@ static Json data_case(const fs::path& root,const std::string& name) {
     return {{"inspection",inspection},{"result",result}};
 }
 
+static Json primary_case(const fs::path& root,const std::string& name) {
+    thumbgen::Engine engine;Json records=Json::array();
+    auto render=[&](int frame,std::vector<std::string> channels,float beauty,float rgb,const std::string& sequence,
+                    const std::string& strategy="primary",const std::string& explicit_group="") {
+        ImageSpec spec(2,1,int(channels.size()),TypeDesc::FLOAT);spec.channelnames=channels;
+        std::vector<float> pixels(size_t(2*spec.nchannels));
+        for(size_t i=0;i<pixels.size();++i) {
+            const auto& channel=channels[i%channels.size()];
+            bool alpha=channel=="A" || channel.substr(channel.rfind('.')+1)=="A";
+            pixels[i]=alpha?1.0f:channel.find('.')==std::string::npos?rgb:beauty;
+        }
+        auto input=root/("frame-"+std::to_string(frame)+".exr");write(input,spec,pixels);
+        thumbgen::Job job;job.id=std::to_string(frame);job.sequence_id=sequence;job.input=input.u8string();job.options.input_space="linear";
+        job.options.selection_policy=strategy;job.options.channels=explicit_group;
+        job.outputs.push_back({(root/("preview-"+std::to_string(frame)+".png")).u8string(),"png",2,1,90});
+        auto result=engine.convert(job);records.push_back(result);return result;
+    };
+    const std::vector<std::string> root_rgb{"R","G","B"};
+    const std::vector<std::string> both{"R","G","B","Beauty.R","Beauty.G","Beauty.B"};
+    auto chosen=[&](const Json& result,const std::string& group) {
+        require(result["ok"].get<bool>() && result["selection"]["chosen"]["group"]==group,result.dump());
+    };
+    auto failed=[&](const Json& result,const std::string& code) {
+        require(!result["ok"].get<bool>() && result["error"]["code"]==code,result.dump());
+        require(!fs::exists(root/("preview-"+result["id"].get<std::string>()+".png")),"failed selection wrote an output");
+    };
+    if(name=="primary_black_beauty" || name=="primary_black_root" || name=="primary_root_strategy") {
+        auto result=render(0,both,name=="primary_black_beauty"?0.0f:0.4f,name=="primary_black_root"?0.0f:0.8f,"",
+            name=="primary_root_strategy"?"root_rgb":"primary");
+        chosen(result,name=="primary_root_strategy"?"RGB":"Beauty");
+        OIIO::ImageBuf image(result["outputs"][0]["path"].get<std::string>());require(image.read(),image.geterror());
+        float p[3];image.getpixel(0,0,p,3);
+        const float expected=name=="primary_black_beauty"?0.0f:name=="primary_root_strategy"?srgb(0.8f):srgb(0.4f);
+        require(std::abs(p[0]-expected)<0.012f,"primary pixel reference mismatch");
+    } else if(name=="primary_combined")chosen(render(0,{"ViewLayer.Combined.R","ViewLayer.Combined.G","ViewLayer.Combined.B","Diffuse.R","Diffuse.G","Diffuse.B"},0.4f,0,""),"ViewLayer.Combined");
+    else if(name=="primary_tie")failed(render(0,{"Beauty.R","Beauty.G","Beauty.B","Combined.R","Combined.G","Combined.B"},0.4f,0,""),"ambiguous_channels");
+    else if(name=="primary_denoised")chosen(render(0,{"Beauty.R","Beauty.G","Beauty.B","Denoised beauty.R","Denoised beauty.G","Denoised beauty.B"},0.4f,0,""),"Beauty");
+    else if(name=="sequence_missing") {
+        auto first=render(0,both,0,0.8f,"seq");chosen(first,"Beauty");require(first["selection"]["lock_status"]=="created",first.dump());
+        auto second=render(1,both,0.4f,0,"seq");chosen(second,"Beauty");require(second["selection"]["lock_status"]=="reused",second.dump());
+        failed(render(2,root_rgb,0,0.8f,"seq"),"sequence_selection_changed");
+        chosen(render(3,both,0.4f,0,"seq"),"Beauty");
+    } else if(name=="sequence_no_upgrade") {
+        chosen(render(0,root_rgb,0,0.4f,"seq"),"RGB");
+        chosen(render(1,both,0.8f,0,"seq"),"RGB");
+    } else if(name=="sequence_conflict") {
+        chosen(render(0,both,0.4f,0,"seq"),"Beauty");
+        failed(render(1,both,0.4f,0,"seq","root_rgb"),"sequence_selection_conflict");
+        failed(render(2,both,0.4f,0,"seq","primary","RGB"),"sequence_selection_conflict");
+    } else if(name=="sequence_alpha_changed") {
+        auto with_alpha=both;with_alpha.push_back("Beauty.A");
+        chosen(render(0,with_alpha,0.4f,0,"seq"),"Beauty");
+        failed(render(1,both,0.4f,0,"seq"),"sequence_selection_changed");
+    } else if(name=="sequence_independent") {
+        chosen(render(0,both,0.4f,0,"one"),"Beauty");
+        chosen(render(1,root_rgb,0,0.4f,"two"),"RGB");
+        chosen(render(2,both,0.4f,0,"one"),"Beauty");
+    } else throw std::runtime_error("unknown primary case");
+    return {{"records",records}};
+}
+
 int main(int argc, char** argv) {
     if (argc != 2) { std::cerr << "expected one matrix case\n"; return 2; }
     const std::string name = argv[1];
@@ -440,6 +502,7 @@ int main(int argc, char** argv) {
     try {
         fs::create_directory(root);
         if (name.rfind("orientation_", 0) == 0) record["checks"] = orientation_case(root, std::stoi(name.substr(12)));
+        else if (name.rfind("primary_", 0) == 0 || name.rfind("sequence_",0)==0) record["checks"] = primary_case(root,name);
         else if (name.rfind("data_", 0) == 0) record["checks"] = data_case(root,name);
         else if (name.rfind("colour_", 0) == 0) record["checks"] = colour_case(root, name);
         else if (name.rfind("alpha_", 0) == 0) record["checks"] = alpha_case(root, name);

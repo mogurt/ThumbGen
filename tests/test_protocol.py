@@ -97,6 +97,23 @@ class Protocol(unittest.TestCase):
             self.assertEqual(process.returncode,0,(case,process.stdout,process.stderr))
             checks=json.loads(process.stdout)['checks']
             validator.validate(checks['inspection']);validator.validate(checks['result'])
+    def test_primary_and_sequence_records(self):
+        cases=['primary_black_beauty','primary_black_root','primary_root_strategy','primary_combined','primary_tie',
+               'primary_denoised','sequence_missing','sequence_no_upgrade','sequence_conflict','sequence_alpha_changed','sequence_independent']
+        for case in cases:
+            process=subprocess.run([str(args.matrix_exe),case],env=ENV,capture_output=True,text=True,encoding='utf-8',timeout=30)
+            self.assertEqual(process.returncode,0,(case,process.stdout,process.stderr))
+            for record in json.loads(process.stdout)['checks']['records']:validator.validate(record)
+    def test_sequence_manifest_and_option_validation(self):
+        jobs=[{'id':str(i),'sequence_id':'camera-A','input':str(self.input),'outputs':[{'path':str(self.root/(str(i)+'.png'))}]} for i in range(2)]
+        path=self.root/'sequence.json';path.write_text(json.dumps({'schema_version':1,'jobs':jobs}))
+        rows=self.records('batch','--manifest',path)
+        self.assertEqual([r['selection']['lock_status'] for r in rows[:-1]],['created','reused'])
+        self.assertTrue(all(r['sequence_id']=='camera-A' for r in rows[:-1]))
+        for flags in [('--selection-policy','invalid'),('--part','0','--part-name','Beauty'),('--part-name','')]:
+            self.records('convert',self.input,'--output',self.root/'invalid.png',*flags,exit=2)
+        jobs[0]['sequence_id']='';path.write_text(json.dumps({'schema_version':1,'jobs':jobs}))
+        self.records('batch','--manifest',path,exit=2)
     def test_stdin_boundary(self):
         self.records('batch','--manifest','-',exit=2,stdin='{"schema_version":1}')
     def test_json_lines_on_pipe(self):

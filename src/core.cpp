@@ -52,6 +52,8 @@ static Json candidates_json(const OIIO::ImageSpec& spec,int part) {
 }
 
 struct Engine::Impl {
+    struct Pin {Json key,request;bool named;};
+    std::map<std::string,Pin> sequences;
     std::map<std::string,std::unique_ptr<OIIO::ColorConfig>> configs;
     OIIO::ColorConfig* config(const std::string& name) {
         auto found=configs.find(name);
@@ -76,7 +78,7 @@ Json Engine::capabilities() {
         {"build",{{"revision",THUMBGEN_SOURCE_REVISION},{"dirty",THUMBGEN_SOURCE_DIRTY},
             {"compiler",THUMBGEN_COMPILER},{"platform",THUMBGEN_PLATFORM},{"architecture",THUMBGEN_ARCH}}},
         {"cpu",{{"runtime_simd",OIIO::get_string_attribute("hw:simd")},{"oiio_simd",OIIO::get_string_attribute("build:simd")}}},
-        {"selection_policy","v1"},
+        {"selection_policy","v2"},
         {"libraries",OIIO::get_string_attribute("library_list")},
         {"output_formats",output_formats},{"presets",{"fast","balanced","quality"}},
         {"defaults",{{"format","jpeg"},{"quality",90},{"size",{1024,1024}},
@@ -108,6 +110,7 @@ Json Engine::convert(const Job& job) {
     auto started=Clock::now();
     Json r{{"schema_version",1},{"type","result"},{"id",job.id},{"input",job.input},
            {"ok",false},{"status","failed"},{"outputs",Json::array()},{"warnings",Json::array()}};
+    if(!job.sequence_id.empty())r["sequence_id"]=job.sequence_id;
     std::string stage="open";
     try {
         OIIO::attribute("threads",job.options.threads);
@@ -123,34 +126,63 @@ Json Engine::convert(const Job& job) {
         OIIO::ImageSpec spec;
         std::vector<int> channels;
         int part=-1;
-        const std::string selection_basis=job.options.part>=0?
+        const std::string selection_basis=job.options.part>=0 || !job.options.part_name.empty()?
             (job.options.channels.empty()?"explicit_part":"explicit_part_channels"):
             (job.options.channels.empty()?"automatic":"explicit_channels");
-        r["selection"]={{"policy","v1"},{"basis",selection_basis},
+        r["selection"]={{"policy","v2"},{"strategy",job.options.selection_policy},{"basis",selection_basis},{"lock_status","none"},
             {"candidates",Json::array()}};
         struct Choice {int part;OIIO::ImageSpec spec;detail::Candidate candidate;};
-        std::vector<Choice> choices;
+        std::vector<Choice> choices,all_choices;
+        int part_count=0;
         bool part_exists=false,has_deep=false,has_data=false,matched_group=false;
         for(int p=0;;++p) {
             OIIO::ImageSpec candidate;
             if(!in->seek_subimage(p,0,candidate))break;
+            ++part_count;
             auto groups=detail::classify(candidate);
             for(const auto& group:groups)r["selection"]["candidates"].push_back(detail::candidate_json(candidate,group,p));
             if(job.options.part>=0 && p!=job.options.part)continue;
+            if(!job.options.part_name.empty() && candidate.get_string_attribute("oiio:subimagename")!=job.options.part_name)continue;
             part_exists=true;has_deep=has_deep || candidate.deep;
             std::vector<detail::Candidate> eligible;
             for(const auto& group:groups) {
                 if(!job.options.channels.empty() && group.group!=job.options.channels)continue;
                 matched_group=true;has_data=has_data || group.kind=="data";
-                if(group.kind=="colour" || group.kind=="grey")eligible.push_back(group);
+                if(group.kind=="colour" || group.kind=="grey") {
+                    eligible.push_back(group);all_choices.push_back({p,candidate,group});
+                }
             }
             // Prefer root RGB within a part. Other parts still participate in
             // ambiguity checks; do not silently skip a part with several groups.
             if(job.options.channels.empty()) {
-                auto root=std::find_if(eligible.begin(),eligible.end(),[](const auto& c){return c.group=="RGB";});
-                if(root!=eligible.end()){auto chosen=*root;eligible={std::move(chosen)};}
+                bool primary=job.options.selection_policy=="primary" && std::any_of(eligible.begin(),eligible.end(),[&](const auto& c){return detail::is_primary(candidate,c);});
+                if(primary)eligible.erase(std::remove_if(eligible.begin(),eligible.end(),[&](const auto& c){return !detail::is_primary(candidate,c);}),eligible.end());
+                else {
+                    auto root=std::find_if(eligible.begin(),eligible.end(),[](const auto& c){return c.group=="RGB";});
+                    if(root!=eligible.end()){auto chosen=*root;eligible={std::move(chosen)};}
+                }
             }
             for(const auto& group:eligible)choices.push_back({p,candidate,group});
+        }
+        if(job.options.channels.empty() && job.options.selection_policy=="primary" &&
+           std::any_of(choices.begin(),choices.end(),[](const auto& c){return detail::is_primary(c.spec,c.candidate);}))
+            choices.erase(std::remove_if(choices.begin(),choices.end(),[](const auto& c){return !detail::is_primary(c.spec,c.candidate);}),choices.end());
+        Json request={{"part",job.options.part},{"part_name",job.options.part_name},
+            {"channels",job.options.channels},{"strategy",job.options.selection_policy}};
+        auto pin=impl_->sequences.find(job.sequence_id);
+        auto key=[](const Choice& choice) {
+            auto value=detail::candidate_json(choice.spec,choice.candidate,choice.part);
+            // Named parts may move in the file without changing their identity.
+            if(!value["part_name"].get<std::string>().empty())value.erase("part");
+            value.erase("reason");value.erase("primary");return value;
+        };
+        if(!job.sequence_id.empty() && pin!=impl_->sequences.end()) {
+            r["selection"]["lock_status"]="reused";r["selection"]["locked"]=pin->second.key;
+            if(request!=pin->second.request)throw Failure("sequence_selection_conflict","selection options differ within sequence_id");
+            choices.clear();
+            if(pin->second.named || part_count==1)
+                for(const auto& choice:all_choices)if(key(choice)==pin->second.key)choices.push_back(choice);
+            if(choices.size()!=1)throw Failure("sequence_selection_changed","locked part/group/channel mapping is missing or ambiguous; no fallback");
         }
         if(!part_exists)throw Failure("part_not_found","requested part does not exist");
         if(choices.empty()) {
@@ -163,10 +195,17 @@ Json Engine::convert(const Job& job) {
             bool same=std::all_of(choices.begin(),choices.end(),[&](const auto& c){return c.part==choices[0].part;});
             throw Failure(same?"ambiguous_channels":"ambiguous_parts","multiple colour candidates; specify part and/or channels");
         }
-        auto chosen=std::move(choices[0]);part=chosen.part;spec=std::move(chosen.spec);channels=chosen.candidate.channels;
+        auto chosen=std::move(choices[0]);const Json chosen_key=key(chosen);
+        part=chosen.part;spec=std::move(chosen.spec);channels=chosen.candidate.channels;
         r["selection"]["chosen"]=detail::candidate_json(spec,chosen.candidate,part);
         if(spec.width<1 || spec.height<1 || spec.depth!=1 || spec.full_width<1 || spec.full_height<1)
             throw Failure("invalid_dimensions","unsupported image dimensions");
+        if(!job.sequence_id.empty() && pin==impl_->sequences.end()) {
+            bool named=!spec.get_string_attribute("oiio:subimagename").empty();
+            if(!named && part_count!=1)throw Failure("sequence_part_identity_required","sequence selection requires unique named parts for multipart files");
+            impl_->sequences.emplace(job.sequence_id,Impl::Pin{chosen_key,request,named});
+            r["selection"]["lock_status"]="created";r["selection"]["locked"]=chosen_key;
+        }
         r["source"]=spec_json(spec,part);
         r["selected_channels"]=Json::array();
         for(int c:channels)r["selected_channels"].push_back(spec.channelnames[c]);

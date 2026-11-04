@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "defaults": {"channels": "Beauty", "selection_policy": "primary"},
+  "jobs": [
+    {"id": "camera-a-0001", "sequence_id": "camera-a/layer-main", "input": "renders/frame.0001.exr", "outputs": [{"path": "previews/frame.0001.jpg"}]},
+    {"id": "camera-a-0002", "sequence_id": "camera-a/layer-main", "input": "renders/frame.0002.exr", "outputs": [{"path": "previews/frame.0002.jpg"}]}
+  ]
+}

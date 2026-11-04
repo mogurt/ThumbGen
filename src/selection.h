@@ -8,5 +8,6 @@ struct Candidate {
     std::vector<int> channels;
 };
 std::vector<Candidate> classify(const OIIO::ImageSpec& spec);
+bool is_primary(const OIIO::ImageSpec& spec, const Candidate& candidate);
 Json candidate_json(const OIIO::ImageSpec& spec, const Candidate& candidate, int part);
 }

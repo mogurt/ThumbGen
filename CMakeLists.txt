@@ -88,7 +88,9 @@ if(BUILD_TESTING)
         alpha_exr_associated alpha_png alpha_webp alpha_tiff alpha_edge alpha_zero
         data_z data_normal data_normal_part data_id data_crypto data_explicit_data data_unknown data_grey data_lowercase
         data_beauty_z data_beauty_normal data_beauty_crypto data_root_priority data_ambiguous data_explicit
-        data_missing_part data_missing_group data_black data_visible)
+        data_missing_part data_missing_group data_black data_visible
+        primary_black_beauty primary_black_root primary_root_strategy primary_combined primary_tie primary_denoised
+        sequence_missing sequence_no_upgrade sequence_conflict sequence_alpha_changed sequence_independent)
     foreach(image_case IN LISTS THUMBGEN_IMAGE_CASES)
         add_test(NAME image_${image_case} COMMAND thumbgen_image_matrix ${image_case})
         set_tests_properties(image_${image_case} PROPERTIES LABELS "image-matrix" TIMEOUT 30
