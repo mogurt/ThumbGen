@@ -9,7 +9,8 @@ if test -z "${THUMBGEN_TEST_PYTHON:-}"; then
     done
 fi
 label=${WSL_DISTRO_NAME:-linux}
-export LD_LIBRARY_PATH="$stage/lib"
+python_lib=$("$python" -c 'import pathlib,sys; print(pathlib.Path(sys.prefix)/"lib")')
+export LD_LIBRARY_PATH="$stage/lib:$python_lib"
 mkdir -p "$stage/results/$label"
 cd "$stage/results/$label"
 getconf GNU_LIBC_VERSION | tee platform.txt

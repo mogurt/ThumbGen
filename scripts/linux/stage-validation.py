@@ -39,7 +39,7 @@ for obj in audit['objects']:
         # Use copies on the shared Windows filesystem so both WSL distros see them.
         shutil.copy2(path, alias)
     copied.append(str(path))
-for name in ('test_cli.py', 'test_protocol.py', 'requirements.txt'):
+for name in ('test_cli.py', 'test_protocol.py', 'test_interrupt.py', 'requirements.txt'):
     shutil.copy2(repo / 'tests' / name, stage / 'tests' / name)
 for path in (repo / 'schemas').glob('*.json'):
     shutil.copy2(path, stage / 'schemas' / path.name)
@@ -51,6 +51,7 @@ suite = json.loads(subprocess.check_output(
 replacements = {str(cache / 'thumbgen-build' / name): '@BIN@/' + name for name in binaries}
 replacements.update({str(repo / 'tests/test_cli.py'): '@TESTS@/test_cli.py',
                      str(repo / 'tests/test_protocol.py'): '@TESTS@/test_protocol.py',
+                     str(repo / 'tests/test_interrupt.py'): '@TESTS@/test_interrupt.py',
                      str(repo / 'schemas'): '@SCHEMAS@',
                      str(cache / 'sdk/lib'): '@LIB@',
                      str(cache / 'tools/python-3.11.11/bin/python3'): '@PYTHON@'})
@@ -81,6 +82,8 @@ if not tests or not any(test['command'][0] == '@BIN@/thumbgen_image_matrix' for 
     raise SystemExit('Configured image matrix is missing')
 if not any(test['name'] == 'public_protocol' for test in tests):
     raise SystemExit('Configured protocol test is missing; refusing incomplete validation')
+if not any(test['name'] == 'public_interrupt' for test in tests):
+    raise SystemExit('Configured interrupt test is missing; refusing incomplete validation')
 (stage / 'tests/ctest-suite.json').write_text(json.dumps(dict(tests=tests), indent=2) + '\n')
 (stage / 'tools/cmake/bin').mkdir(parents=True, exist_ok=True)
 shutil.copy2(ctest, stage / 'tools/cmake/bin/ctest')
