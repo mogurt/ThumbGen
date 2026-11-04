@@ -102,6 +102,11 @@ static int test_main(const std::vector<std::string>& args) {
         IsolationOptions budget;budget.memory_mib=129;rows=run({job("budget")},budget);require(rows[0]["error"]["code"]=="task_memory_exceeds_budget",rows.dump());
         IsolationOptions timeout;timeout.task_timeout=std::chrono::milliseconds(250);rows=run({job("sleep")},timeout);require(rows[0]["error"]["code"]=="worker_timeout",rows.dump());
         rows=run({job("missing-worker")},{},executable+".missing");require(rows[0]["error"]["code"]=="worker_start_failed",rows.dump());
+        // Old glibc may report exec failure through either EOF or a pipe fault.
+        // Both happen before the hello acknowledgement and are startup failures.
+        for(int i=0;i<16;++i)run_isolated({normal},executable+".missing",[](const Json& record) {
+            require(record["status"]=="failed" && record["error"]["code"]=="worker_start_failed",record.dump());
+        });
         auto changing=job("source-change");rows=run({changing});require(rows[0]["error"]["code"]=="source_changed" && rows[0]["source_check"]["stable"]==false,rows.dump());
         {std::ofstream restore(fs::u8path(changing.input),std::ios::binary);restore<<originals.at(changing.input);}
         auto missing=job("missing-anchor");missing.sequence_id="unavailable";missing.input=(root/"missing.exr").u8string();auto dependent=job("dependent");dependent.sequence_id=missing.sequence_id;

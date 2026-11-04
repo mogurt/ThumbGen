@@ -125,6 +125,7 @@ public:
     ChildProcess process;
     unsigned threads;
     std::string id;
+    bool ready=false;
     Channel(const std::string& exe,const std::string& token,const std::string& worker,unsigned quota,std::chrono::milliseconds startup):
         session(token,worker),process(exe,{"--internal-worker",token,worker,std::to_string(quota)}),threads(quota),id(worker) {
         try {
@@ -137,6 +138,7 @@ public:
         }});
         auto message=receive(Clock::now()+startup);check(message.type=="hello_ack" && message.task_id.empty(),"invalid worker hello reply");
         fields(message.payload,{"identity","threads"});check(message.payload["identity"]==identity() && number(message.payload["threads"],256)==quota,"worker build/thread mismatch");
+        ready=true;
         }catch(const ProtocolError& e){throw ProtocolError(stop_diagnostic(process,e.what()));}
          catch(const std::exception& e){throw FileFailure("worker_start_failed",stop_diagnostic(process,e.what()));}
     }
@@ -146,8 +148,11 @@ public:
             if(Clock::now()>=deadline)throw FileFailure("worker_timeout","worker deadline exceeded",true);
             auto frame=process.read(std::min(deadline,Clock::now()+std::chrono::seconds(1)));
             if(frame.state==PipeLine::State::timeout) {if(Clock::now()<deadline)continue;throw FileFailure("worker_timeout","worker deadline exceeded",true);}
-            if(frame.state==PipeLine::State::eof)throw FileFailure("worker_crashed","worker exited before completing the task");
-            if(frame.state==PipeLine::State::fault)session.reject(frame.text);
+            if(frame.state==PipeLine::State::eof)throw FileFailure(ready?"worker_crashed":"worker_start_failed","worker exited before completing the task");
+            if(frame.state==PipeLine::State::fault) {
+                if(!ready)throw FileFailure("worker_start_failed",frame.text);
+                session.reject(frame.text);
+            }
             return session.decode(frame.text);
         }
     }
