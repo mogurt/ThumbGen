@@ -98,7 +98,7 @@ for path in sorted(list((stage / 'bin').iterdir()) + list((stage / 'lib').iterdi
     if old:
         replacement = '$ORIGIN/../lib' if path.parent.name == 'bin' else '$ORIGIN'
         commands.append(f'file(RPATH_CHANGE FILE "{path}" OLD_RPATH "{old[1]}" NEW_RPATH "{replacement}")')
-rpath_script = cache / 'stage-rpath.cmake'
+rpath_script = stage / 'tools/stage-rpath.cmake'
 rpath_script.write_text('\n'.join(commands) + '\n')
 subprocess.check_call([str(cmake), '-P', str(rpath_script)])
 (stage / 'runtime-provenance.json').write_text(json.dumps(dict(copied=copied, audit=audit), indent=2))

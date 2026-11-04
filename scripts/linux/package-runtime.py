@@ -18,8 +18,14 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--validation', required=True, type=Path)
 parser.add_argument('--cache', default='/home/builder/thumbgen-cache', type=Path)
 parser.add_argument('--output', type=Path)
+parser.add_argument('--source', type=Path, help='Frozen project archive source directory')
+parser.add_argument('--source-archive', type=Path)
+parser.add_argument('--archive-receipt', type=Path)
+parser.add_argument('--tools-cache', type=Path)
+parser.add_argument('--notice-materials', type=Path)
+parser.add_argument('--work', type=Path)
 args = parser.parse_args()
-repo = Path(__file__).resolve().parents[2]
+repo = (args.source or Path(__file__).resolve().parents[2]).resolve()
 stage, cache = args.validation.resolve(), args.cache.resolve()
 output = (args.output or repo / '.deps/linux/packages').resolve()
 output.mkdir(parents=True, exist_ok=True)
@@ -40,7 +46,31 @@ identity = json.loads(run(str(exe), '--version', '--json'))
 if identity['build'] != evidence['build_identity']:
     raise SystemExit('Build identity differs from validated evidence')
 revision = evidence['product_source']['commit']
-if not revision.startswith(identity['build']['revision']):
+archive_binding = None
+if identity['build']['revision'] == 'unknown':
+    if not args.source or not args.source_archive:
+        raise SystemExit('Unknown embedded revision requires explicit frozen source and source archive')
+    receipt = json.loads((args.archive_receipt or stage / 'archive-source.json').read_text())
+    if digest(args.source_archive) != receipt['archive_sha256'] or receipt['commit'] != revision:
+        raise SystemExit('Archive checksum/commit differs from frozen evidence')
+    with tarfile.open(args.source_archive) as source_archive:
+        if source_archive.pax_headers.get('comment', '').strip() != revision:
+            raise SystemExit('Git archive commit differs')
+        archive_hashes = {}
+        for member in source_archive.getmembers():
+            relative = Path(member.name)
+            if relative.is_absolute() or '..' in relative.parts:
+                raise SystemExit('Unsafe source archive path')
+            if member.isfile():
+                archive_hashes[member.name] = hashlib.sha256(source_archive.extractfile(member).read()).hexdigest()
+    if archive_hashes != receipt['sha256'] or archive_hashes != evidence['product_source']['sha256']:
+        raise SystemExit('Full archive input map differs from compiled-source evidence')
+    if (repo / '.git').exists() or any(digest(repo / path) != sha for path, sha in archive_hashes.items()):
+        raise SystemExit('Frozen archive source was modified')
+    archive_binding = dict(commit=revision, archive_sha256=receipt['archive_sha256'], input_files=len(archive_hashes),
+                           input_map_sha256=hashlib.sha256(json.dumps(archive_hashes, sort_keys=True, separators=(',', ':')).encode()).hexdigest(),
+                           embedded_revision='unknown', verification='Git archive bytes, full input map, frozen source tree and validated ELF SHA256')
+elif not revision.startswith(identity['build']['revision']):
     raise SystemExit('Embedded revision and frozen source evidence disagree')
 recipe_sha256 = digest(Path(__file__).resolve())
 name = 'thumbgen-' + re.sub(r'[^A-Za-z0-9_.-]', '_', identity['version']) + '-linux-x86_64-glibc217-' + revision[:12] + '-' + digest(exe)[:12] + '-r' + recipe_sha256[:8]
@@ -51,8 +81,19 @@ families = {'ZLIB':'Zlib', 'Imath':'BSD-3-Clause', 'OpenEXR':'BSD-3-Clause plus 
             'WebP':'BSD-3-Clause and patent grant', 'OpenColorIO':'BSD-3-Clause', 'fmt':'MIT',
             'Robinmap':'MIT', 'libdeflate':'MIT', 'zstd':'BSD-3-Clause OR GPL-2.0 (BSD text retained)',
             'pystring':'BSD-3-Clause', 'expat':'MIT', 'yaml-cpp':'MIT', 'minizip-ng':'Zlib plus bundled notices'}
-work = cache / 'package-work'
-work.mkdir(exist_ok=True)
+work = (args.work or output / 'package-work').resolve()
+work.mkdir(parents=True, exist_ok=True)
+notice_materials = (args.notice_materials or cache / 'runtime-license-rpm').resolve()
+materials_receipt = notice_materials / 'NOTICE-MATERIALS.json'
+materials = json.loads(materials_receipt.read_text()) if materials_receipt.exists() else None
+if materials:
+    if materials['rpm_sha256'] != 'cb1967fba485ad3da345e33018c0e8b367359f251c6b1a8847a4976579d74ffa':
+        raise SystemExit('Runtime notice RPM identity differs')
+    for relative, sha in materials['files'].items():
+        if digest(notice_materials / relative) != sha:
+            raise SystemExit('Runtime notice material changed: ' + relative)
+elif args.notice_materials:
+    raise SystemExit('Explicit notice materials need a verified per-file receipt')
 with tempfile.TemporaryDirectory(prefix='candidate-', dir=work) as temporary:
     root = Path(temporary) / name
     for directory in ('bin', 'lib', 'licenses'):
@@ -93,7 +134,7 @@ with tempfile.TemporaryDirectory(prefix='candidate-', dir=work) as temporary:
         shutil.copy2(path, root / 'lib' / path.name)
         if soname != path.name:
             (root / 'lib' / soname).symlink_to(path.name)
-    cmake = cache / 'tools/cmake-3.31.8-linux-x86_64/bin/cmake'
+    cmake = (args.tools_cache or cache) / 'tools/cmake-3.31.8-linux-x86_64/bin/cmake'
     edits = []
     abi = []
     for path in sorted([root / 'bin/thumbgen', *[p for p in (root / 'lib').iterdir() if not p.is_symlink()]]):
@@ -127,6 +168,11 @@ with tempfile.TemporaryDirectory(prefix='candidate-', dir=work) as temporary:
                 if original.is_symlink() or original.stat().st_size > 2 * 1024 * 1024:
                     continue
                 relative = original.relative_to(source)
+                if (source / '.git').exists():
+                    expected_content = subprocess.check_output([git_command, '-C', str(source), 'show',
+                                                               metadata['commit'] + ':' + relative.as_posix()])
+                    if original.read_bytes() != expected_content:
+                        raise SystemExit('Notice differs from pinned Git source: ' + str(original))
                 destination = root / 'licenses' / component / relative
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(original, destination)
@@ -134,7 +180,7 @@ with tempfile.TemporaryDirectory(prefix='candidate-', dir=work) as temporary:
         if not found:
             raise SystemExit('No license texts found for ' + component)
         components.append(dict(name=component, notices=found, **metadata))
-    oiio_source = repo / '.deps/oiio-src'
+    oiio_source = cache / 'oiio-source' if (cache / 'oiio-source').is_dir() else repo / '.deps/oiio-src'
     if run(git_command, '-c', 'safe.directory=' + str(oiio_source), '-C', str(oiio_source), 'rev-parse', 'HEAD').strip() != lock['oiio_commit']:
         raise SystemExit('OIIO license source identity mismatch')
     notices('OpenImageIO', oiio_source, dict(version='3.2.1.2', commit=lock['oiio_commit'],
@@ -151,7 +197,7 @@ with tempfile.TemporaryDirectory(prefix='candidate-', dir=work) as temporary:
     notices('nlohmann_json', json_source, dict(**lock['nlohmann_json'], repository='https://github.com/nlohmann/json', license='MIT', linkage='header-only'))
     for component, rpm_name in (('GCC-runtime', 'libgcc'), ('GCC-C++-runtime', 'libstdc++'), ('GCC-build-headers-nonshared', 'devtoolset-11-libstdc++-devel')):
         metadata = run('rpm', '-q', '--qf', '%{NAME}|%{VERSION}-%{RELEASE}|%{SOURCERPM}|%{LICENSE}', rpm_name).strip().split('|')
-        notice_source = cache / 'runtime-license-rpm/usr/share/doc/libgcc-4.8.5'
+        notice_source = notice_materials / 'usr/share/doc/libgcc-4.8.5'
         notices(component, notice_source, dict(version=metadata[1], source_rpm=metadata[2],
                 repository='https://vault.centos.org/7.9.2009/', license=metadata[3], linkage='GCC runtime / compiler headers and nonshared support',
                 notice_source='CentOS libgcc-4.8.5-44.el7.x86_64.rpm, signature verified; GPL texts and exception 3.1',
@@ -160,6 +206,8 @@ with tempfile.TemporaryDirectory(prefix='candidate-', dir=work) as temporary:
     manifest = dict(kind='internal-evaluation-candidate', redistribution_ready=False, project_license='not selected; no project LICENSE supplied',
                     package_recipe_sha256=recipe_sha256,
                     identity=identity, frozen_product_commit=revision, validated_executable_sha256=digest(exe),
+                    packaged_executable_sha256=digest(root / 'bin/thumbgen'), archive_binding=archive_binding,
+                    notice_material_receipt_sha256=digest(materials_receipt) if materials else None,
                     frozen_source_snapshot=evidence['product_source']['sha256'],
                     dependency_components=components, target_os_libraries=external,
                     validation_closure_objects=len(json.loads((stage / 'runtime-provenance.json').read_text())['audit']['objects']),
@@ -182,6 +230,7 @@ with tempfile.TemporaryDirectory(prefix='candidate-', dir=work) as temporary:
             exact_notice='licenses/OpenImageIO/THIRD-PARTY.md',
             usage='conservative upstream acknowledgment inventory; not a claim every optional/build-only item is linked')
             for license_name, items in embedded_groups.items() for item in items]
+    manifest['payload_symlinks'] = {str(path.relative_to(root)): os.readlink(path) for path in root.rglob('*') if path.is_symlink()}
     (root / 'DEPENDENCIES.json').write_text(json.dumps(manifest, indent=2, sort_keys=True) + '\n')
     (root / 'ABI_REQUIREMENTS.json').write_text(json.dumps(abi, indent=2, sort_keys=True) + '\n')
     (root / 'NOTICE').write_text('INTERNAL CANDIDATE ONLY. ThumbGen project license has not been selected.\n'
@@ -202,7 +251,7 @@ with tempfile.TemporaryDirectory(prefix='candidate-', dir=work) as temporary:
     for path in root.rglob('*'):
         if not path.is_symlink():
             path.chmod(0o755 if path.is_dir() or path in (root / 'thumbgen', root / 'bin/thumbgen') else 0o644)
-    sums = [digest(path) + '  ' + str(path.relative_to(root)) for path in sorted(root.rglob('*')) if path.is_file() and not path.is_symlink()]
+    sums = [digest(path) + '  ' + str(path.relative_to(root)) for path in sorted(root.rglob('*')) if path.is_file()]
     (root / 'SHA256SUMS').write_text('\n'.join(sums) + '\n')
     temporary_archive = Path(temporary) / (name + '.tar.gz')
     with temporary_archive.open('wb') as stream, gzip.GzipFile(filename='', mode='wb', fileobj=stream, mtime=0) as compressed:
