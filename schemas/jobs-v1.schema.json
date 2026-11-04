@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ThumbGen batch manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "jobs"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "defaults": {"$ref": "#/$defs/options"},
+    "jobs": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "input", "outputs"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "input": {"type": "string", "minLength": 1},
+          "options": {"$ref": "#/$defs/options"},
+          "outputs": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/output"}}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "size": {
+      "oneOf": [
+        {"type": "integer", "minimum": 1, "maximum": 32768},
+        {"type": "array", "prefixItems": [
+          {"type": "integer", "minimum": 1, "maximum": 32768},
+          {"type": "integer", "minimum": 1, "maximum": 32768}
+        ], "minItems": 2, "maxItems": 2}
+      ]
+    },
+    "format": {"enum": ["jpeg", "jpg", "png", "webp"]},
+    "quality": {"type": "integer", "minimum": 1, "maximum": 100},
+    "options": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "preset": {"enum": ["fast", "balanced", "quality"]},
+        "background": {"enum": ["black", "white", "transparent"]},
+        "input_space": {"type": "string", "minLength": 1},
+        "ocio_config": {"type": "string"},
+        "display": {"type": "string"}, "view": {"type": "string"},
+        "channels": {"type": "string"},
+        "part": {"type": "integer", "minimum": -1, "maximum": 2147483647},
+        "threads": {"type": "integer", "minimum": 1, "maximum": 256},
+        "max_decode_mib": {"type": "integer", "minimum": 1, "maximum": 16384},
+        "format": {"$ref": "#/$defs/format"},
+        "quality": {"$ref": "#/$defs/quality"}, "size": {"$ref": "#/$defs/size"}
+      }
+    },
+    "output": {
+      "type": "object", "additionalProperties": false,
+      "required": ["path"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "size": {"$ref": "#/$defs/size"}, "format": {"$ref": "#/$defs/format"},
+        "quality": {"$ref": "#/$defs/quality"}
+      }
+    }
+  }
+}

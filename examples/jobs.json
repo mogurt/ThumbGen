@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "defaults": {
+    "preset": "balanced",
+    "background": "black",
+    "format": "jpeg",
+    "quality": 90
+  },
+  "jobs": [
+    {
+      "id": "frame-0001",
+      "input": "assets/frame.0001.exr",
+      "outputs": [
+        {"path": "previews/frame.0001.jpg", "size": [1024, 1024]},
+        {"path": "previews/frame.0001.small.jpg", "size": [512, 512]}
+      ]
+    }
+  ]
+}

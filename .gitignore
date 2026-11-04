@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+benchmarks/data/
+benchmarks/output/
+.deps/
+build/
+benchmarks/results/*
+!benchmarks/results/*/
+benchmarks/results/**/*
+!benchmarks/results/**/
+!benchmarks/results/**/SUMMARY.md
