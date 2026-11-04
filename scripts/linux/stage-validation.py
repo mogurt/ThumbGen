@@ -8,14 +8,15 @@ import sys
 import re
 
 cache = Path(sys.argv[1]).resolve()
-repo = Path(__file__).resolve().parents[2]
+repo = Path(os.environ.get('THUMBGEN_SOURCE_DIR', Path(__file__).resolve().parents[2])).resolve()
+build = Path(os.environ.get('THUMBGEN_PRODUCT_BUILD_DIR', cache / 'thumbgen-build')).resolve()
 stage = Path(os.environ.get('THUMBGEN_VALIDATION_DIR', repo / '.deps/linux/validation')).resolve()
 stage.mkdir(parents=True, exist_ok=True)
 for directory in ('bin', 'lib', 'tests', 'schemas', 'tools'):
     (stage / directory).mkdir(exist_ok=True)
 binaries = ('thumbgen', 'thumbgen_core_tests', 'thumbgen_image_matrix', 'thumbgen_budget_tests', 'thumbgen_process_tests', 'thumbgen_control_tests', 'thumbgen_worker_protocol_tests', 'thumbgen_isolated_tests')
 for name in binaries:
-    shutil.copy2(cache / 'thumbgen-build' / name, stage / 'bin' / name)
+    shutil.copy2(build / name, stage / 'bin' / name)
 logs = Path(os.environ.get('THUMBGEN_BUILD_LOG_DIR', cache / 'logs'))
 audit = json.loads((logs / 'abi.json').read_text())
 if audit['failures']:
@@ -47,8 +48,8 @@ for path in (repo / 'schemas').glob('*.json'):
 # a second image-case list that can silently fall behind CMakeLists.txt.
 ctest = cache / 'tools/cmake-3.31.8-linux-x86_64/bin/ctest'
 suite = json.loads(subprocess.check_output(
-    [str(ctest), '--test-dir', str(cache / 'thumbgen-build'), '--show-only=json-v1'], text=True))
-replacements = {str(cache / 'thumbgen-build' / name): '@BIN@/' + name for name in binaries}
+    [str(ctest), '--test-dir', str(build), '--show-only=json-v1'], text=True))
+replacements = {str(build / name): '@BIN@/' + name for name in binaries}
 replacements.update({str(repo / 'tests/test_cli.py'): '@TESTS@/test_cli.py',
                      str(repo / 'tests/test_protocol.py'): '@TESTS@/test_protocol.py',
                      str(repo / 'tests/test_interrupt.py'): '@TESTS@/test_interrupt.py',
@@ -73,7 +74,7 @@ for test in suite['tests']:
             if not set(prop['value']).issubset(supported):
                 raise SystemExit('Unmapped test environment: ' + test['name'])
         elif prop['name'] == 'WORKING_DIRECTORY':
-            if prop['value'] != str(cache / 'thumbgen-build'):
+            if prop['value'] != str(build):
                 raise SystemExit('Unmapped test working directory: ' + test['name'])
         else:
             raise SystemExit('Unmapped test property: ' + prop['name'])

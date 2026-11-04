@@ -7,7 +7,8 @@ import subprocess
 import sys
 
 cache = Path(sys.argv[1]).resolve()
-repo = Path(__file__).resolve().parents[2]
+repo = Path(os.environ.get('THUMBGEN_SOURCE_DIR', Path(__file__).resolve().parents[2])).resolve()
+build = Path(os.environ.get('THUMBGEN_PRODUCT_BUILD_DIR', cache / 'thumbgen-build')).resolve()
 expected = json.loads((repo / 'scripts/linux/sources-lock.json').read_text(encoding='utf-8-sig'))
 def run(*args):
     return subprocess.check_output(args, text=True).strip()
@@ -19,7 +20,7 @@ for dependency in expected['dependencies']:
         raise SystemExit('Source mismatch: ' + dependency['package'])
     records.append(dict(dependency, actual_commit=actual))
 flags = {}
-for root in (cache / 'oiio-deps', cache / 'oiio-build', cache / 'thumbgen-build'):
+for root in (cache / 'oiio-deps', cache / 'oiio-build', build):
     for path in root.rglob('CMakeCache.txt'):
         values = [line for line in path.read_text(errors='replace').splitlines()
                   if line.startswith(('CMAKE_C_FLAGS:', 'CMAKE_CXX_FLAGS:', 'USE_SIMD:'))]
@@ -32,21 +33,28 @@ artifacts = {}
 for directory in ('bin', 'lib'):
     for path in sorted((stage / directory).iterdir()):
         artifacts[str(path.relative_to(stage))] = hashlib.sha256(path.read_bytes()).hexdigest()
+archive_receipt = os.environ.get('THUMBGEN_ARCHIVE_IDENTITY')
+if archive_receipt:
+    archive = json.loads(Path(archive_receipt).read_text())
+    source_hashes = {name: hashlib.sha256((repo / name).read_bytes()).hexdigest() for name in archive['sha256']}
+    if source_hashes != archive['sha256'] or (repo / '.git').exists() or build_identity['revision'] != 'unknown':
+        raise SystemExit('Archive source/build identity mismatch')
+    product_source = dict(commit=archive['commit'], worktree_commit=None, sha256=source_hashes,
+                          archive_sha256=archive['archive_sha256'])
+else:
+    product_source = dict(commit=run('git', '-C', str(repo), 'rev-parse', build_identity['revision']),
+                          worktree_commit=run('git', '-C', str(repo), 'rev-parse', 'HEAD'),
+                          sha256={str(path.relative_to(repo)): hashlib.sha256(path.read_bytes()).hexdigest()
+                                  for path in [repo / 'CMakeLists.txt', *sorted((repo / 'src').glob('*.cpp')),
+                                               *sorted((repo / 'src').glob('*.h*')), *sorted((repo / 'include').rglob('*.h')),
+                                               *sorted((repo / 'tests').glob('*.cpp')), *sorted((repo / 'tests').glob('*.h')),
+                                               *sorted((repo / 'tests').glob('*.py')), repo / 'tests/requirements.txt',
+                                               *sorted((repo / 'schemas').glob('*.json'))]})
 report = dict(source_dependencies=records, flags=flags, staged_artifacts=artifacts,
               test_dependencies=json.loads((repo / 'scripts/linux/test-deps-lock.json').read_text()),
               ctest_suite=json.loads((stage / 'tests/ctest-suite.json').read_text()),
               build_identity=build_identity,
-              product_source=dict(
-                  commit=run('git', '-C', str(repo), 'rev-parse', build_identity['revision']),
-                  worktree_commit=run('git', '-C', str(repo), 'rev-parse', 'HEAD'),
-                  sha256={str(path.relative_to(repo)): hashlib.sha256(path.read_bytes()).hexdigest()
-                          for path in [repo / 'CMakeLists.txt', *sorted((repo / 'src').glob('*.cpp')),
-                                       *sorted((repo / 'src').glob('*.h*')),
-                                       *sorted((repo / 'include').rglob('*.h')),
-                                       *sorted((repo / 'tests').glob('*.cpp')),
-                                       *sorted((repo / 'tests').glob('*.h')),
-                                       *sorted((repo / 'tests').glob('*.py')), repo / 'tests/requirements.txt',
-                                       *sorted((repo / 'schemas').glob('*.json'))]}),
+              product_source=product_source,
               tools={name: run(*command) for name, command in {
                   'gcc': ['g++', '-dumpfullversion'], 'git': ['git', '--version'],
                   'cmake': ['cmake', '--version'], 'ninja': ['ninja', '--version'],
