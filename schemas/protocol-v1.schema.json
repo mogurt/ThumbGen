@@ -114,7 +114,12 @@
             "temporary_create_failed",
             "source_stat_failed",
             "source_changed",
-            "invalid_output_policy"
+            "invalid_output_policy",
+            "worker_start_failed",
+            "worker_crashed",
+            "worker_protocol_error",
+            "worker_timeout",
+            "task_memory_exceeds_budget"
           ]
         },
         "message": {

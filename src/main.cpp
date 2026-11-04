@@ -1,5 +1,6 @@
 #include <thumbgen/core.h>
 #include "files.h"
+#include "isolated.h"
 #include <algorithm>
 #include <cctype>
 #include <chrono>
@@ -13,6 +14,8 @@
 #ifdef _WIN32
 #define NOMINMAX
 #include <windows.h>
+#else
+#include <unistd.h>
 #endif
 
 namespace fs=std::filesystem;
@@ -216,6 +219,10 @@ static int execute(const std::vector<std::string>& args) {
         return exit_code;
     };
     try {
+        if(args.size()>1 && args[1]=="--internal-worker") {
+            if(args.size()!=5)throw std::invalid_argument("invalid internal worker invocation");
+            return thumbgen::detail::serve_worker(args[2],args[3],unsigned(number(args[4])));
+        }
         if(args.size()<2||std::find(args.begin(),args.end(),"--help")!=args.end()){usage();return 0;}
         thumbgen::Engine engine;
         auto command=args[1];
@@ -283,9 +290,21 @@ static int execute(const std::vector<std::string>& args) {
         }
         const auto batch_start=std::chrono::steady_clock::now();
         size_t success=0,partial=0,failed=0,skipped=0,outputs_total=0,outputs_success=0,outputs_failed=0,outputs_skipped=0;
-        for(const auto& job:jobs) {
-            outputs_total+=job.outputs.size();
-            auto r=engine.convert(job);
+        for(const auto& job:jobs)outputs_total+=job.outputs.size();
+        std::string executable;
+#ifdef _WIN32
+        std::vector<wchar_t> path(1024);
+        for(;;) {
+            auto count=GetModuleFileNameW(nullptr,path.data(),DWORD(path.size()));
+            if(!count)throw std::runtime_error("cannot locate the running executable");
+            if(count<path.size()){executable=fs::path(std::wstring(path.data(),count)).u8string();break;}
+            if(path.size()>=32768)throw std::runtime_error("executable path exceeds Windows limit");
+            path.resize(std::min<size_t>(32768,path.size()*2));
+        }
+#else
+        executable=fs::read_symlink("/proc/self/exe").u8string();
+#endif
+        thumbgen::detail::run_isolated(jobs,executable,[&](const Json& r) {
             if(r["status"]=="success")++success;
             else if(r["status"]=="partial")++partial;
             else if(r["status"]=="skipped")++skipped;
@@ -296,9 +315,9 @@ static int execute(const std::vector<std::string>& args) {
                 else ++outputs_failed;
             }
             if(json_mode)std::cout<<r.dump(-1,' ',false,Json::error_handler_t::replace)<<std::endl;
-            else std::cout<<job.input<<": "<<r["status"].get<std::string>()<<'\n';
+            else std::cout<<r["input"].get<std::string>()<<": "<<r["status"].get<std::string>()<<'\n';
             if(!r["ok"].get<bool>()&&!json_mode)std::cerr<<r.dump(2)<<'\n';
-        }
+        });
         Json end{{"schema_version",1},{"type","summary"},{"total",jobs.size()},
                  {"success",success},{"partial",partial},{"failed",failed},{"skipped",skipped},
                  {"output_counts",{{"total",outputs_total},{"success",outputs_success},{"failed",outputs_failed},
@@ -316,6 +335,7 @@ static int execute(const std::vector<std::string>& args) {
 
 #ifdef _WIN32
 int wmain(int argc,wchar_t** argv) {
+    SetErrorMode(SEM_FAILCRITICALERRORS|SEM_NOGPFAULTERRORBOX);
     std::vector<std::string> args;
     for(int i=0;i<argc;++i) {
         int n=WideCharToMultiByte(CP_UTF8,0,argv[i],-1,nullptr,0,nullptr,nullptr);

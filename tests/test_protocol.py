@@ -15,6 +15,8 @@ from jsonschema import Draft202012Validator, ValidationError
 parser=argparse.ArgumentParser()
 parser.add_argument('--exe',required=True,type=Path)
 parser.add_argument('--matrix-exe',required=True,type=Path)
+parser.add_argument('--control-exe',required=True,type=Path)
+parser.add_argument('--isolated-exe',required=True,type=Path)
 parser.add_argument('--schema-dir',required=True,type=Path)
 parser.add_argument('--runtime-dir',type=Path)
 args,remaining=parser.parse_known_args()
@@ -32,6 +34,14 @@ def png(path):
                      chunk(b'IDAT',zlib.compress(b'\0\xff\0\0\xff\0\0'))+chunk(b'IEND',b''))
 
 class Protocol(unittest.TestCase):
+    def native_records(self,executable,count):
+        result=subprocess.run([str(executable)],env=ENV,capture_output=True,text=True,encoding='utf-8',timeout=30)
+        self.assertEqual(result.returncode,0,result.stderr)
+        records=json.loads(result.stdout)['records']
+        self.assertEqual(len(records),count)
+        for record in records:validator.validate(record)
+    def test_control_records(self):self.native_records(args.control_exe,14)
+    def test_isolated_records(self):self.native_records(args.isolated_exe,19)
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory(prefix='thumbgen-protocol-')
         self.root=Path(self.temp.name);self.input=self.root/'source.png';png(self.input)

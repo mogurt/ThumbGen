@@ -116,6 +116,10 @@ Json Engine::sequence_lock(const std::string& id) const {
     auto pin=impl_->sequences.find(id);if(pin==impl_->sequences.end())return nullptr;
     return {{"key",pin->second.key},{"request",pin->second.request},{"named",pin->second.named}};
 }
+void Engine::forget_sequence_lock(const std::string& id) {
+    if(impl_->converting)throw std::logic_error("cannot forget a sequence lock during conversion");
+    impl_->sequences.erase(id);
+}
 void Engine::restore_sequence_lock(const std::string& id,const Json& lock) {
     if(impl_->converting)throw std::logic_error("cannot restore a sequence lock during conversion");
     auto valid=[](bool ok){if(!ok)throw std::invalid_argument("invalid internal sequence lock");};
@@ -159,7 +163,7 @@ Json Engine::capabilities() {
         {"defaults",{{"format","jpeg"},{"quality",90},{"size",{1024,1024}},
                      {"background","black"},{"preset","balanced"}}},
         {"limitations",{"no Deep flattening or Cryptomatte visualization yet",
-            "batch is serial across files; native library threads are bounded",
+            "batch uses one isolated worker at a time; controlled file concurrency is pending",
             "max_decode_mib limits decoded source buffer, not process RSS"}}};
 }
 
@@ -536,7 +540,10 @@ Json Engine::convert(const Job& job) {
         }
         r["ok"]=successes+skips==job.outputs.size();
         r["status"]=skips==job.outputs.size()?"skipped":r["ok"].get<bool>()?"success":successes+skips?"partial":"failed";
-    }catch(const Failure& e){r["error"]={{"code",e.code},{"message",e.what()},{"stage",stage},{"retryable",e.retryable}};}
+    }catch(const Failure& e){
+        if(e.code=="source_changed" && r.contains("source_check"))r["source_check"]["stable"]=false;
+        r["error"]={{"code",e.code},{"message",e.what()},{"stage",stage},{"retryable",e.retryable}};
+    }
      catch(const std::exception& e){r["error"]={{"code","conversion_failed"},{"message",e.what()},{"stage",stage}};}
     r["timings_ms"]["total"]=ms(started);
     return r;

@@ -210,6 +210,31 @@
       "code": "invalid_output_policy",
       "category": "output",
       "description": "invalid existing output policy"
+    },
+    {
+      "code": "worker_start_failed",
+      "category": "runtime",
+      "description": "owned worker could not start or complete its startup handshake"
+    },
+    {
+      "code": "worker_crashed",
+      "category": "runtime",
+      "description": "worker exited before completing its task; committed outputs are preserved"
+    },
+    {
+      "code": "worker_protocol_error",
+      "category": "runtime",
+      "description": "worker framing, association, state or result validation failed"
+    },
+    {
+      "code": "worker_timeout",
+      "category": "runtime",
+      "description": "worker exceeded a startup, preparation or task deadline"
+    },
+    {
+      "code": "task_memory_exceeds_budget",
+      "category": "runtime",
+      "description": "estimated task memory does not fit the explicit scheduling budget"
     }
   ]
 }

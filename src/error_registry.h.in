@@ -1,0 +1,4 @@
+#pragma once
+namespace thumbgen::detail {
+inline constexpr const char* error_registry_json=R"thumbgen(@THUMBGEN_ERROR_REGISTRY@)thumbgen";
+}

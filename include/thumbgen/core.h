@@ -44,6 +44,7 @@ public:
     void set_control(Control control);
     Json sequence_lock(const std::string& sequence_id) const;
     void restore_sequence_lock(const std::string& sequence_id,const Json& lock);
+    void forget_sequence_lock(const std::string& sequence_id);
     static Json capabilities();
 private:
     struct Impl;
