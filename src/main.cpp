@@ -2,6 +2,8 @@
 #include "files.h"
 #include "isolated.h"
 #include <algorithm>
+#include <atomic>
+#include <csignal>
 #include <cctype>
 #include <chrono>
 #include <filesystem>
@@ -24,6 +26,43 @@ using thumbgen::Options;
 using thumbgen::Job;
 using thumbgen::Output;
 
+namespace {
+std::atomic<bool> interrupt_requested{false};
+static_assert(std::atomic<bool>::is_always_lock_free,"signal flag must be lock free");
+#ifdef _WIN32
+BOOL WINAPI interrupt_handler(DWORD kind) {
+    if(kind!=CTRL_C_EVENT && kind!=CTRL_BREAK_EVENT)return FALSE;
+    interrupt_requested.store(true,std::memory_order_relaxed);return TRUE;
+}
+#else
+void interrupt_handler(int){interrupt_requested.store(true,std::memory_order_relaxed);}
+#endif
+class InterruptGuard {
+#ifndef _WIN32
+    struct sigaction old_int{},old_term{};
+#endif
+public:
+    InterruptGuard() {
+        interrupt_requested.store(false,std::memory_order_relaxed);
+#ifdef _WIN32
+        if(!SetConsoleCtrlHandler(interrupt_handler,TRUE))throw std::system_error(int(GetLastError()),std::system_category(),"install interrupt handler");
+#else
+        struct sigaction action{};action.sa_handler=interrupt_handler;sigemptyset(&action.sa_mask);action.sa_flags=SA_RESTART;
+        if(sigaction(SIGINT,&action,&old_int)!=0)throw std::system_error(errno,std::generic_category(),"install SIGINT handler");
+        if(sigaction(SIGTERM,&action,&old_term)!=0){auto code=errno;sigaction(SIGINT,&old_int,nullptr);throw std::system_error(code,std::generic_category(),"install SIGTERM handler");}
+#endif
+    }
+    ~InterruptGuard() {
+#ifdef _WIN32
+        SetConsoleCtrlHandler(interrupt_handler,FALSE);
+#else
+        sigaction(SIGTERM,&old_term,nullptr);sigaction(SIGINT,&old_int,nullptr);
+#endif
+    }
+    static bool requested(){return interrupt_requested.load(std::memory_order_relaxed);}
+};
+}
+
 static void usage() {
     std::cout << "ThumbGen 0.1.0-dev\n"
         "  thumbgen convert INPUT --output-dir DIR [--size 1024] [--json]\n"
@@ -39,7 +78,7 @@ static void usage() {
         "  --existing error|skip|replace (default: error)\n"
         "  --workers N, --thread-budget N, --memory-budget-mib N, --startup-timeout-ms N, --task-timeout-ms N\n"
         "Defaults: balanced, JPEG Q90, fit 1024x1024 without upscaling, black background.\n"
-        "Default: no output overwriting. Exit: 0 success, 1 internal, 2 usage, 3 partial, 4 all failed.\n";
+        "Default: no output overwriting. Exit: 0 success, 1 internal, 2 usage, 3 partial, 4 all failed, 130 interrupted.\n";
 }
 static void keys(const Json& object,const std::set<std::string>& allowed) {
     if(!object.is_object())throw std::invalid_argument("expected an object");
@@ -313,7 +352,7 @@ static int execute(const std::vector<std::string>& args) {
             jobs.push_back(std::move(job));preflight(jobs);
         }
         const auto batch_start=std::chrono::steady_clock::now();
-        size_t success=0,partial=0,failed=0,skipped=0,outputs_total=0,outputs_success=0,outputs_failed=0,outputs_skipped=0;
+        size_t success=0,partial=0,failed=0,skipped=0,cancelled=0,outputs_total=0,outputs_success=0,outputs_failed=0,outputs_skipped=0,outputs_cancelled=0;
         for(const auto& job:jobs)outputs_total+=job.outputs.size();
         std::string executable;
 #ifdef _WIN32
@@ -329,14 +368,17 @@ static int execute(const std::vector<std::string>& args) {
         executable=fs::read_symlink("/proc/self/exe").u8string();
 #endif
         const auto execution_settings=thumbgen::detail::execution_configuration(jobs,execution);
-        thumbgen::detail::run_isolated(jobs,executable,[&](const Json& r) {
+        InterruptGuard interrupt_guard;execution.cancelled=InterruptGuard::requested;
+        const bool interrupted=thumbgen::detail::run_isolated(jobs,executable,[&](const Json& r) {
             if(r["status"]=="success")++success;
             else if(r["status"]=="partial")++partial;
             else if(r["status"]=="skipped")++skipped;
+            else if(r["status"]=="cancelled")++cancelled;
             else ++failed;
             for(const auto& out:r["outputs"]) {
                 if(out["status"]=="success")++outputs_success;
                 else if(out["status"]=="skipped")++outputs_skipped;
+                else if(out["status"]=="cancelled")++outputs_cancelled;
                 else ++outputs_failed;
             }
             if(json_mode)std::cout<<r.dump(-1,' ',false,Json::error_handler_t::replace)<<std::endl;
@@ -344,12 +386,13 @@ static int execute(const std::vector<std::string>& args) {
             if(!r["ok"].get<bool>()&&!json_mode)std::cerr<<r.dump(2)<<'\n';
         },execution);
         Json end{{"schema_version",1},{"type","summary"},{"total",jobs.size()},
-                 {"success",success},{"partial",partial},{"failed",failed},{"skipped",skipped},
+                 {"success",success},{"partial",partial},{"failed",failed},{"skipped",skipped},{"cancelled",cancelled},{"interrupted",interrupted},
                  {"output_counts",{{"total",outputs_total},{"success",outputs_success},{"failed",outputs_failed},
-                     {"skipped",outputs_skipped},{"not_attempted",outputs_total-outputs_success-outputs_failed-outputs_skipped}}},
+                     {"skipped",outputs_skipped},{"cancelled",outputs_cancelled},{"not_attempted",outputs_total-outputs_success-outputs_failed-outputs_skipped-outputs_cancelled}}},
                  {"elapsed_ms",std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-batch_start).count()},
                  {"execution",execution_settings}};
         if(json_mode)std::cout<<end.dump()<<std::endl;
+        if(interrupted)return 130;
         if(success+skipped==jobs.size())return 0;
         return success||partial||skipped?3:4;
     }catch(const std::invalid_argument& e){return error("invalid_request",e,2);}

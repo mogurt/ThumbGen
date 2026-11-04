@@ -235,6 +235,11 @@
       "code": "task_memory_exceeds_budget",
       "category": "runtime",
       "description": "estimated task memory does not fit the explicit scheduling budget"
+    },
+    {
+      "code": "task_cancelled",
+      "category": "runtime",
+      "description": "controller accepted interruption; uncommitted outputs were cancelled"
     }
   ]
 }

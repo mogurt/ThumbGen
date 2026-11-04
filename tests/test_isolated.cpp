@@ -81,7 +81,7 @@ static int test_main(const std::vector<std::string>& args) {
                 require(fs::exists(marker),"queued worker failure did not release its preparation lane");
             }
             if(phase=="committed" && job.id=="budget-slow"){std::ofstream marker(fs::u8path(job.input+".done"));marker<<"committed";}
-            if(phase=="planned" && job.id=="after-queue-crash"){std::ofstream marker(fs::u8path(job.input+".planned"));marker<<"planned";}
+            if(phase=="planned" && (job.id=="after-queue-crash" || job.id=="cancel-wait")){std::ofstream marker(fs::u8path(job.input+".planned"));marker<<"planned";}
             if(phase=="decoded" && job.id=="after-queue-crash") {
                 auto marker=fs::u8path(job.input).parent_path().parent_path()/"budget-slow"/"source.exr.done";
                 require(fs::exists(marker),"memory budget admitted a second decoder before the active task released resources");
@@ -94,7 +94,7 @@ static int test_main(const std::vector<std::string>& args) {
                 require(fs::exists(marker),"consumer failure did not overlap another encoder");
             }
             if(phase=="planned" && job.id=="source-change"){std::ofstream file(fs::u8path(job.input),std::ios::app|std::ios::binary);file<<"producer write";}
-            if((phase=="decoded" && job.id=="parent-loss") || (phase=="encoded" && job.id=="emit-hold")) {
+            if((phase=="decoded" && (job.id=="parent-loss" || job.id=="cancel-block")) || (phase=="encoded" && (job.id=="emit-hold" || job.id=="cancel-encoding"))) {
                 {std::ofstream marker(fs::u8path(job.input+".pid"));marker<<
 #ifdef _WIN32
                     GetCurrentProcessId()
@@ -115,7 +115,8 @@ static int test_main(const std::vector<std::string>& args) {
             for(int i=0;i<count;++i)value.outputs.push_back({(dir/(std::to_string(i)+".png")).u8string(),"png",4,2,90});return value;
         };
         auto run=[&](std::vector<Job> jobs,IsolationOptions options=IsolationOptions{},std::string exe=std::string{}) {
-            Json records=Json::array();run_isolated(jobs,exe.empty()?executable:exe,[&](const Json& record){records.push_back(record);all.push_back(record);},options);
+            Json records=Json::array();bool interrupted=run_isolated(jobs,exe.empty()?executable:exe,[&](const Json& record){records.push_back(record);all.push_back(record);},options);
+            if(options.cancelled)require(interrupted,"accepted cancellation was not returned to caller");
             require(records.size()==jobs.size(),"isolated batch lost a record");
             std::map<std::string,Json> by_id;for(const auto& record:records)require(by_id.emplace(record["id"].get<std::string>(),record).second,"duplicate isolated result");
             Json ordered=Json::array();for(const auto& item:jobs){require(by_id.count(item.id)!=0,"isolated id mismatch");ordered.push_back(by_id.at(item.id));}return ordered;
@@ -181,6 +182,24 @@ static int test_main(const std::vector<std::string>& args) {
         catch(const std::runtime_error& e){consumer_failed=std::string(e.what())=="consumer stopped";}
         unsigned long held_pid=0;{std::ifstream marker(fs::u8path(emit_hold.input+".pid"));marker>>held_pid;}
         require(consumer_failed && held_pid && !running(held_pid),"consumer failure leaked an encoding worker");
+        IsolationOptions cancel;cancel.cancelled=[] {return true;};
+        rows=run({job("cancel-before-a"),job("cancel-before-b"),job("cancel-before-c")},cancel);
+        for(const auto& row:rows)require(row["status"]=="cancelled" && !row["execution"].contains("worker_id"),row.dump());
+        auto cancel_partial=job("cancel-partial",2);cancel.cancelled=[&] {return fs::exists(fs::u8path(cancel_partial.outputs[0].path));};
+        rows=run({cancel_partial,job("cancel-after-partial")},cancel);
+        require(rows[0]["status"]=="cancelled" && rows[0]["outputs"][0]["status"]=="success" && rows[0]["outputs"][1]["status"]=="cancelled" && rows[1]["status"]=="cancelled",rows.dump());
+        auto cancel_complete=job("cancel-after-commit");cancel.cancelled=[&] {return fs::exists(fs::u8path(cancel_complete.outputs[0].path));};
+        rows=run({cancel_complete},cancel);require(rows[0]["status"]=="success",rows.dump());
+        auto cancel_block=job("cancel-block"),cancel_wait=job("cancel-wait");cancel=pool;cancel.memory_mib=560;
+        cancel.cancelled=[&] {return fs::exists(fs::u8path(cancel_block.input+".pid")) && fs::exists(fs::u8path(cancel_wait.input+".planned"));};
+        rows=run({cancel_block,cancel_wait,job("cancel-unstarted")},cancel);
+        for(const auto& row:rows)require(row["status"]=="cancelled",row.dump());
+        unsigned long cancelled_pid=0;{std::ifstream marker(fs::u8path(cancel_block.input+".pid"));marker>>cancelled_pid;}
+        require(cancelled_pid && !running(cancelled_pid),"cancelled decoder survived");
+        auto cancel_encoding=job("cancel-encoding");cancel_encoding.outputs[0].existing="replace";
+        {std::ofstream existing(fs::u8path(cancel_encoding.outputs[0].path));existing<<"preserve previous target";}
+        cancel=IsolationOptions{};cancel.cancelled=[&] {return fs::exists(fs::u8path(cancel_encoding.input+".pid"));};
+        rows=run({cancel_encoding},cancel);require(rows[0]["status"]=="cancelled" && bytes(fs::u8path(cancel_encoding.outputs[0].path))=="preserve previous target",rows.dump());
         auto orphan=job("parent-loss");auto wire=fs::u8path(orphan.input+".json");{std::ofstream output(wire);output<<job_to_wire(orphan);}
         {
             ChildProcess owner(executable,{"--orphan-parent",wire.u8string()});auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(5);unsigned long pid=0;

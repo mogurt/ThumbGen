@@ -34,6 +34,27 @@ def png(path):
                      chunk(b'IDAT',zlib.compress(b'\0\xff\0\0\xff\0\0'))+chunk(b'IEND',b''))
 
 class Protocol(unittest.TestCase):
+    def test_cancellation_contract(self):
+        error={'code':'task_cancelled','message':'interruption requested','retryable':False}
+        cancelled={'path':'preview.png','existing_policy':'error','status':'cancelled','error':error}
+        row={'schema_version':1,'type':'result','id':'cancelled','input':'frame.exr','status':'cancelled','ok':False,
+             'outputs':[cancelled],'error':error,'warnings':[],'timings_ms':{'total':0}}
+        validator.validate(row)
+        committed={'path':'first.png','existing_policy':'error','status':'success','width':2,'height':1,
+                   'format':'png','resize_ms':0,'finish_ms':0}
+        row['outputs'].insert(0,committed);validator.validate(row)
+        for change in [{'ok':True},{'error':{'code':'worker_crashed','message':'incorrect cancellation reason'}},
+                       {'outputs':[]},{'outputs':[committed]},{'status':'partial'}]:
+            bad=copy.deepcopy(row);bad.update(change)
+            with self.assertRaises(ValidationError):validator.validate(bad)
+        end={'schema_version':1,'type':'summary','total':1,'success':0,'partial':0,'failed':0,'skipped':0,
+             'cancelled':1,'interrupted':True,'elapsed_ms':1,
+             'output_counts':{'total':2,'success':1,'failed':0,'skipped':0,'cancelled':1,'not_attempted':0}}
+        validator.validate(end)
+        bad=copy.deepcopy(end);bad['interrupted']=False
+        with self.assertRaises(ValidationError):validator.validate(bad)
+        bad=copy.deepcopy(end);del bad['cancelled']
+        with self.assertRaises(ValidationError):validator.validate(bad)
     def test_parallel_manifest(self):
         manifest={'schema_version':1,'execution':{'workers':8,'thread_budget':4,'memory_budget_mib':2048},
                   'defaults':{'threads':8},'jobs':[{'id':str(i),'input':str(self.input),'sequence_id':'pool-sequence',
@@ -81,7 +102,7 @@ class Protocol(unittest.TestCase):
         self.assertEqual(len(records),count)
         for record in records:validator.validate(record)
     def test_control_records(self):self.native_records(args.control_exe,14)
-    def test_isolated_records(self):self.native_records(args.isolated_exe,65)
+    def test_isolated_records(self):self.native_records(args.isolated_exe,75)
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory(prefix='thumbgen-protocol-')
         self.root=Path(self.temp.name);self.input=self.root/'source.png';png(self.input)
@@ -96,13 +117,14 @@ class Protocol(unittest.TestCase):
         if rows[-1]['type']=='summary':
             end=rows[-1];results=rows[:-1]
             self.assertEqual(end['total'],len(results))
-            for state,key in [('success','success'),('partial','partial'),('failed','failed'),('skipped','skipped')]:
+            for state,key in [('success','success'),('partial','partial'),('failed','failed'),('skipped','skipped'),('cancelled','cancelled')]:
                 self.assertEqual(end[key],sum(r['status']==state for r in results))
             outputs=[out for r in results for out in r['outputs']]
             self.assertEqual(end['output_counts']['success'],sum(o['status']=='success' for o in outputs))
             self.assertEqual(end['output_counts']['failed'],sum(o['status']=='failed' for o in outputs))
             self.assertEqual(end['output_counts']['skipped'],sum(o['status']=='skipped' for o in outputs))
-            self.assertEqual(end['output_counts']['total'],sum(end['output_counts'][k] for k in ['success','failed','skipped','not_attempted']))
+            self.assertEqual(end['output_counts']['cancelled'],sum(o['status']=='cancelled' for o in outputs))
+            self.assertEqual(end['output_counts']['total'],sum(end['output_counts'][k] for k in ['success','failed','skipped','cancelled','not_attempted']))
         return rows
     def test_schema_and_registry(self):
         Draft202012Validator.check_schema(schema)
@@ -130,7 +152,7 @@ class Protocol(unittest.TestCase):
               {'id':'bad','input':str(self.root/'missing.exr'),'outputs':[{'path':str(self.root/'bad.png')}]}]
         path=self.root/'jobs.json';path.write_text(json.dumps({'schema_version':1,'jobs':jobs}))
         rows=self.records('batch','--manifest',path,exit=3)
-        self.assertEqual(rows[-1]['output_counts'],{'total':4,'success':2,'failed':1,'skipped':0,'not_attempted':1})
+        self.assertEqual(rows[-1]['output_counts'],{'total':4,'success':2,'failed':1,'skipped':0,'cancelled':0,'not_attempted':1})
         self.assertEqual(existing.read_bytes(),b'keep')
     def test_schema_rejects_invalid_contracts(self):
         row=self.records('convert',self.input,'--output',self.root/'output.png')[0]

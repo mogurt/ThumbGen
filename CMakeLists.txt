@@ -179,6 +179,11 @@ if(BUILD_TESTING)
                 --control-exe $<TARGET_FILE:thumbgen_control_tests> --isolated-exe $<TARGET_FILE:thumbgen_isolated_tests>
                 --runtime-dir $<TARGET_FILE_DIR:OpenImageIO::OpenImageIO>)
             set_tests_properties(public_protocol PROPERTIES TIMEOUT 120 LABELS "protocol")
+            add_test(NAME public_interrupt COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_interrupt.py --exe $<TARGET_FILE:thumbgen>
+                --schema-dir ${CMAKE_CURRENT_SOURCE_DIR}/schemas
+                --runtime-dir $<TARGET_FILE_DIR:OpenImageIO::OpenImageIO>)
+            set_tests_properties(public_interrupt PROPERTIES TIMEOUT 90 LABELS "protocol;scheduler")
         endif()
     endif()
 endif()

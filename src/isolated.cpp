@@ -227,7 +227,7 @@ Json execution_configuration(const std::vector<Job>& jobs,const IsolationOptions
     return {{"workers",workers},{"requested_workers",options.workers},{"thread_budget",thread_budget},{"memory_budget_mib",options.memory_mib},{"fixed_reserve_mib",fixed_reserve},
         {"startup_timeout_ms",options.startup_timeout.count()},{"task_timeout_ms",options.task_timeout.count()}};
 }
-void run_isolated(const std::vector<Job>& jobs,const std::string& executable,const std::function<void(const Json&)>& emit,IsolationOptions options) {
+bool run_isolated(const std::vector<Job>& jobs,const std::string& executable,const std::function<void(const Json&)>& emit,IsolationOptions options) {
     for(const auto& job:jobs)job_from_wire(job_to_wire(job));
     const auto configuration=execution_configuration(jobs,options);
     const auto thread_budget=configuration["thread_budget"].get<unsigned>();
@@ -256,8 +256,11 @@ void run_isolated(const std::vector<Job>& jobs,const std::string& executable,con
     std::uint64_t worker_serial=0,temp_serial=0;Engine pins;std::map<std::string,Json> requests;
     std::map<std::string,size_t> remaining;for(const auto& job:jobs)if(!job.sequence_id.empty())++remaining[job.sequence_id];
     size_t next=0,completed=0;std::optional<size_t> preparing;
+    bool interrupted=false;
+    auto cancelled=[&] {if(!interrupted && options.cancelled && options.cancelled())interrupted=true;return interrupted;};
     while(completed<jobs.size()) {
         bool progress=false;
+        if(cancelled())for(auto& lane:lanes)if(lane.channel)lane.channel->process.stop();
         // Only one metadata preparation at a time: pins and FIFO order follow the manifest.
         if(!preparing && next<jobs.size())for(auto& lane:lanes)if(!lane.task) {
             auto job=jobs[next];job.options.threads=int(std::min(unsigned(job.options.threads),std::max(1u,thread_budget/workers)));
@@ -281,6 +284,7 @@ void run_isolated(const std::vector<Job>& jobs,const std::string& executable,con
                 owned.erase(item);
             };
             try {
+                if(cancelled())throw FileFailure("task_cancelled","controller accepted interruption");
                 if(!task.initialized) {
                     if(!job.sequence_id.empty()) {
                         Json request{{"part",job.options.part},{"part_name",job.options.part_name},{"channels",job.options.channels},{"strategy",job.options.selection_policy}};
@@ -349,11 +353,12 @@ void run_isolated(const std::vector<Job>& jobs,const std::string& executable,con
                     check(number(output["width"],job.outputs[index].width)>0 && number(output["height"],job.outputs[index].height)>0,"encoded output dimensions mismatch");
                     Json reply{{"output_index",index}};
                     try {
+                        if(cancelled())throw FileFailure("task_cancelled","controller accepted interruption");
                         if(!source || !source_matches(fs::u8path(job.input),*source))throw FileFailure("source_changed","source changed before controller commit",true);
                         bool committed=owned.at(index).file->commit(fs::u8path(job.outputs[index].path),fs::u8path(job.input),job.outputs[index].existing);
                         if(!committed)output={{"path",job.outputs[index].path},{"existing_policy","skip"},{"status","skipped"},{"reason","output_exists"}};
                         ledger[index]=output;reply["status"]=output["status"];
-                    }catch(const FileFailure& e){reply["error"]=error(e);ledger[index]=failed_output(job.outputs[index],reply["error"]);if(e.code=="source_changed")base["source_check"]["stable"]=false;}
+                    }catch(const FileFailure& e){if(e.code=="task_cancelled")throw;reply["error"]=error(e);ledger[index]=failed_output(job.outputs[index],reply["error"]);if(e.code=="source_changed")base["source_check"]["stable"]=false;}
                     cleanup(index);channel->send("committed",job.id,reply);
                 } else if(message.type=="result") {
                     check(!queued,"worker returned a result while awaiting admission");
@@ -381,17 +386,27 @@ void run_isolated(const std::vector<Job>& jobs,const std::string& executable,con
                 FileFailure failure("worker_protocol_error",e.what());
                 if(auto file=dynamic_cast<const FileFailure*>(&e))failure=*file;
                 if(channel) {
-                    failure=FileFailure(failure.code,stop_diagnostic(channel->process,failure.what()),failure.retryable);channel.reset();
+                    if(failure.code!="task_cancelled")failure=FileFailure(failure.code,stop_diagnostic(channel->process,failure.what()),failure.retryable);
+                    channel.reset();
                 }
                 if(queued){task.queue_ms=std::chrono::duration<double,std::milli>(Clock::now()-task.queued_at).count();budget->erase_pending(job.id);queued=false;}
-                task.finished=true;result=base;result["outputs"]=Json::array();size_t complete=0,skipped=0;
+                task.finished=true;result=base;result["outputs"]=Json::array();size_t complete=0,skipped=0,cancelled_outputs=0;
                 for(size_t i=0;i<job.outputs.size();++i) {
                     if(ledger[i]){result["outputs"].push_back(*ledger[i]);if((*ledger[i])["status"]=="success" || (*ledger[i])["status"]=="skipped")++complete;if((*ledger[i])["status"]=="skipped")++skipped;}
-                    else result["outputs"].push_back(failed_output(job.outputs[i],error(failure)));
+                    else {
+                        auto output=failed_output(job.outputs[i],error(failure));
+                        if(failure.code=="task_cancelled"){output["status"]="cancelled";++cancelled_outputs;}
+                        result["outputs"].push_back(std::move(output));
+                    }
                 }
                 result["ok"]=complete==job.outputs.size();result["status"]=result["ok"].get<bool>()?(skipped==complete?"skipped":"success"):(complete?"partial":"failed");
+                if(cancelled_outputs)result["status"]="cancelled";
                 result["timings_ms"]["total"]=std::chrono::duration<double,std::milli>(Clock::now()-started).count();
-                if(result["ok"].get<bool>())result["warnings"].push_back(clean(std::string("worker lost after all outputs committed: ")+failure.what()));else result["error"]=error(failure);
+                if(result["ok"].get<bool>())result["warnings"].push_back(clean(std::string(failure.code=="task_cancelled"?"interruption accepted after all outputs settled: ":"worker lost after all outputs committed: ")+failure.what()));
+                else {
+                    result["error"]=error(failure);
+                    if(failure.code=="task_cancelled" && !cancelled_outputs)for(const auto& output:result["outputs"])if(output["status"]=="failed"){result["error"]=output["error"];break;}
+                }
             }
             if(!task.finished)continue;
             while(!owned.empty())cleanup(owned.begin()->first);
@@ -409,10 +424,11 @@ void run_isolated(const std::vector<Job>& jobs,const std::string& executable,con
             }
             if(preparing && *preparing==task.index)preparing.reset();
             lane.task.reset();++completed;
+            progress=true;
 
         }
         // A waiting head never gets bypassed, including by smaller prepared tasks.
-        if(budget)for(;;) {
+        if(budget && !cancelled())for(;;) {
             auto admission=budget->take();
             if(admission.state==Admission::State::empty || admission.state==Admission::State::waiting)break;
             auto it=std::find_if(lanes.begin(),lanes.end(),[&](const Lane& lane){return lane.task && lane.task->job.id==admission.task.id;});
@@ -432,5 +448,6 @@ void run_isolated(const std::vector<Job>& jobs,const std::string& executable,con
         if(!progress)std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     // All result/commit handshakes are complete. Destruction owns shutdown and reaping.
+    return cancelled();
 }
 }

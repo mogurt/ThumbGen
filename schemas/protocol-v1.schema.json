@@ -119,7 +119,8 @@
             "worker_crashed",
             "worker_protocol_error",
             "worker_timeout",
-            "task_memory_exceeds_budget"
+            "task_memory_exceeds_budget",
+            "task_cancelled"
           ]
         },
         "message": {
@@ -256,6 +257,49 @@
             "reason",
             "existing_policy"
           ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "status": {
+              "const": "cancelled"
+            },
+            "error": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/error"
+                },
+                {
+                  "properties": {
+                    "code": {
+                      "const": "task_cancelled"
+                    }
+                  }
+                }
+              ]
+            },
+            "resize_ms": {
+              "type": "number",
+              "minimum": 0
+            },
+            "existing_policy": {
+              "enum": [
+                "error",
+                "skip",
+                "replace"
+              ]
+            }
+          },
+          "required": [
+            "path",
+            "status",
+            "error",
+            "existing_policy"
+          ],
+          "additionalProperties": false
         }
       ]
     },
@@ -425,7 +469,8 @@
             "success",
             "partial",
             "failed",
-            "skipped"
+            "skipped",
+            "cancelled"
           ]
         },
         "outputs": {
@@ -735,6 +780,57 @@
               }
             }
           }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "cancelled"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "error"
+            ],
+            "properties": {
+              "error": {
+                "properties": {
+                  "code": {
+                    "const": "task_cancelled"
+                  }
+                }
+              },
+              "outputs": {
+                "minItems": 1,
+                "contains": {
+                  "properties": {
+                    "status": {
+                      "const": "cancelled"
+                    }
+                  },
+                  "required": [
+                    "status"
+                  ]
+                }
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "outputs": {
+                "items": {
+                  "properties": {
+                    "status": {
+                      "not": {
+                        "const": "cancelled"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
         }
       ]
     },
@@ -785,6 +881,10 @@
             "skipped": {
               "type": "integer",
               "minimum": 0
+            },
+            "cancelled": {
+              "type": "integer",
+              "minimum": 0
             }
           },
           "required": [
@@ -806,6 +906,13 @@
         },
         "execution": {
           "$ref": "#/$defs/execution_settings"
+        },
+        "cancelled": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "interrupted": {
+          "type": "boolean"
         }
       },
       "required": [
@@ -819,7 +926,36 @@
         "elapsed_ms",
         "skipped"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "dependentRequired": {
+        "cancelled": [
+          "interrupted"
+        ],
+        "interrupted": [
+          "cancelled"
+        ]
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "interrupted"
+            ],
+            "properties": {
+              "interrupted": {
+                "const": false
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "cancelled": {
+                "const": 0
+              }
+            }
+          }
+        }
+      ]
     },
     "inspection": {
       "type": "object",
