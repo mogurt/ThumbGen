@@ -4,6 +4,7 @@ benchmarks/data/
 benchmarks/output/
 .deps/
 build/
+CMakeUserPresets.json
 benchmarks/results/*
 !benchmarks/results/*/
 benchmarks/results/**/*

@@ -1,0 +1,60 @@
+{
+  "version": 5,
+  "cmakeMinimumRequired": {"major": 3, "minor": 24, "patch": 0},
+  "configurePresets": [
+    {
+      "name": "base", "hidden": true,
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_PREFIX_PATH": "$env{THUMBGEN_SDK_PREFIX}",
+        "CMAKE_INSTALL_PREFIX": "${sourceDir}/build/install/${presetName}",
+        "THUMBGEN_VERIFY_DEPENDENCY_VERSIONS": true,
+        "THUMBGEN_BUILD_PROBES": false, "THUMBGEN_BUILD_VIPS": false,
+        "BUILD_TESTING": false
+      }
+    },
+    {
+      "name": "windows-release", "inherits": "base",
+      "displayName": "Windows x64 product (VS 2022)",
+      "generator": "Visual Studio 17 2022", "architecture": "x64",
+      "condition": {"type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows"}
+    },
+    {
+      "name": "windows-dev", "inherits": "windows-release",
+      "displayName": "Windows x64 with all tests",
+      "cacheVariables": {
+        "BUILD_TESTING": true, "THUMBGEN_TEST_PROTOCOL": true, "THUMBGEN_REQUIRE_FULL_TESTS": true,
+        "Python3_EXECUTABLE": "$env{THUMBGEN_TEST_PYTHON}"
+      }
+    },
+    {
+      "name": "linux-release", "inherits": "base",
+      "displayName": "Linux x64 product (Ninja)", "generator": "Ninja",
+      "condition": {"type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux"},
+      "cacheVariables": {"CMAKE_BUILD_TYPE": "Release"},
+      "environment": {"CFLAGS": "-march=x86-64 -mtune=generic", "CXXFLAGS": "-march=x86-64 -mtune=generic"}
+    },
+    {
+      "name": "linux-dev", "inherits": "linux-release",
+      "displayName": "Linux x64 with all tests",
+      "cacheVariables": {
+        "BUILD_TESTING": true, "THUMBGEN_TEST_PROTOCOL": true, "THUMBGEN_REQUIRE_FULL_TESTS": true,
+        "Python3_EXECUTABLE": "$env{THUMBGEN_TEST_PYTHON}"
+      }
+    }
+  ],
+  "buildPresets": [
+    {"name": "windows-release", "configurePreset": "windows-release", "configuration": "Release", "jobs": 4},
+    {"name": "windows-dev", "configurePreset": "windows-dev", "configuration": "Release", "jobs": 4},
+    {"name": "linux-release", "configurePreset": "linux-release", "jobs": 4},
+    {"name": "linux-dev", "configurePreset": "linux-dev", "jobs": 4}
+  ],
+  "testPresets": [
+    {"name": "windows-dev", "configurePreset": "windows-dev", "configuration": "Release",
+     "environment": {"OCIO": null},
+     "output": {"outputOnFailure": true}, "execution": {"jobs": 4, "noTestsAction": "error"}},
+    {"name": "linux-dev", "configurePreset": "linux-dev",
+     "environment": {"OCIO": null},
+     "output": {"outputOnFailure": true}, "execution": {"jobs": 4, "noTestsAction": "error"}}
+  ]
+}
