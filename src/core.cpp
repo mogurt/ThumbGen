@@ -8,6 +8,7 @@
 #include <chrono>
 #include <cctype>
 #include <cmath>
+#include <cstdlib>
 #include <filesystem>
 #include <limits>
 #include <map>
@@ -84,10 +85,13 @@ static std::vector<int> select(const OIIO::ImageSpec& s, const std::string& grou
 struct Engine::Impl {
     std::map<std::string,std::unique_ptr<OIIO::ColorConfig>> configs;
     OIIO::ColorConfig* config(const std::string& name) {
-        auto& value=configs[name];
-        if(!value)value=std::make_unique<OIIO::ColorConfig>(name);
+        auto found=configs.find(name);
+        if(found!=configs.end())return found->second.get();
+        auto value=std::make_unique<OIIO::ColorConfig>(name);
+        // Do not cache failed configs: geterror() clears the error, and a later
+        // job must not accidentally reuse OIIO's fallback as a valid config.
         if(value->has_error())throw Failure("colour_config_failed",value->geterror());
-        return value.get();
+        auto* result=value.get();configs.emplace(name,std::move(value));return result;
     }
 };
 Engine::Engine() : impl_(std::make_unique<Impl>()) {}
@@ -132,7 +136,11 @@ Json Engine::convert(const Job& job) {
         OIIO::attribute("threads",job.options.threads);
         OIIO::attribute("exr_threads",job.options.threads);
         auto tick=Clock::now();
-        auto in=OIIO::ImageInput::open(job.input);
+        OIIO::ImageSpec read_config;
+        // Ask unassociated formats to return straight RGB. In particular WebP
+        // and PNG otherwise associate their nonlinear RGB in different spaces.
+        read_config.attribute("oiio:UnassociatedAlpha",1);
+        auto in=OIIO::ImageInput::open(job.input,&read_config);
         if(!in)throw Failure("open_failed",OIIO::geterror());
         stage="selection";
         OIIO::ImageSpec spec;
@@ -163,6 +171,51 @@ Json Engine::convert(const Job& job) {
         r["selected_channels"]=Json::array();
         for(int c:channels)r["selected_channels"].push_back(spec.channelnames[c]);
         r["timings_ms"]["open_select"]=ms(tick);
+        stage="colour";
+        std::string config_name=job.options.ocio_config,config_basis="explicit";
+        if(config_name.empty()) {
+            const char* environment=std::getenv("OCIO");
+            config_name=environment?environment:"";config_basis="environment";
+            if(config_name.empty()){config_name="ocio://default";config_basis="builtin";}
+        }
+        r["colour"]={{"ocio_config",config_name},{"config_basis",config_basis},
+            {"input_requested",job.options.input_space},{"display",job.options.display},{"view",job.options.view}};
+        auto* config=impl_->config(config_name);
+        auto space=[&](const std::string& name) {
+            if(config->getColorSpaceIndex(name)<0)
+                throw Failure("colour_space_not_found","colour space or role not found: "+name);
+            return std::string(config->resolve(name));
+        };
+        const auto roles=config->getRoles();
+        if(std::find(roles.begin(),roles.end(),"scene_linear")==roles.end())
+            throw Failure("colour_working_space_missing","OCIO config must define the scene_linear role");
+        const std::string working_space=space("scene_linear");
+        if(!config->isColorSpaceLinear(working_space))
+            throw Failure("colour_working_space_invalid","scene_linear role must use a linear colour space");
+        std::string from=job.options.input_space,basis="explicit";
+        if(from=="auto") {
+            from=spec.get_string_attribute("oiio:ColorSpace");basis="metadata";
+            if(from.empty()) {
+                auto ext=fs::u8path(job.input).extension().u8string();
+                std::transform(ext.begin(),ext.end(),ext.begin(),[](unsigned char c){return char(std::tolower(c));});
+                from=ext==".exr"||ext==".hdr"?"linear":"sRGB";basis="format_assumption";
+                r["warnings"].push_back("input colour space assumed from format; override with input_space");
+            }
+        }
+        const std::string input_space=space(from);
+        std::string output_space;
+        if(job.options.display.empty())output_space=space("sRGB");
+        else {
+            const auto displays=config->getDisplayNames();
+            if(std::find(displays.begin(),displays.end(),job.options.display)==displays.end())
+                throw Failure("colour_display_not_found","display not found: "+job.options.display);
+            const auto views=config->getViewNames(job.options.display);
+            if(std::find(views.begin(),views.end(),job.options.view)==views.end())
+                throw Failure("colour_view_not_found","view not found: "+job.options.view);
+        }
+        r["colour"]={{"input_space",input_space},{"input_requested",from},{"basis",basis},
+            {"working_space",working_space},{"output_space",output_space},{"ocio_config",config->configname()},
+            {"config_basis",config_basis},{"display",job.options.display},{"view",job.options.view}};
         auto bounds=std::minmax_element(channels.begin(),channels.end());
         int first=*bounds.first,end=*bounds.second+1;
         const size_t limit=job.options.max_decode_mib*1024ULL*1024ULL/sizeof(float);
@@ -189,10 +242,6 @@ Json Engine::convert(const Job& job) {
         if(spec.get_int_attribute("oiio:UnassociatedAlpha",0) && order.size()==4)
             check(iba::premult(working,working),working,"alpha_failed");
         working.specmod().attribute("oiio:UnassociatedAlpha",0);
-        if(spec.get_int_attribute("Orientation",1)!=1) {
-            OIIO::ImageBuf oriented;
-            check(iba::reorient(oriented,working),oriented,"orientation_failed");working=std::move(oriented);
-        }
         // resize() clamps outside the data window. Pad a cropped display window
         // with zero pixels first, rather than stretching edge pixels into it.
         const auto& window=working.spec();
@@ -211,23 +260,18 @@ Json Engine::convert(const Job& job) {
             check(iba::crop(padded,working,OIIO::ROI(window.full_x,int(xmax),window.full_y,int(ymax),0,1,0,working.nchannels())),padded,"window_failed");
             working=std::move(padded);
         }
-        stage="colour";tick=Clock::now();
-        std::string from=job.options.input_space;
-        std::string basis="explicit";
-        if(from=="auto") {
-            from=spec.get_string_attribute("oiio:ColorSpace");basis="metadata";
-            if(from.empty()) {
-                auto ext=fs::u8path(job.input).extension().u8string();
-                std::transform(ext.begin(),ext.end(),ext.begin(),[](unsigned char c){return char(std::tolower(c));});
-                from=ext==".exr"||ext==".hdr"?"linear":"sRGB";basis="format_assumption";
-                r["warnings"].push_back("input colour space assumed from format; override with input_space");
-            }
+        // Orient a complete, zero-origin display canvas. Some OIIO rotations
+        // position cropped data incorrectly when the full window has an origin.
+        working.set_origin(0,0,0);
+        working.set_roi_full(working.roi());
+        if(spec.get_int_attribute("Orientation",1)!=1) {
+            OIIO::ImageBuf oriented;
+            check(iba::reorient(oriented,working),oriented,"orientation_failed");working=std::move(oriented);
         }
-        r["colour"]={{"input_space",from},{"basis",basis},{"ocio_config",job.options.ocio_config},
-                     {"display",job.options.display},{"view",job.options.view}};
+        stage="colour";tick=Clock::now();
         if(spec.find_attribute("ICCProfile"))r["warnings"].push_back("embedded ICC profile is not independently transformed; verify input_space against its profile");
-        auto* config=impl_->config(job.options.ocio_config);
-        if(from!="linear")check(iba::colorconvert(working,working,from,"linear",true,"","",config),working,"colour_failed");
+        if(input_space!=working_space)
+            check(iba::colorconvert(working,working,input_space,working_space,true,"","",config),working,"colour_failed");
         r["timings_ms"]["working_colour"]=ms(tick);
         const std::string filter=job.options.preset=="fast"?"box":job.options.preset=="quality"?"lanczos3":"triangle";
         r["preset"]=job.options.preset;r["filter"]=filter;
@@ -254,9 +298,9 @@ Json Engine::convert(const Job& job) {
                     check(iba::over(composite,preview,background),composite,"alpha_failed");preview=std::move(composite);
                 }
                 if(job.options.display.empty())
-                    check(iba::colorconvert(preview,preview,"linear","sRGB",true,"","",config),preview,"colour_failed");
+                    check(iba::colorconvert(preview,preview,working_space,output_space,true,"","",config),preview,"colour_failed");
                 else
-                    check(iba::ociodisplay(preview,preview,job.options.display,job.options.view,"linear","",true,false,"","",config),preview,"colour_failed");
+                    check(iba::ociodisplay(preview,preview,job.options.display,job.options.view,working_space,"",true,false,"","",config),preview,"colour_failed");
                 if(job.options.background=="transparent" && preview.nchannels()==4) {
                     // Supply straight display RGB explicitly. PNG and WebP plugins
                     // otherwise deassociate in different spaces (WebP uses gamma 2.2).

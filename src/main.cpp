@@ -170,7 +170,8 @@ static std::vector<Job> manifest(const std::string& filename) {
         job.input=path_string(path.parent_path(),object.at("input").get<std::string>());
         auto override=object.value("options",Json::object());options(override,true);
         auto effective=defaults;effective.update(override);job.options=options(effective);
-        if(!job.options.ocio_config.empty())job.options.ocio_config=path_string(path.parent_path(),job.options.ocio_config);
+        if(!job.options.ocio_config.empty() && job.options.ocio_config.rfind("ocio://",0)!=0)
+            job.options.ocio_config=path_string(path.parent_path(),job.options.ocio_config);
         if(!object.at("outputs").is_array())throw std::invalid_argument("outputs must be an array");
         for(const auto& value:object["outputs"])job.outputs.push_back(output(value,effective,path.parent_path(),job.options));
         jobs.push_back(std::move(job));

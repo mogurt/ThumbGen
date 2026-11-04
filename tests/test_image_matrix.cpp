@@ -5,6 +5,7 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -195,9 +196,11 @@ static Json geometry_case(const fs::path& root, const std::string& name) {
     ImageSpec spec(2, 1, 3, TypeDesc::FLOAT);
     int width = 7, height = 5, bound = 100;
     const bool window = name.rfind("window_", 0) == 0;
-    if (name == "window_negative") {
+    const bool rotated = name == "window_negative_rotated";
+    if (name == "window_negative" || rotated) {
         spec.x = -2; spec.y = -2; spec.full_x = -4; spec.full_y = -3;
         spec.full_width = width; spec.full_height = height;
+        if (rotated) { spec.attribute("Orientation", 6); width = 5; height = 7; }
     } else if (name == "window_outside") {
         spec.width = 4; spec.height = 2; spec.x = -1; spec.y = 1;
         spec.full_x = 0; spec.full_y = 0; spec.full_width = width = 3; spec.full_height = height = 3;
@@ -210,6 +213,7 @@ static Json geometry_case(const fs::path& root, const std::string& name) {
     write(input, spec, std::vector<float>(size_t(spec.width) * spec.height * 3, 1.0f));
     OIIO::ImageBuf source(input.u8string()); require(source.init_spec(input.u8string(), 0, 0), source.geterror());
     const auto& actual = source.spec();
+    if (rotated) require(actual.get_int_attribute("Orientation", 1) == 6, "fixture lost window orientation");
     require(actual.x == spec.x && actual.y == spec.y && actual.full_x == spec.full_x && actual.full_y == spec.full_y
         && actual.full_width == spec.full_width && actual.full_height == spec.full_height, "fixture window changed");
     thumbgen::Job job; job.id = name; job.input = input.u8string(); job.options.input_space = "linear";
@@ -218,12 +222,155 @@ static Json geometry_case(const fs::path& root, const std::string& name) {
     OIIO::ImageBuf output(job.outputs[0].path); require(output.read(), output.geterror());
     require(output.spec().width == width && output.spec().height == height, "geometry dimensions");
     for (int y = 0; y < height; ++y) for (int x = 0; x < width; ++x) {
-        const int sx = x + spec.full_x, sy = y + spec.full_y;
+        const int sx = (rotated ? y : x) + spec.full_x;
+        const int sy = (rotated ? spec.full_height - 1 - x : y) + spec.full_y;
         const float expected = !window || (sx >= spec.x && sx < spec.x + spec.width && sy >= spec.y && sy < spec.y + spec.height) ? 1.0f : 0.0f;
         float p[3]; output.getpixel(x, y, p, 3);
-        for (float c : p) require(std::abs(c - expected) < 0.01f, "geometry pixel placement");
+        for (float c : p) require(std::abs(c - expected) < 0.01f, "geometry pixel placement at " + std::to_string(x) + "," + std::to_string(y) + ": " + std::to_string(c) + " expected " + std::to_string(expected));
     }
     return {{"width", width}, {"height", height}};
+}
+
+struct OcioEnvironment {
+    std::string previous;
+    bool present;
+    OcioEnvironment() : present(std::getenv("OCIO") != nullptr) {
+        if (present) previous = std::getenv("OCIO");
+        set("");
+    }
+    static void set(const std::string& value) {
+#ifdef _WIN32
+        _putenv_s("OCIO", value.c_str());
+#else
+        if (value.empty()) unsetenv("OCIO"); else setenv("OCIO", value.c_str(), 1);
+#endif
+    }
+    ~OcioEnvironment() { set(present ? previous : ""); }
+};
+static Json colour_case(const fs::path& root, const std::string& name) {
+    OcioEnvironment environment;
+    const auto config_path = root / "test.ocio";
+    {
+        std::ofstream file(config_path);
+        file << "ocio_profile_version: 2\nsearch_path: ''\nstrictparsing: true\nroles:\n  default: workingRGB\n";
+        if (name != "colour_missing_role") file << "  scene_linear: " << (name == "colour_nonlinear_role" ? "encodedInput" : "workingRGB") << "\n";
+        file << R"(file_rules:
+  - !<Rule> {name: Default, colorspace: workingRGB}
+displays:
+  testDisplay:
+    - !<View> {name: testView, colorspace: sRGB}
+colorspaces:
+  - !<ColorSpace>
+    name: workingRGB
+    bitdepth: 32f
+    isdata: false
+    allocation: uniform
+  - !<ColorSpace>
+    name: encodedInput
+    bitdepth: 32f
+    isdata: false
+    to_scene_reference: !<ExponentTransform> {value: [2, 2, 2, 1]}
+  - !<ColorSpace>
+    name: sRGB
+    bitdepth: 32f
+    isdata: false
+    from_scene_reference: !<ExponentTransform> {value: [0.5, 0.5, 0.5, 1]}
+)";
+    }
+    const bool metadata = name == "colour_metadata" || name == "colour_override";
+    ImageSpec spec(2, 2, 3, metadata ? TypeDesc::UINT16 : TypeDesc::FLOAT);
+    spec.attribute("oiio:ColorSpace", "sRGB");
+    const auto input = root / (metadata ? "input.png" : "input.exr");
+    write(input, spec, std::vector<float>(12, 0.5f));
+    thumbgen::Job job; job.id = name; job.input = input.u8string();
+    job.options.ocio_config = config_path.u8string(); job.options.input_space = "encodedInput";
+    job.outputs.push_back({(root / "preview.png").u8string(), "png", 2, 2, 90});
+    if (name == "colour_environment") {
+        environment.set(config_path.u8string()); job.options.ocio_config.clear();
+    } else if (name == "colour_invalid_environment") {
+        environment.set((root / "missing-env.ocio").u8string()); job.options.ocio_config.clear();
+    } else if (name == "colour_explicit_priority") environment.set((root / "missing-env.ocio").u8string());
+    else if (name == "colour_metadata") job.options.input_space = "auto";
+    else if (name == "colour_override") job.options.input_space = "workingRGB";
+    else if (name == "colour_display" || name == "colour_missing_display" || name == "colour_missing_view") {
+        job.options.display = name == "colour_missing_display" ? "missing" : "testDisplay";
+        job.options.view = name == "colour_missing_view" ? "missing" : "testView";
+    } else if (name == "colour_missing_space") job.options.input_space = "missing";
+    else if (name == "colour_invalid_repeat") job.options.ocio_config = (root / "missing.ocio").u8string();
+    else if (name == "colour_builtin") { job.options.ocio_config.clear(); job.options.input_space = "linear"; }
+    std::string error;
+    if (name == "colour_missing_role") error = "colour_working_space_missing";
+    if (name == "colour_nonlinear_role") error = "colour_working_space_invalid";
+    if (name == "colour_missing_space") error = "colour_space_not_found";
+    if (name == "colour_missing_display") error = "colour_display_not_found";
+    if (name == "colour_missing_view") error = "colour_view_not_found";
+    if (name == "colour_invalid_repeat" || name == "colour_invalid_environment") error = "colour_config_failed";
+    thumbgen::Engine engine;
+    auto result = engine.convert(job);
+    if (!error.empty()) {
+        for (int repeat = 0; repeat < 2; ++repeat) {
+            require(!result["ok"].get<bool>() && result["error"]["code"] == error, result.dump());
+            require(!fs::exists(root / "preview.png"), "invalid colour request wrote output");
+            result = engine.convert(job);
+        }
+        return {{"expected_error", error}};
+    }
+    require(result["ok"].get<bool>(), result.dump());
+    const auto& colour = result["colour"];
+    require(colour["config_basis"] == (name == "colour_environment" ? "environment" : name == "colour_builtin" ? "builtin" : "explicit"), result.dump());
+    if (name != "colour_builtin") require(colour["working_space"] == "workingRGB", result.dump());
+    if (name == "colour_metadata") require(colour["basis"] == "metadata", result.dump());
+    OIIO::ImageBuf output(job.outputs[0].path); require(output.read(), output.geterror());
+    float p[3]; output.getpixel(0, 0, p, 3);
+    const float expected = name == "colour_builtin" ? srgb(0.5f) : name == "colour_override" ? std::sqrt(0.5f) : 0.5f;
+    for (float c : p) require(std::abs(c - expected) < 0.012f, "custom colour transform value");
+    return colour;
+}
+static float linear(float encoded) {
+    return encoded <= 0.04045f ? encoded / 12.92f : std::pow((encoded + 0.055f) / 1.055f, 2.4f);
+}
+static Json alpha_case(const fs::path& root, const std::string& name) {
+    OcioEnvironment environment;
+    const bool edge = name == "alpha_edge";
+    const bool zero = name == "alpha_zero";
+    const bool associated = name == "alpha_exr_associated";
+    const std::string extension = associated ? "exr" : name == "alpha_webp" ? "webp" : name == "alpha_tiff" ? "tif" : "png";
+    const auto input = root / ("input." + extension);
+    ImageSpec spec(2, 2, 4, associated ? TypeDesc::FLOAT : TypeDesc::UINT16); spec.alpha_channel = 3;
+    spec.attribute("oiio:UnassociatedAlpha", associated ? 0 : 1);
+    spec.attribute("CompressionQuality", 100);
+    if (extension == "webp") spec.attribute("compression", "lossless");
+    const float rgb[3] = {0.2f, 0.5f, 0.7f};
+    std::vector<float> pixels(16);
+    for (int i = 0; i < 4; ++i) {
+        float a = zero ? 0.0f : edge ? (i % 2 == 0 ? 1.0f : 0.0f) : 0.5f;
+        for (int c = 0; c < 3; ++c) pixels[i*4+c] = edge ? (c == (a == 1 ? 0 : 2) ? 1.0f : 0.0f) : associated ? linear(rgb[c]) * a : rgb[c];
+        pixels[i*4+3] = a;
+    }
+    write(input, spec, pixels);
+    const auto original = bytes(input);
+    thumbgen::Job job; job.id = name; job.input = input.u8string(); job.options.input_space = associated ? "linear" : "sRGB";
+    for (const char* background : {"black", "white", "transparent"}) {
+        job.options.background = background;
+        job.outputs = {{(root / (std::string(background) + ".png")).u8string(), "png", edge ? 1 : 2, edge ? 1 : 2, 90}};
+        thumbgen::Engine engine; auto result = engine.convert(job); require(result["ok"].get<bool>(), result.dump());
+        ImageSpec config; config.attribute("oiio:UnassociatedAlpha", 1);
+        auto reader = OIIO::ImageInput::open(job.outputs[0].path, &config); require(bool(reader), OIIO::geterror());
+        const int channel_count = reader->spec().nchannels;
+        std::vector<float> p(size_t(reader->spec().width) * reader->spec().height * channel_count);
+        require(reader->read_image(0, 0, 0, channel_count, TypeDesc::FLOAT, p.data()), reader->geterror());
+        reader->close();
+        const bool transparent = std::string(background) == "transparent";
+        for (int c = 0; c < 3; ++c) {
+            float value = edge ? (c == 0 ? 1.0f : 0.0f) : linear(rgb[c]);
+            const float a = zero ? 0.0f : 0.5f;
+            const float expected = srgb(transparent ? (zero ? 0 : value) : value * a + (std::string(background) == "white" ? 1-a : 0));
+            require(std::abs(p[c] - expected) < 0.018f, name + " " + background + " RGB mismatch " + std::to_string(p[c]) + " expected " + std::to_string(expected));
+        }
+        if (transparent) require(channel_count == 4 && std::abs(p[3] - (zero ? 0.0f : 0.5f)) < 0.01f, "alpha not preserved");
+    }
+    require(bytes(input) == original, "alpha source modified");
+    return {{"backgrounds", {"black", "white", "transparent"}}, {"source_unchanged", true}};
 }
 
 int main(int argc, char** argv) {
@@ -236,6 +383,8 @@ int main(int argc, char** argv) {
     try {
         fs::create_directory(root);
         if (name.rfind("orientation_", 0) == 0) record["checks"] = orientation_case(root, std::stoi(name.substr(12)));
+        else if (name.rfind("colour_", 0) == 0) record["checks"] = colour_case(root, name);
+        else if (name.rfind("alpha_", 0) == 0) record["checks"] = alpha_case(root, name);
         else if (name.rfind("output_", 0) == 0) record["checks"] = output_case(root, name.substr(7));
         else if (name.rfind("window_", 0) == 0 || name.rfind("geometry_", 0) == 0) record["checks"] = geometry_case(root, name);
         else record["checks"] = format_case(root, name);

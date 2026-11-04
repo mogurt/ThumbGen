@@ -67,7 +67,11 @@ if(BUILD_TESTING)
         orientation_1 orientation_2 orientation_3 orientation_4
         orientation_5 orientation_6 orientation_7 orientation_8
         output_jpeg output_png output_webp
-        window_negative window_outside geometry_portrait geometry_ultrawide)
+        window_negative window_outside window_negative_rotated geometry_portrait geometry_ultrawide
+        colour_builtin colour_custom colour_environment colour_explicit_priority colour_metadata colour_override
+        colour_display colour_missing_role colour_missing_space colour_missing_display colour_missing_view colour_invalid_repeat
+        colour_nonlinear_role colour_invalid_environment
+        alpha_exr_associated alpha_png alpha_webp alpha_tiff alpha_edge alpha_zero)
     foreach(image_case IN LISTS THUMBGEN_IMAGE_CASES)
         add_test(NAME image_${image_case} COMMAND thumbgen_image_matrix ${image_case})
         set_tests_properties(image_${image_case} PROPERTIES LABELS "image-matrix" TIMEOUT 30

@@ -86,6 +86,15 @@ class CLI(unittest.TestCase):
         r=self.run_cli("capabilities")[0]
         self.assertEqual(r["defaults"],{"format":"jpeg","quality":90,"size":[1024,1024],"preset":"balanced","background":"black"})
 
+    def test_builtin_config_uri_in_manifest(self):
+        target=self.base/"uri.png"
+        manifest=self.batch([{"id":"uri","input":str(self.source),"outputs":[{"path":str(target)}]}],
+                            {"ocio_config":"ocio://default"})
+        record=self.run_cli("batch","--manifest",manifest)[0]
+        self.assertEqual(record["colour"]["config_basis"],"explicit")
+        self.assertEqual(record["colour"]["ocio_config"],"ocio://default")
+        self.assertTrue(target.exists())
+
     def test_default_unicode_and_no_upscale(self):
         before=hashlib.sha256(self.source.read_bytes()).digest()
         r=self.run_cli("convert",self.source,"--output-dir",self.base/"输出")
