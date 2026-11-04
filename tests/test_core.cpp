@@ -3,6 +3,7 @@
 #include <OpenImageIO/imageio.h>
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <fstream>
 #include <filesystem>
 #include <iostream>
@@ -82,6 +83,82 @@ static void output_compression(const fs::path& root,thumbgen::Engine& engine) {
         }
     }
 }
+static void quantization_roundtrip(const fs::path& root,thumbgen::Engine& engine) {
+    // Two distinct named spaces with no transform make a linear identity
+    // config: test quantization without a project-specific colour transform.
+    auto config=root/"quantization.ocio";
+    std::ofstream(config)<<R"(ocio_profile_version: 2
+search_path: ''
+strictparsing: true
+roles:
+  default: workingRGB
+  scene_linear: workingRGB
+file_rules:
+  - !<Rule> {name: Default, colorspace: workingRGB}
+displays:
+  test:
+    - !<View> {name: test, colorspace: sRGB}
+colorspaces:
+  - !<ColorSpace> {name: workingRGB, bitdepth: 32f, isdata: false, allocation: uniform}
+  - !<ColorSpace> {name: sRGB, bitdepth: 32f, isdata: false, allocation: uniform}
+)";
+    for(int channels:{3,4}) {
+        OIIO::ImageSpec spec(425,239,channels,OIIO::TypeDesc::FLOAT);
+        spec.attribute("DateTime","2000:01:01 00:00:00");
+        std::vector<float> pixels(size_t(425)*239*channels);
+        std::vector<unsigned char> expected(pixels.size());
+        for(size_t i=0;i<pixels.size();++i) {
+            pixels[i]=channels==4 && i%4==3?1.0f:(float(i%255)+0.5f)/255.0f;
+            const float scaled=pixels[i]*255.0f;
+            expected[i]=static_cast<unsigned char>(std::floor(double(scaled)+0.5));
+        }
+        auto input=root/("quantization-"+std::to_string(channels)+".exr");
+        auto out=OIIO::ImageOutput::create(input.u8string());require(bool(out),OIIO::geterror());
+        require(out->open(input.u8string(),spec),out->geterror());
+        require(out->write_image(OIIO::TypeDesc::FLOAT,pixels.data()),"quantization fixture write");
+        require(out->close(),"quantization fixture close");
+        std::vector<std::vector<unsigned char>> baseline;
+        for(int threads:{1,2,4,8}) {
+            thumbgen::Job job;job.input=input.u8string();job.options.input_space="workingRGB";
+            job.options.preset="fast"; // Box at 1:1 isolates quantization from triangle arithmetic.
+            job.options.ocio_config=config.u8string();job.options.threads=threads;
+            for(const char* format:{"jpeg","png","webp"}) {
+                auto name="quantization-"+std::to_string(channels)+"-"+std::to_string(threads)+"."+format;
+                job.outputs.push_back({(root/name).u8string(),format,425,239,90});
+            }
+            const auto all_outputs=job.outputs;
+            if(channels==4) {
+                // JPEG requires an opaque background; the other encoders use
+                // transparent mode in a separate job with the same source.
+                auto jpeg=job; jpeg.outputs.resize(1);
+                auto result=engine.convert(jpeg);require(result["ok"].get<bool>(),result.dump());
+                job.outputs.erase(job.outputs.begin());job.options.background="transparent";
+            }
+            auto result=engine.convert(job);require(result["ok"].get<bool>(),result.dump());
+            for(size_t i=0;i<all_outputs.size();++i) {
+                auto data=bytes(fs::u8path(all_outputs[i].path));
+                if(threads==1)baseline.push_back(data);
+                else require(data==baseline[i],"encoded output changed with thread count");
+                if(all_outputs[i].format=="png") {
+                    auto reader=OIIO::ImageInput::open(all_outputs[i].path);require(bool(reader),OIIO::geterror());
+                    require(reader->spec().format==OIIO::TypeDesc::UINT8,"PNG is not 8-bit");
+                    require(reader->spec().width==425 && reader->spec().height==239 && reader->spec().nchannels==channels,"PNG quantization shape mismatch");
+                    std::vector<unsigned char> actual(expected.size());
+                    require(reader->read_image(0,0,0,channels,OIIO::TypeDesc::UINT8,actual.data()),reader->geterror());
+                    require(reader->close(),"quantization PNG close");
+                    if(actual!=expected) {
+                        auto mismatch=std::mismatch(actual.begin(),actual.end(),expected.begin());
+                        auto index=static_cast<size_t>(mismatch.first-actual.begin());
+                        throw std::runtime_error("PNG quantization mismatch: channels="+std::to_string(channels)+
+                            " threads="+std::to_string(threads)+" index="+std::to_string(index)+
+                            " input="+std::to_string(pixels[index])+" expected="+std::to_string(expected[index])+
+                            " actual="+std::to_string(actual[index]));
+                    }
+                }
+            }
+        }
+    }
+}
 int main() {
     auto root=fs::temp_directory_path()/fs::path("thumbgen-core-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     fs::create_directory(root);
@@ -89,6 +166,7 @@ int main() {
     try {
         thumbgen::Engine engine;
         output_compression(root,engine);
+        quantization_roundtrip(root,engine);
         OIIO::ImageSpec cropped(1,1,3,OIIO::TypeDesc::FLOAT);
         cropped.x=2;cropped.y=1;cropped.full_x=0;cropped.full_y=0;cropped.full_width=4;cropped.full_height=3;
         write_exr(root/"crop.exr",cropped);

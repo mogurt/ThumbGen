@@ -2,11 +2,13 @@
 #include "selection.h"
 #include "build_info.h"
 #include "files.h"
+#include "quantize.h"
 #include <OpenImageIO/color.h>
 #include <OpenImageIO/imagebuf.h>
 #include <OpenImageIO/imagebufalgo.h>
 #include <OpenImageIO/imageio.h>
 #include <OpenImageIO/filesystem.h>
+#include <OpenImageIO/parallel.h>
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -33,7 +35,21 @@ using Clock = std::chrono::steady_clock;
 using Failure=detail::FileFailure;
 // OIIO's IOFile does not propagate fflush/fclose errors. Keep ownership of
 // the stream, and latch short writes even when a codec ignores their result.
-static void write_preview(OIIO::ImageBuf& image,const fs::path& path) {
+static void write_preview(const OIIO::ImageBuf& source,const fs::path& path,int threads) {
+    const auto& original=source.spec();
+    if(original.format!=OIIO::TypeDesc::FLOAT || original.depth!=1 || original.deep ||
+       (original.nchannels!=3 && original.nchannels!=4) || !source.localpixels() || !source.contiguous())
+        throw Failure("encode_failed","expected a contiguous FLOAT RGB/RGBA preview");
+    auto spec=original;spec.set_format(OIIO::TypeDesc::UINT8);
+    spec.attribute("oiio:BitsPerSample",8);
+    OIIO::ImageBuf image(spec);
+    if(!image.localpixels() || !image.contiguous())throw Failure("encode_failed","cannot allocate UINT8 preview");
+    const auto* input=static_cast<const float*>(source.localpixels());
+    auto* output=static_cast<std::uint8_t*>(image.localpixels());
+    const auto count=original.image_bytes()/sizeof(float);
+    OIIO::parallel_for_chunked(0,static_cast<int64_t>(count),0,[&](int64_t begin,int64_t end) {
+        detail::quantize_u8(input+begin,output+begin,static_cast<size_t>(end-begin));
+    },OIIO::paropt(threads,OIIO::paropt::SplitDir::Y,65536));
     struct CheckedFile final : OIIO::Filesystem::IOFile {
         int failure=0;
         explicit CheckedFile(FILE* file):IOFile(file,Write) {}
@@ -158,6 +174,7 @@ Json Engine::capabilities() {
             {"compiler",THUMBGEN_COMPILER},{"platform",THUMBGEN_PLATFORM},{"architecture",THUMBGEN_ARCH}}},
         {"cpu",{{"runtime_simd",OIIO::get_string_attribute("hw:simd")},{"oiio_simd",OIIO::get_string_attribute("build:simd")}}},
         {"selection_policy","v2"},
+        {"quantization","unorm8-half-up-v1"},
         {"libraries",OIIO::get_string_attribute("library_list")},
         {"output_formats",output_formats},{"presets",{"fast","balanced","quality"}},
         {"defaults",{{"format","jpeg"},{"quality",90},{"size",{1024,1024}},
@@ -514,7 +531,7 @@ Json Engine::convert(const Job& job) {
                 } else {
                     temp=std::make_unique<detail::TemporaryOutput>(dest,out.format);temporary=temp->path();
                 }
-                write_preview(preview,temporary);
+                write_preview(preview,temporary,job.options.threads);
                 if(impl_->observer)impl_->observer("encoded",job);
                 verify_source();
                 bool committed;

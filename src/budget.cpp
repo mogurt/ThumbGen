@@ -30,6 +30,8 @@ MemoryEstimate estimate_memory(const ImageFootprint& s) {
     // Selected colour, padding/orientation and colour conversion temporaries.
     e.working=multiply(multiply(std::max(data,canvas),s.selected_channels),3*sizeof(float));
     // Resize/composite/unpremult/RGB conversion can have overlapping buffers.
+    // This allowance also covers the final UINT8 RGB(A) buffer (<=4 bytes/pixel)
+    // while its FLOAT source remains alive; it replaces codec float conversion.
     e.output=multiply(preview,5*4*sizeof(float));
     // Includes JPEG's compressed memory destination; not a codec allocation bound.
     e.codec=add(multiply(preview,8),mib);

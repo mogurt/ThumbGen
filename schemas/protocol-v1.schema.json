@@ -1129,6 +1129,9 @@
         "oiio_version": {
           "type": "string"
         },
+        "quantization": {
+          "const": "unorm8-half-up-v1"
+        },
         "input_plugins": {
           "type": "string"
         },

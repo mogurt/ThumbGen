@@ -144,6 +144,7 @@ class Protocol(unittest.TestCase):
         self.records('inspect',self.root/'missing.exr',exit=4)
         version=self.records('--version')[0]
         caps=self.records('capabilities')[0]
+        self.assertEqual(caps['quantization'],'unorm8-half-up-v1')
         self.assertEqual(version['build'],caps['build'])
         self.assertTrue(caps['build']['revision']);self.assertTrue(caps['build']['compiler'])
         self.assertIn('jpeg',caps['input_plugins']);self.assertIn('png',caps['output_formats'])
