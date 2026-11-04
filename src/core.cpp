@@ -6,6 +6,7 @@
 #include "data_image.h"
 #include "selected_input.h"
 #include "cryptomatte.h"
+#include "sampled_id.h"
 #include <OpenImageIO/color.h>
 #include <OpenImageIO/imagebuf.h>
 #include <OpenImageIO/imagebufalgo.h>
@@ -390,6 +391,19 @@ Json Engine::convert(const Job& job) {
         }
         auto input_plan=detail::channel_plan(spec,crypto?crypto_layout->layers.front().channels:channels,data);
         if(crypto)input_plan.pixel_bytes=detail::crypto_source_pixel_bytes(spec,*crypto_layout);
+        std::optional<detail::SampledIdPlan> sampled;
+        if(mapping.mode==detail::DataMode::id) {
+            int dw=spec.full_width,dh=spec.full_height;auto orientation=spec.get_int_attribute("Orientation",1);
+            if(orientation>=5 && orientation<=8)std::swap(dw,dh);
+            std::vector<std::pair<int,int>> sizes;
+            for(const auto& out:job.outputs) {
+                double scale=std::min({double(out.width)/dw,double(out.height)/dh,1.0});
+                sizes.emplace_back(std::max(1,int(std::lround(dw*scale))),std::max(1,int(std::lround(dh*scale))));
+            }
+            sampled=detail::sampled_id_plan(spec,in->format_name(),channels,mapping,sizes);
+            if(sampled)r["source_read"]={{"mode","sampled_blocks"},{"grid",{sampled->x.size(),sampled->y.size()}},
+                {"block",{sampled->block_width,sampled->block_height}},{"calls",sampled->x_blocks.size()*sampled->y_blocks.size()},{"buffer_bytes",sampled->peak_bytes}};
+        }
         if(impl_->control.planned) {
             auto span=std::minmax_element(channels.begin(),channels.end());
             int display_width=spec.full_width,display_height=spec.full_height;
@@ -408,6 +422,7 @@ Json Engine::convert(const Job& job) {
                     {"display_width",display_width},{"display_height",display_height},
                     {"channel_span",*span.second-*span.first+1},{"selected_channels",data?4:channels.size()},
                     {"source_sample_bytes",input_plan.sample_bytes},{"source_pixel_bytes",input_plan.pixel_bytes},
+                    {"source_buffer_bytes",sampled?sampled->peak_bytes:0},
                     {"native_categorical",categorical},
                     {"output_width",largest_w},{"output_height",largest_h},{"threads",job.options.threads}}},
                 {"sequence_pin",sequence_lock(job.sequence_id)}};
@@ -476,7 +491,8 @@ Json Engine::convert(const Job& job) {
         if(data) {
             stage="visualization";
             try {
-                data_image=crypto?detail::read_crypto_image(*in,spec,part,*crypto_layout,mapping.invalid,job.options.max_decode_mib*1024ULL*1024ULL,job.options.threads):
+                data_image=sampled?detail::read_sampled_id(*in,spec,part,*sampled,mapping,job.options.max_decode_mib*1024ULL*1024ULL):
+                    crypto?detail::read_crypto_image(*in,spec,part,*crypto_layout,mapping.invalid,job.options.max_decode_mib*1024ULL*1024ULL,job.options.threads):
                     detail::read_data_image(*in,spec,part,channels,mapping,job.options.max_decode_mib*1024ULL*1024ULL,job.options.threads);
                 working=std::move(data_image.image);order={0,1,2,3};
                 r["decoded_mib"]=double(data_image.decoded_bytes)/1048576;

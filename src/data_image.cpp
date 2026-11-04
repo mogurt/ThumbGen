@@ -93,21 +93,9 @@ DataImage read_data_image(OIIO::ImageInput& input,const OIIO::ImageSpec& spec,in
     return result;
 }
 
-OIIO::ImageBuf categorical_preview(const DataImage& image,int width,int height,std::size_t limit,int threads) {
-    const auto& spec=image.source_spec;
-    if(image.native.empty() || width<1 || height<1 || spec.full_width<1 || spec.full_height<1)
+CategoricalCoordinates categorical_coordinates(const OIIO::ImageSpec& spec,int width,int height) {
+    if(width<1 || height<1 || spec.width<1 || spec.height<1 || spec.full_width<1 || spec.full_height<1)
         throw FileFailure("invalid_dimensions","invalid categorical preview dimensions");
-    if(std::size_t(width)>limit/(4*sizeof(float))/std::size_t(height))
-        throw FileFailure("canvas_limit_exceeded","categorical preview exceeds pixel buffer limit");
-    auto output_spec=spec;output_spec.x=output_spec.y=output_spec.z=0;
-    output_spec.width=output_spec.full_width=width;output_spec.height=output_spec.full_height=height;
-    output_spec.full_x=output_spec.full_y=output_spec.full_z=0;output_spec.depth=output_spec.full_depth=1;
-    output_spec.nchannels=4;output_spec.set_format(OIIO::TypeDesc::FLOAT);output_spec.channelnames={"R","G","B","A"};
-    output_spec.alpha_channel=3;output_spec.z_channel=-1;
-    if(spec.get_int_attribute("Orientation",1)!=1)output_spec.attribute("Orientation",1);
-    output_spec.erase_attribute("ICCProfile");output_spec.attribute("oiio:UnassociatedAlpha",0);
-    OIIO::ImageBuf output(output_spec);auto* pixels=static_cast<float*>(output.localpixels());
-    if(!pixels || !output.contiguous())throw FileFailure("conversion_failed","cannot allocate categorical preview");
     const int orientation=spec.get_int_attribute("Orientation",1);
     if(orientation<1 || orientation>8)throw FileFailure("orientation_failed","unsupported categorical orientation");
     int display_width=spec.full_width,display_height=spec.full_height;
@@ -123,28 +111,55 @@ OIIO::ImageBuf categorical_preview(const DataImage& image,int width,int height,s
         return result;
     };
     auto xs=axis(width,display_width),ys=axis(height,display_height);
+    CategoricalCoordinates result;result.transposed=orientation>=5;
+    result.x=result.transposed?std::move(ys):std::move(xs);
+    result.y=result.transposed?std::move(xs):std::move(ys);
+    auto local=[](std::vector<int>& positions,int full,int origin,int data_origin,int data_size,bool flip) {
+        for(auto& value:positions) {
+            if(value<0 || value>=full){value=-1;continue;}
+            auto position=std::int64_t(flip?full-1-value:value)+origin-data_origin;
+            value=position<0 || position>=data_size?-1:int(position);
+        }
+    };
+    local(result.x,spec.full_width,spec.full_x,spec.x,spec.width,orientation==2 || orientation==3 || orientation==7 || orientation==8);
+    local(result.y,spec.full_height,spec.full_y,spec.y,spec.height,orientation==3 || orientation==4 || orientation==6 || orientation==7);
+    return result;
+}
+OIIO::ImageBuf categorical_preview(const DataImage& image,int width,int height,std::size_t limit,int threads) {
+    const auto& spec=image.source_spec;auto coordinates=categorical_coordinates(spec,width,height);
+    if(image.native.empty() && !image.sampled)throw FileFailure("invalid_dimensions","missing categorical samples");
+    if(std::size_t(width)>limit/(4*sizeof(float))/std::size_t(height))
+        throw FileFailure("canvas_limit_exceeded","categorical preview exceeds pixel buffer limit");
+    auto output_spec=spec;output_spec.x=output_spec.y=output_spec.z=0;
+    output_spec.width=output_spec.full_width=width;output_spec.height=output_spec.full_height=height;
+    output_spec.full_x=output_spec.full_y=output_spec.full_z=0;output_spec.depth=output_spec.full_depth=1;
+    output_spec.nchannels=4;output_spec.set_format(OIIO::TypeDesc::FLOAT);output_spec.channelnames={"R","G","B","A"};
+    output_spec.alpha_channel=3;output_spec.z_channel=-1;
+    if(spec.get_int_attribute("Orientation",1)!=1)output_spec.attribute("Orientation",1);
+    output_spec.erase_attribute("ICCProfile");output_spec.attribute("oiio:UnassociatedAlpha",0);
+    OIIO::ImageBuf output(output_spec);auto* pixels=static_cast<float*>(output.localpixels());
+    if(!pixels || !output.contiguous())throw FileFailure("conversion_failed","cannot allocate categorical preview");
+    if(image.sampled) {
+        auto compact=[](std::vector<int>& positions,const std::vector<int>& selected) {
+            for(auto& value:positions)if(value>=0) {
+                auto it=std::lower_bound(selected.begin(),selected.end(),value);
+                if(it==selected.end() || *it!=value)throw FileFailure("conversion_failed","categorical position was not sampled");
+                value=int(it-selected.begin());
+            }
+        };
+        compact(coordinates.x,image.sampled_x);compact(coordinates.y,image.sampled_y);
+    }
+    const auto row_width=image.sampled?image.sampled_x.size():std::size_t(spec.width);
     std::vector<int> ordered(image.offsets.size());std::iota(ordered.begin(),ordered.end(),0);
     std::exception_ptr failure;std::mutex mutex;
     OIIO::parallel_for_chunked(0,height,0,[&](int64_t begin,int64_t end) {
         try {
             for(auto y=begin;y<end;++y)for(int x=0;x<width;++x) {
                 auto* target=pixels+(std::size_t(y)*width+x)*4;
-                int ox=xs[x],oy=ys[std::size_t(y)];
-                if(ox<0 || ox>=display_width || oy<0 || oy>=display_height){std::fill_n(target,4,0.0f);continue;}
-                int sx=ox,sy=oy;
-                switch(orientation) {
-                    case 2:sx=spec.full_width-1-ox;break;
-                    case 3:sx=spec.full_width-1-ox;sy=spec.full_height-1-oy;break;
-                    case 4:sy=spec.full_height-1-oy;break;
-                    case 5:sx=oy;sy=ox;break;
-                    case 6:sx=oy;sy=spec.full_height-1-ox;break;
-                    case 7:sx=spec.full_width-1-oy;sy=spec.full_height-1-ox;break;
-                    case 8:sx=spec.full_width-1-oy;sy=ox;break;
-                }
-                // Int64 avoids overflow for negative/nonzero EXR origins.
-                auto dx=std::int64_t(sx)+spec.full_x-spec.x,dy=std::int64_t(sy)+spec.full_y-spec.y;
-                if(dx<0 || dx>=spec.width || dy<0 || dy>=spec.height){std::fill_n(target,4,0.0f);continue;}
-                auto pixel=std::size_t(dy)*spec.width+std::size_t(dx);
+                int dx=coordinates.x[coordinates.transposed?std::size_t(y):std::size_t(x)];
+                int dy=coordinates.y[coordinates.transposed?std::size_t(x):std::size_t(y)];
+                if(dx<0 || dy<0){std::fill_n(target,4,0.0f);continue;}
+                auto pixel=std::size_t(dy)*row_width+std::size_t(dx);
                 double values[3]={};for(std::size_t c=0;c<image.offsets.size();++c)
                     values[c]=sample(image.native.data()+pixel*image.strides[c]+image.offsets[c],image.types[c]);
                 map_data_double(values,target,1,image.offsets.size(),ordered,image.mapping);

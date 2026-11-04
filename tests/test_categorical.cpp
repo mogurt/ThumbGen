@@ -92,7 +92,8 @@ static int run(const std::vector<fs::path>& args) {
         thumbgen::Job job;job.id="bounded-native";job.input=(root/"large.exr").u8string();
         job.options.visualization="id";job.options.channels="object_id";job.options.max_decode_mib=1;
         job.outputs.push_back({(root/"small.png").u8string(),"png",16,16,90});thumbgen::Engine engine;
-        auto result=engine.convert(job);require(result["ok"].get<bool>() && result["decoded_mib"]==1,result.dump());
+        auto result=engine.convert(job);require(result["ok"].get<bool>() && result["decoded_mib"].get<double>()<1 &&
+            result["decoded_mib"].get<double>()*1048576==result["source_read"]["buffer_bytes"].get<double>(),result.dump());
         // A sparse EXR display window must not allocate its 16 GiB RGBA canvas.
         OIIO::ImageSpec sparse(2,2,1,OIIO::TypeDesc::UINT32);sparse.channelnames={"object_id"};
         sparse.x=sparse.y=16383;sparse.full_x=sparse.full_y=0;sparse.full_width=sparse.full_height=32768;

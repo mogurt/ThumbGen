@@ -31,7 +31,7 @@ file(READ "${CMAKE_CURRENT_SOURCE_DIR}/schemas/errors-v1.json" THUMBGEN_ERROR_RE
 configure_file(src/error_registry.h.in generated/error_registry.h @ONLY)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/schemas/errors-v1.json")
 
-add_library(thumbgen_core STATIC src/core.cpp src/selection.cpp src/files.cpp src/quantize.cpp src/data_preview.cpp src/data_image.cpp src/selected_input.cpp src/cryptomatte.cpp)
+add_library(thumbgen_core STATIC src/core.cpp src/selection.cpp src/files.cpp src/quantize.cpp src/data_preview.cpp src/data_image.cpp src/selected_input.cpp src/cryptomatte.cpp src/sampled_id.cpp)
 target_compile_features(thumbgen_core PUBLIC cxx_std_17)
 target_include_directories(thumbgen_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_include_directories(thumbgen_core PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
@@ -185,6 +185,15 @@ if(BUILD_TESTING)
     target_include_directories(thumbgen_selected_input_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
     target_link_libraries(thumbgen_selected_input_tests PRIVATE thumbgen_core OpenImageIO::OpenImageIO Imath::Imath)
     add_test(NAME core_selected_input COMMAND thumbgen_selected_input_tests)
+    add_executable(thumbgen_sampled_id_tests tests/test_sampled_id.cpp)
+    target_include_directories(thumbgen_sampled_id_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(thumbgen_sampled_id_tests PRIVATE thumbgen_core OpenImageIO::OpenImageIO Imath::Imath)
+    add_test(NAME core_sampled_id COMMAND thumbgen_sampled_id_tests)
+    set_tests_properties(core_sampled_id PROPERTIES TIMEOUT 120 ENVIRONMENT_MODIFICATION
+        "PATH=path_list_prepend:$<TARGET_FILE_DIR:OpenImageIO::OpenImageIO>;LD_LIBRARY_PATH=path_list_prepend:$<TARGET_FILE_DIR:OpenImageIO::OpenImageIO>")
+    if(MSVC)
+        target_compile_options(thumbgen_sampled_id_tests PRIVATE /W4 /utf-8 /permissive-)
+    endif()
     add_executable(thumbgen_cryptomatte_tests tests/test_cryptomatte.cpp)
     target_include_directories(thumbgen_cryptomatte_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
     target_link_libraries(thumbgen_cryptomatte_tests PRIVATE thumbgen_core OpenImageIO::OpenImageIO Imath::Imath)
@@ -260,6 +269,11 @@ if(BUILD_TESTING)
             message(FATAL_ERROR "Full tests require THUMBGEN_TEST_PROTOCOL=ON")
         endif()
         if(THUMBGEN_TEST_PROTOCOL)
+            add_test(NAME public_sampled_id COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_sampled_id_cli.py --exe $<TARGET_FILE:thumbgen>
+                --fixture-exe $<TARGET_FILE:thumbgen_categorical_tests> --schema-dir ${CMAKE_CURRENT_SOURCE_DIR}/schemas
+                --runtime-dir $<TARGET_FILE_DIR:OpenImageIO::OpenImageIO> --png-reference ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cryptomatte_cli.py)
+            set_tests_properties(public_sampled_id PROPERTIES TIMEOUT 120 LABELS "protocol;aov;sampled-id")
             add_test(NAME public_cryptomatte COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cryptomatte_cli.py --exe $<TARGET_FILE:thumbgen>
                 --fixture-exe $<TARGET_FILE:thumbgen_cryptomatte_tests> --schema-dir ${CMAKE_CURRENT_SOURCE_DIR}/schemas

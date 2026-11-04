@@ -97,13 +97,23 @@ Json task_base(const Job& job) {
     return value;
 }
 void base_check(const Json& value,const Job& job) {
-    allowed(value,{"schema_version","type","id","input","ok","status","outputs","warnings","error","selection","source","selected_channels","colour","decoded_mib","preset","filter","timings_ms","sequence_id","source_check","visualization","cryptomatte"});
+    allowed(value,{"schema_version","type","id","input","ok","status","outputs","warnings","error","selection","source","selected_channels","colour","decoded_mib","preset","filter","timings_ms","sequence_id","source_check","visualization","cryptomatte","source_read"});
     check(value.is_object() && value.value("type",std::string{})=="result" && value.value("id",std::string{})==job.id &&
         value.value("input",std::string{})==job.input && value.value("schema_version",0)==1,"worker result identity mismatch");
     check(value.value("sequence_id",std::string{})==job.sequence_id,"worker sequence identity mismatch");
     check(value.contains("warnings") && value["warnings"].is_array() && value.contains("timings_ms") && value["timings_ms"].is_object(),"invalid worker result metadata");
     for(const auto& warning:value["warnings"])check(warning.is_string(),"invalid worker warning");
     if(value.contains("error"))error_check(value["error"]);
+    if(value.contains("source_read")) {
+        const auto& read=value["source_read"];fields(read,{"mode","grid","block","calls","buffer_bytes"});
+        check(job.options.visualization=="id" && read["mode"]=="sampled_blocks","worker source read mode mismatch");
+        for(const char* key:{"grid","block"}) {
+            check(read[key].is_array() && read[key].size()==2,"invalid sampled source dimensions");
+            for(const auto& n:read[key]){auto count=number(n,2147483647);check(key[0]=='g' || count>0,"invalid sampled source block");}
+        }
+        number(read["calls"],std::numeric_limits<std::uint64_t>::max());
+        check(number(read["buffer_bytes"],std::numeric_limits<std::uint64_t>::max())>0,"missing sampled source buffer");
+    }
     if(value.contains("cryptomatte")) {
         const auto& crypto=value["cryptomatte"];fields(crypto,{"name","metadata_key","hash","conversion","layers","ranks","manifest"});
         check(job.options.visualization=="cryptomatte" && crypto["name"]==job.options.channels && crypto["hash"]=="MurmurHash3_32" &&
@@ -341,12 +351,13 @@ bool run_isolated(const std::vector<Job>& jobs,const std::string& executable,con
                         try {source=source_stamp(fs::u8path(job.input));}
                         catch(const FileFailure&){throw FileFailure("source_changed","source could not be verified after metadata preparation",true);}
                         if(stamp_json(*source)!=payload["source_stamp"])throw FileFailure("source_changed","source changed during metadata preparation",true);
-                        const auto& f=payload["footprint"];fields(f,{"data_width","data_height","display_width","display_height","channel_span","selected_channels","output_width","output_height","threads","source_sample_bytes","source_pixel_bytes","native_categorical"});
+                        const auto& f=payload["footprint"];fields(f,{"data_width","data_height","display_width","display_height","channel_span","selected_channels","output_width","output_height","threads","source_sample_bytes","source_pixel_bytes","source_buffer_bytes","native_categorical"});
                         const bool categorical=job.options.visualization=="id" || job.options.visualization=="id_rgb";
                         check(f["native_categorical"].is_boolean() && f["native_categorical"]==categorical,"worker categorical footprint mismatch");
                         check(number(f["threads"],256)==unsigned(job.options.threads),"plan thread quota mismatch");
                         ImageFootprint shape{number(f["data_width"],2147483647),number(f["data_height"],2147483647),number(f["display_width"],2147483647),number(f["display_height"],2147483647),
-                            number(f["channel_span"],2147483647),number(f["selected_channels"],4),number(f["output_width"],32768),number(f["output_height"],32768),unsigned(job.options.threads),unsigned(number(f["source_sample_bytes"],8)),categorical,number(f["source_pixel_bytes"],32)};
+                            number(f["channel_span"],2147483647),number(f["selected_channels"],4),number(f["output_width"],32768),number(f["output_height"],32768),unsigned(job.options.threads),unsigned(number(f["source_sample_bytes"],8)),categorical,number(f["source_pixel_bytes"],32),number(f["source_buffer_bytes"],std::numeric_limits<std::uint64_t>::max())};
+                        check(shape.source_buffer_bytes?(job.options.visualization=="id" && base.contains("source_read") && base["source_read"]["buffer_bytes"]==shape.source_buffer_bytes):!base.contains("source_read"),"sampled source footprint mismatch");
                         check(shape.data_width && shape.data_height && shape.display_width && shape.display_height && shape.channel_span &&
                             (shape.selected_channels==3 || shape.selected_channels==4) && shape.output_width && shape.output_height && shape.source_sample_bytes &&
                             shape.source_pixel_bytes>=shape.source_sample_bytes && shape.source_pixel_bytes<=shape.source_sample_bytes*std::min<std::uint64_t>(shape.channel_span,job.options.visualization=="colour" || job.options.visualization=="cryptomatte"?4:3) &&

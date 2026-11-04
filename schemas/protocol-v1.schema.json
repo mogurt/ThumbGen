@@ -674,6 +674,48 @@
         },
         "cryptomatte": {
           "$ref": "#/$defs/cryptomatte"
+        },
+        "source_read": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "const": "sampled_blocks"
+            },
+            "grid": {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 2,
+              "items": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "block": {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 2,
+              "items": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "calls": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "buffer_bytes": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "required": [
+            "mode",
+            "grid",
+            "block",
+            "calls",
+            "buffer_bytes"
+          ]
         }
       },
       "required": [

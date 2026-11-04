@@ -30,6 +30,11 @@ int main() {
         require(estimate_memory(compact_source).source==16ULL*1024*1024 && estimate_memory(full).source==256ULL*1024*1024,"compact colour source still includes unrelated channels");
         auto mixed=compact_source;mixed.native_categorical=true;mixed.source_pixel_bytes=10;
         require(estimate_memory(mixed).source==10ULL*1024*1024,"mixed native source rounded to widest channel");
+        auto sampled=mixed;sampled.source_buffer_bytes=1024;
+        require(estimate_memory(sampled).source==1024,"sampled source buffer was ignored");
+        rejects<std::invalid_argument>([&]{auto invalid=sampled;invalid.native_categorical=false;estimate_memory(invalid);});
+        rejects<std::invalid_argument>([&]{auto invalid=sampled;invalid.source_pixel_bytes=0;estimate_memory(invalid);});
+        rejects<std::invalid_argument>([&]{auto invalid=sampled;invalid.source_buffer_bytes=11ULL*1024*1024;estimate_memory(invalid);});
         rejects<std::invalid_argument>([&]{auto invalid=compact_source;invalid.source_pixel_bytes=3;estimate_memory(invalid);});
         rejects<std::invalid_argument>([&]{auto invalid=compact_source;invalid.source_pixel_bytes=33;estimate_memory(invalid);});
         auto ids=ImageFootprint{8192,8192,16384,16384,1,4,1024,1024,4,4,true};

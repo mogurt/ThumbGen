@@ -3,6 +3,12 @@
 #include <OpenImageIO/imagebuf.h>
 #include <OpenImageIO/imageio.h>
 namespace thumbgen::detail {
+struct CategoricalCoordinates {
+    // Source-local X/Y coordinates. Transposed orientations index X by output Y.
+    std::vector<int> x,y;
+    bool transposed=false;
+};
+CategoricalCoordinates categorical_coordinates(const OIIO::ImageSpec& spec,int width,int height);
 struct DataImage {
     OIIO::ImageBuf image;
     DataStats statistics;
@@ -14,6 +20,8 @@ struct DataImage {
     std::vector<std::size_t> offsets,strides;
     std::vector<OIIO::TypeDesc> types;
     DataMapping mapping;
+    std::vector<int> sampled_x,sampled_y;
+    bool sampled=false;
 };
 DataImage read_data_image(OIIO::ImageInput& input,const OIIO::ImageSpec& spec,int part,
     const std::vector<int>& channels,const DataMapping& mapping,std::size_t limit,int threads);

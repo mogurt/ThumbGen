@@ -29,6 +29,11 @@ MemoryEstimate estimate_memory(const ImageFootprint& s) {
     if(preview>canvas)throw std::invalid_argument("preview footprint exceeds display canvas");
     MemoryEstimate e;
     e.source=multiply(data,s.source_pixel_bytes?s.source_pixel_bytes:multiply(s.channel_span,s.source_sample_bytes));
+    if(s.source_buffer_bytes) {
+        if(!s.native_categorical || !s.source_pixel_bytes || s.source_buffer_bytes>e.source)
+            throw std::invalid_argument("invalid sampled source buffer estimate");
+        e.source=s.source_buffer_bytes;
+    }
     // Categorical modes retain native source + per-thread DOUBLE scan rows;
     // RGBA is allocated at preview size and already covered by output below.
     // Other modes keep full colour/mapping, padding and orientation temporaries.
