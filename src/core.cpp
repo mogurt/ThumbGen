@@ -163,7 +163,7 @@ Json Engine::capabilities() {
         {"defaults",{{"format","jpeg"},{"quality",90},{"size",{1024,1024}},
                      {"background","black"},{"preset","balanced"}}},
         {"limitations",{"no Deep flattening or Cryptomatte visualization yet",
-            "batch uses one isolated worker at a time; controlled file concurrency is pending",
+            "batch defaults to one worker; explicit execution budgets enable a bounded process pool",
             "max_decode_mib limits decoded source buffer, not process RSS"}}};
 }
 
