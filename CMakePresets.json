@@ -9,7 +9,7 @@
         "CMAKE_PREFIX_PATH": "$env{THUMBGEN_SDK_PREFIX}",
         "CMAKE_INSTALL_PREFIX": "${sourceDir}/build/install/${presetName}",
         "THUMBGEN_VERIFY_DEPENDENCY_VERSIONS": true,
-        "THUMBGEN_BUILD_PROBES": false, "THUMBGEN_BUILD_VIPS": false,
+        "THUMBGEN_BUILD_PROBES": false, "THUMBGEN_BUILD_VIPS": false, "THUMBGEN_BUILD_STRESS_FIXTURES": false,
         "BUILD_TESTING": false
       }
     },
