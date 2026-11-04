@@ -67,6 +67,13 @@ rows = capture('refused', ['convert', source, '--output', destination / 'refused
                          '--memory-budget-mib', 129], 4)
 if rows[0]['error']['code'] != 'task_memory_exceeds_budget' or (destination / 'refused.png').exists():
     raise RuntimeError('Expected memory refusal with no output')
+if captures['convert']['records'][0]['execution'].get('estimate_model') == 'buffers-v2':
+    rows = capture('v2-small-budget', ['convert', source, '--output', destination / 'incremental.png',
+                                     '--thread-budget', 1, '--memory-budget-mib', 266], 0)
+    execution = rows[0]['execution']
+    if (execution['estimate_model'] != 'buffers-v2' or execution['admission_mib'] >= 2 or
+            execution['fixed_reserve_mib'] + execution['admission_mib'] > 266):
+        raise RuntimeError('Small image did not fit incremental admission budget')
 jobs_schema = json.loads((stage / 'schemas/jobs-v1.schema.json').read_text())
 if 'workers' in jobs_schema['$defs']['execution']['properties']:
     for workers in (1, 2, 4, 8):

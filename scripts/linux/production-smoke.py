@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import time
 import uuid
 
 parser = argparse.ArgumentParser()
@@ -18,7 +19,13 @@ args = parser.parse_args()
 repo = Path(__file__).resolve().parents[2]
 stage = Path(os.environ.get('THUMBGEN_VALIDATION_DIR', repo / '.deps/linux/validation')).resolve()
 label = os.environ.get('WSL_DISTRO_NAME', 'linux')
-destination = stage / 'results' / label / ('production-' + uuid.uuid4().hex[:8])
+prefix = os.environ.get('THUMBGEN_SMOKE_LABEL', 'production')
+if not prefix or any(char not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-' for char in prefix):
+    raise SystemExit('Smoke label must be a single safe directory name')
+timeout = int(os.environ.get('THUMBGEN_SMOKE_TIMEOUT', '180'))
+if timeout < 1:
+    raise SystemExit('Smoke timeout must be positive')
+destination = stage / 'results' / label / (prefix + '-' + uuid.uuid4().hex[:8])
 destination.mkdir(parents=True)
 manifest = json.loads(args.manifest.read_text(encoding='utf-8-sig'))
 execution_file = os.environ.get('THUMBGEN_SMOKE_EXECUTION_FILE')
@@ -44,10 +51,11 @@ before = {}
 for index, job in enumerate(manifest['jobs']):
     original = linux_path(job['input']).resolve()
     source = args.readonly_root.resolve() / original.relative_to(args.asset_root.resolve())
-    mount_options = subprocess.check_output(['findmnt', '-n', '-o', 'OPTIONS', '--target', str(source)], text=True)
-    if 'ro' not in mount_options.strip().split(','):
-        raise SystemExit('Asset mount must be read-only')
-    before[str(source)] = digest(source)
+    if str(source) not in before:
+        mount_options = subprocess.check_output(['findmnt', '-n', '-o', 'OPTIONS', '--target', str(source)], text=True)
+        if 'ro' not in mount_options.strip().split(','):
+            raise SystemExit('Asset mount must be read-only')
+        before[str(source)] = digest(source)
     job['input'] = str(source)
     for output_index, output in enumerate(job['outputs']):
         suffix = Path(output['path']).suffix
@@ -57,12 +65,15 @@ for index, job in enumerate(manifest['jobs']):
 path = destination / 'jobs.json'
 path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2))
 environment = dict(os.environ, LD_LIBRARY_PATH=str(stage / 'lib'))
+started = time.perf_counter()
 result = subprocess.run([str(stage / 'bin/thumbgen'), 'batch', '--manifest', str(path), '--json'],
-                        env=environment, capture_output=True, text=True, timeout=180)
+                        env=environment, capture_output=True, text=True, timeout=timeout)
+wall_seconds = time.perf_counter() - started
 after = {source: digest(Path(source)) for source in before}
 records = [json.loads(line) for line in result.stdout.splitlines() if line]
 outputs = [output for record in records for output in record.get('outputs', [])]
 report = dict(exit=result.returncode, source_count=len(before), sources_unchanged=before == after,
+              wall_seconds=wall_seconds,
               source_sha256=before, output_count=len(outputs),
               successful_outputs=sum(output.get('status') == 'success' for output in outputs),
               stderr=result.stderr, records=records)
