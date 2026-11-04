@@ -67,6 +67,27 @@ rows = capture('refused', ['convert', source, '--output', destination / 'refused
                          '--memory-budget-mib', 129], 4)
 if rows[0]['error']['code'] != 'task_memory_exceeds_budget' or (destination / 'refused.png').exists():
     raise RuntimeError('Expected memory refusal with no output')
+jobs_schema = json.loads((stage / 'schemas/jobs-v1.schema.json').read_text())
+if 'workers' in jobs_schema['$defs']['execution']['properties']:
+    for workers in (1, 2, 4, 8):
+        pool = dict(schema_version=1, execution=dict(workers=workers, thread_budget=8, memory_budget_mib=8192),
+                    jobs=[dict(id=f'pool-{workers}-{index}', input=str(source), options=dict(threads=8),
+                               outputs=[dict(path=str(destination / f'pool-{workers}-{index}.png'), size=16)])
+                          for index in range(8)])
+        Draft202012Validator(jobs_schema).validate(pool)
+        path = destination / f'pool-{workers}.json'
+        path.write_text(json.dumps(pool, indent=2) + '\n')
+        rows = capture(f'pool-{workers}', ['batch', '--manifest', path], 0)
+        configuration = rows[-1]['execution']
+        quota = 8 // workers
+        if (configuration['requested_workers'], configuration['workers']) != (workers, workers):
+            raise RuntimeError('Unexpected worker allocation')
+        if configuration['fixed_reserve_mib'] != 128 + workers * (128 + 8 * quota):
+            raise RuntimeError('Unexpected pool fixed reserve')
+        tasks = rows[:-1]
+        if len(tasks) != 8 or any(not row['ok'] or row['execution']['threads'] != quota or
+                                  row['execution']['queue_ms'] < 0 for row in tasks):
+            raise RuntimeError('Unexpected pool task allocation or queue diagnostics')
 if hashlib.sha256(source.read_bytes()).hexdigest() != before:
     raise RuntimeError('Synthetic input changed')
 captures['source_sha256'] = before

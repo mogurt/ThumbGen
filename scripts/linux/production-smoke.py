@@ -21,6 +21,14 @@ label = os.environ.get('WSL_DISTRO_NAME', 'linux')
 destination = stage / 'results' / label / ('production-' + uuid.uuid4().hex[:8])
 destination.mkdir(parents=True)
 manifest = json.loads(args.manifest.read_text(encoding='utf-8-sig'))
+execution_file = os.environ.get('THUMBGEN_SMOKE_EXECUTION_FILE')
+if execution_file:
+    manifest['execution'] = json.loads(Path(execution_file).read_text())
+threads = os.environ.get('THUMBGEN_SMOKE_THREADS')
+if threads:
+    manifest.setdefault('defaults', {})['threads'] = int(threads)
+    for job in manifest['jobs']:
+        job.setdefault('options', {})['threads'] = int(threads)
 def linux_path(value):
     if len(value) > 2 and value[1:3] in (':\\', ':/'):
         return Path('/mnt') / value[0].lower() / value[3:].replace('\\', '/')
@@ -58,7 +66,23 @@ report = dict(exit=result.returncode, source_count=len(before), sources_unchange
               source_sha256=before, output_count=len(outputs),
               successful_outputs=sum(output.get('status') == 'success' for output in outputs),
               stderr=result.stderr, records=records)
+report['execution_requested'] = manifest.get('execution', {})
+report['threads_override'] = int(threads) if threads else None
+report['output_sha256'] = {Path(output['path']).name: digest(Path(output['path']))
+                           for output in outputs if output.get('status') == 'success'}
+baseline_path = os.environ.get('THUMBGEN_SMOKE_BASELINE')
+if baseline_path:
+    baseline = json.loads(Path(baseline_path).read_text())
+    reference = baseline['output_sha256']
+    actual = report['output_sha256']
+    report['baseline_comparison'] = dict(
+        report=baseline_path, sources_identical=baseline['source_sha256'] == before,
+        output_count=len(actual), sha256_identical=reference == actual,
+        mismatched_outputs=sorted(name for name in reference.keys() | actual.keys()
+                                  if reference.get(name) != actual.get(name)))
 (destination / 'report.json').write_text(json.dumps(report, ensure_ascii=False, indent=2))
 print(json.dumps({key: report[key] for key in ('exit', 'source_count', 'sources_unchanged', 'output_count', 'successful_outputs')}))
 print(destination)
-raise SystemExit(result.returncode if before == after else 1)
+comparison = report.get('baseline_comparison', {})
+passed = before == after and comparison.get('sha256_identical', True) and comparison.get('sources_identical', True)
+raise SystemExit(result.returncode if passed else 1)
