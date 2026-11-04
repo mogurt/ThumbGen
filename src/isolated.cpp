@@ -97,13 +97,27 @@ Json task_base(const Job& job) {
     return value;
 }
 void base_check(const Json& value,const Job& job) {
-    allowed(value,{"schema_version","type","id","input","ok","status","outputs","warnings","error","selection","source","selected_channels","colour","decoded_mib","preset","filter","timings_ms","sequence_id","source_check","visualization"});
+    allowed(value,{"schema_version","type","id","input","ok","status","outputs","warnings","error","selection","source","selected_channels","colour","decoded_mib","preset","filter","timings_ms","sequence_id","source_check","visualization","cryptomatte"});
     check(value.is_object() && value.value("type",std::string{})=="result" && value.value("id",std::string{})==job.id &&
         value.value("input",std::string{})==job.input && value.value("schema_version",0)==1,"worker result identity mismatch");
     check(value.value("sequence_id",std::string{})==job.sequence_id,"worker sequence identity mismatch");
     check(value.contains("warnings") && value["warnings"].is_array() && value.contains("timings_ms") && value["timings_ms"].is_object(),"invalid worker result metadata");
     for(const auto& warning:value["warnings"])check(warning.is_string(),"invalid worker warning");
     if(value.contains("error"))error_check(value["error"]);
+    if(value.contains("cryptomatte")) {
+        const auto& crypto=value["cryptomatte"];fields(crypto,{"name","metadata_key","hash","conversion","layers","ranks","manifest"});
+        check(job.options.visualization=="cryptomatte" && crypto["name"]==job.options.channels && crypto["hash"]=="MurmurHash3_32" &&
+            crypto["conversion"]=="uint32_to_float32" && crypto["metadata_key"].is_string() && !crypto["metadata_key"].get<std::string>().empty(),"worker Cryptomatte metadata mismatch");
+        check(crypto["layers"].is_array() && !crypto["layers"].empty(),"missing Cryptomatte layers");
+        for(const auto& layer:crypto["layers"])check(layer.is_string() && !layer.get<std::string>().empty(),"invalid Cryptomatte layer");
+        auto ranks=number(crypto["ranks"],2147483647);
+        check((ranks==2*crypto["layers"].size() || ranks+1==2*crypto["layers"].size()) && value.contains("selected_channels") &&
+            value["selected_channels"].is_array() && value["selected_channels"].size()==2*ranks,"invalid Cryptomatte rank count");
+        const auto& manifest=crypto["manifest"];fields(manifest,{"embedded_attribute","sidecar_attribute","used"});
+        check(manifest["embedded_attribute"].is_boolean() && manifest["sidecar_attribute"].is_boolean() && manifest["used"]==false,"invalid Cryptomatte manifest diagnostics");
+    }
+    if(job.options.visualization=="cryptomatte" && (value.value("status",std::string{})=="success" || value.value("status",std::string{})=="partial" || value.value("status",std::string{})=="skipped"))
+        check(value.contains("cryptomatte"),"missing worker Cryptomatte metadata");
     if(value.contains("visualization")) {
         const auto& data=value["visualization"];fields(data,{"mode","policy","range","invalid_values","invalid_pixels","clipped_components"});
         check(job.options.visualization!="colour" && data["mode"]==job.options.visualization && data["policy"]=="v1" && data["invalid_values"]==job.options.invalid_values &&
@@ -335,7 +349,7 @@ bool run_isolated(const std::vector<Job>& jobs,const std::string& executable,con
                             number(f["channel_span"],2147483647),number(f["selected_channels"],4),number(f["output_width"],32768),number(f["output_height"],32768),unsigned(job.options.threads),unsigned(number(f["source_sample_bytes"],8)),categorical,number(f["source_pixel_bytes"],32)};
                         check(shape.data_width && shape.data_height && shape.display_width && shape.display_height && shape.channel_span &&
                             (shape.selected_channels==3 || shape.selected_channels==4) && shape.output_width && shape.output_height && shape.source_sample_bytes &&
-                            shape.source_pixel_bytes>=shape.source_sample_bytes && shape.source_pixel_bytes<=shape.source_sample_bytes*std::min<std::uint64_t>(shape.channel_span,job.options.visualization=="colour"?4:3) &&
+                            shape.source_pixel_bytes>=shape.source_sample_bytes && shape.source_pixel_bytes<=shape.source_sample_bytes*std::min<std::uint64_t>(shape.channel_span,job.options.visualization=="colour" || job.options.visualization=="cryptomatte"?4:3) &&
                             (job.options.visualization!="colour" || (shape.source_sample_bytes==4 && shape.source_pixel_bytes%4==0)),"invalid worker footprint");
                         std::uint64_t cost=1;
                         try {auto estimate=estimate_memory(shape);estimate_mib=double(estimate.total)/1048576;task.admission_mib=double(estimate.incremental)/1048576;if(options.memory_mib)cost=estimate.incremental;}

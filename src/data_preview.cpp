@@ -1,4 +1,5 @@
 #include "data_preview.h"
+#include "id_palette.h"
 #include <cmath>
 #include <limits>
 #include <stdexcept>
@@ -12,12 +13,13 @@ DataMapping data_mapping(const std::string& mode,const std::vector<double>& rang
     else if(mode=="vector")result.mode=DataMode::vector;
     else if(mode=="id")result.mode=DataMode::id;
     else if(mode=="id_rgb")result.mode=DataMode::id_rgb;
+    else if(mode=="cryptomatte")result.mode=DataMode::cryptomatte;
     else throw std::invalid_argument("unknown visualization mode");
     if(invalid=="black")result.invalid=InvalidData::black;
     else if(invalid=="magenta")result.invalid=InvalidData::magenta;
     else if(invalid=="error")result.invalid=InvalidData::error;
     else throw std::invalid_argument("invalid data value policy");
-    if(result.mode==DataMode::colour || result.mode==DataMode::id) {
+    if(result.mode==DataMode::colour || result.mode==DataMode::id || result.mode==DataMode::cryptomatte) {
         if(!range.empty())throw std::invalid_argument("data range is only valid for depth, normal, vector or id_rgb");
         if(result.mode==DataMode::colour && invalid!="magenta")throw std::invalid_argument("invalid value policy requires a data visualization mode");
         return result;
@@ -43,10 +45,7 @@ void layout(std::size_t pixels,std::size_t stride,std::size_t component) {
 void palette(std::uint32_t id,float* rgba) noexcept {
     // Fixed integer operations: no process seed, colour transform or frame statistics.
     // Zero is reserved for a black background. Collisions are possible in RGB8.
-    std::uint32_t h=id*2654435761u;
-    h^=(h<<13)|(h>>19);h^=h>>17;
-    for(unsigned c=0;c<3;++c)rgba[c]=id?float(64+((h>>(c*8))%192u))/255.0f:0.0f;
-    rgba[3]=1;
+    id_palette(id,rgba);
 }
 float normalize(double value,const DataMapping& mapping,DataStats& stats) noexcept {
     if(value<mapping.minimum){++stats.clipped_components;return 0;}

@@ -265,6 +265,16 @@
       "code": "data_invalid_value",
       "category": "input",
       "description": "数据预览error策略遇到无效样本"
+    },
+    {
+      "code": "cryptomatte_metadata_invalid",
+      "category": "input",
+      "description": "Cryptomatte family metadata is missing, ambiguous or unsupported"
+    },
+    {
+      "code": "cryptomatte_layout_unsupported",
+      "category": "selection",
+      "description": "Cryptomatte requires complete same-part FLOAT ID/coverage rank layers"
     }
   ]
 }

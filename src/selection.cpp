@@ -1,5 +1,6 @@
 #include "selection.h"
 #include "files.h"
+#include "cryptomatte.h"
 #include <algorithm>
 #include <cctype>
 #include <map>
@@ -38,11 +39,13 @@ std::vector<Candidate> classify(const OIIO::ImageSpec& spec) {
         for(int c:indices)if(component(c)==name){if(found!=-1)return -1;found=c;}
         return found;
     };
-    const bool data_part=data_name(std::string(spec.get_string_attribute("oiio:subimagename")));
+    const auto crypto=crypto_names(spec);
+    const auto part_name=std::string(spec.get_string_attribute("oiio:subimagename"));
+    const bool data_part=data_name(part_name) || crypto_group(crypto,part_name);
     std::vector<Candidate> result;
     for(const auto& entry:groups) {
         const auto& prefix=entry.first;const auto& indices=entry.second;
-        bool data=data_part || data_name(prefix);
+        bool data=data_part || data_name(prefix) || crypto_group(crypto,prefix);
         int r=channel(indices,"r"),g=channel(indices,"g"),b=channel(indices,"b");
         if(r<0 || g<0 || b<0)for(int c:indices)data=data || data_name(component(c));
         std::vector<int> selected;
@@ -92,7 +95,7 @@ Json selection_request(const Job& job) {
     Json request{{"part",o.part},{"part_name",o.part_name},{"channels",o.channels},{"strategy",o.selection_policy}};
     if(o.visualization!="colour") {
         auto mapping=data_mapping(o.visualization,o.data_range,o.invalid_values);
-        request["data"]={{"mode",o.visualization},{"range",mapping.mode==DataMode::id?Json::array():Json::array({mapping.minimum,mapping.maximum})},
+        request["data"]={{"mode",o.visualization},{"range",mapping.mode==DataMode::id || mapping.mode==DataMode::cryptomatte?Json::array():Json::array({mapping.minimum,mapping.maximum})},
             {"invalid_values",o.invalid_values},{"policy","v1"}};
     }
     return request;

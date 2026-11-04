@@ -1,0 +1,105 @@
+#include "cryptomatte.h"
+#include <OpenImageIO/half.h>
+#include <chrono>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <limits>
+#include <stdexcept>
+
+namespace fs=std::filesystem;
+using thumbgen::Json;
+using namespace thumbgen::detail;
+static void require(bool value,const std::string& message){if(!value)throw std::runtime_error(message);}
+static constexpr std::uint32_t bunny=0x13851a76U,other=0x42c9679fU;
+static void metadata(OIIO::ImageSpec& spec,const std::string& prefix="cryptomatte/test123") {
+    spec.attribute(prefix+"/name","Object");spec.attribute(prefix+"/hash","MurmurHash3_32");spec.attribute(prefix+"/conversion","uint32_to_float32");
+    spec.attribute("DateTime","2000:01:01 00:00:00");
+}
+static Json fixtures(const fs::path& root) {
+    require(fs::create_directory(root),"fixture directory already exists");Json result;
+    for(const std::string kind:{"valid","bad","half_coverage","half_id","odd","gap","no_metadata","bad_hash","sidecar","legacy","many","window","oriented","missing_last","identity"}) {
+        int width=kind=="many"?128:kind=="identity"?1280:kind=="window"?2:kind=="oriented"?2:8;
+        int height=kind=="many"?128:kind=="window"?2:kind=="oriented" || kind=="identity"?3:1;
+        int layers=kind=="many"?10:3;
+        std::vector<std::string> names{"Object.R","Object.G","Object.B"};std::vector<int> roles(3,-1);
+        for(int layer=0;layer<layers;++layer) {
+            auto name="Object"+(layer==1 && kind=="gap"?std::string("03"):layer<10?"0"+std::to_string(layer):std::to_string(layer));
+            for(int c=0;c<((kind=="odd" || kind=="missing_last") && layer==layers-1?kind=="odd"?2:3:4);++c) {
+                names.push_back(name+"."+"RGBA"[c]);roles.push_back(layer*4+c);
+            }
+        }
+        OIIO::ImageSpec spec(width,height,int(names.size()),OIIO::TypeDesc::FLOAT);spec.channelnames=names;
+        metadata(spec,kind=="legacy"?"exr/cryptomatte/test123":"cryptomatte/test123");
+        if(kind=="no_metadata")for(const char* field:{"name","hash","conversion"})spec.erase_attribute(std::string("cryptomatte/test123/")+field);
+        if(kind=="bad_hash")spec.attribute("cryptomatte/test123/hash","wrong_hash");
+        if(kind=="sidecar")spec.attribute("cryptomatte/test123/manif_file","missing.json");
+        else spec.attribute("cryptomatte/test123/manifest","this optional manifest deliberately is not JSON");
+        if(kind=="window"){spec.x=-1;spec.y=5;spec.full_x=-3;spec.full_y=4;spec.full_width=6;spec.full_height=4;}
+        if(kind=="oriented")spec.attribute("Orientation",6);
+        spec.channelformats.resize(names.size(),OIIO::TypeDesc::FLOAT);
+        for(std::size_t c=3;c<roles.size();++c)if((kind=="half_coverage" && roles[c]%2==1) || (kind=="half_id" && roles[c]%2==0))spec.channelformats[c]=OIIO::TypeDesc::HALF;
+        std::vector<unsigned char> data(std::size_t(width)*height*spec.pixel_bytes(true));
+        for(int p=0;p<width*height;++p) {
+            std::uint32_t ids[6]={};float weights[6]={};
+            if(kind=="many" || kind=="window"){ids[0]=bunny;weights[0]=1;}
+            else if(kind=="oriented"){ids[0]=p%2?other:bunny;weights[0]=1;}
+            else switch(p%8) {
+                case 0:ids[0]=bunny;weights[0]=1;break;
+                case 1:ids[0]=bunny;weights[0]=0.25f;ids[1]=other;weights[1]=0.75f;break;
+                case 2:ids[0]=ids[2]=bunny;weights[0]=0.25f;weights[2]=0.75f;break;
+                case 3:weights[0]=1;break;
+                case 4:ids[0]=0xf19e1d35U;weights[0]=0.5f;break;
+                case 5:ids[0]=0x3f800001U;ids[1]=0x3f800002U;weights[0]=weights[1]=0.5f;break;
+                case 6:ids[0]=bunny;ids[1]=other;weights[0]=1.25f;weights[1]=-0.25f;break;
+                default:ids[0]=0x7fc00001U;weights[0]=0;ids[1]=other;weights[1]=1;break;
+            }
+            if(kind=="bad" && p==1){ids[0]=0x7fc00001U;weights[0]=0.25f;}
+            if(kind=="bad" && p==2){weights[2]=std::numeric_limits<float>::infinity();}
+            auto* target=data.data()+std::size_t(p)*spec.pixel_bytes(true);
+            for(std::size_t c=0;c<names.size();++c) {
+                int role=roles[c];std::uint32_t bits=0;float weight=0;
+                if(role>=0 && role/2<6){bits=ids[role/2];weight=weights[role/2];}
+                if(spec.channelformat(int(c))==OIIO::TypeDesc::HALF){half h=role%2==1?half(weight):half(0);std::memcpy(target,&h,2);target+=2;}
+                else {if(role>=0 && role%2==1)std::memcpy(target,&weight,4);else std::memcpy(target,&bits,4);target+=4;}
+            }
+        }
+        auto path=root/(kind+".exr");auto output=OIIO::ImageOutput::create(path.u8string());require(bool(output),OIIO::geterror());
+        require(output->open(path.u8string(),spec),output->geterror());require(output->write_image(OIIO::TypeDesc::UNKNOWN,data.data()),output->geterror());require(output->close(),output->geterror());
+        result[kind]=path.u8string();
+    }
+    auto path=root/"split.exr";OIIO::ImageSpec parts[2]={OIIO::ImageSpec(2,2,4,OIIO::TypeDesc::FLOAT),OIIO::ImageSpec(2,2,4,OIIO::TypeDesc::FLOAT)};
+    for(int i=0;i<2;++i){metadata(parts[i]);parts[i].attribute("oiio:subimagename",i?"right":"left");for(int c=0;c<4;++c)parts[i].channelnames[c]="Object0"+std::to_string(i)+"."+"RGBA"[c];}
+    auto output=OIIO::ImageOutput::create(path.u8string());require(bool(output) && output->open(path.u8string(),2,parts),"open split fixture");float pixels[16]={};
+    require(output->write_image(OIIO::TypeDesc::FLOAT,pixels),output->geterror());require(output->open(path.u8string(),parts[1],OIIO::ImageOutput::AppendSubimage),output->geterror());
+    require(output->write_image(OIIO::TypeDesc::FLOAT,pixels),output->geterror());require(output->close(),output->geterror());result["split"]=path.u8string();return result;
+}
+static int run(const std::vector<fs::path>& args) {
+    try {
+        if(args.size()==3 && args[1]=="--fixtures"){std::cout<<fixtures(args[2]).dump()<<'\n';return 0;}
+        auto root=fs::temp_directory_path()/("thumbgen-crypto-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));auto files=fixtures(root);
+        struct Cleanup{fs::path root;~Cleanup(){std::error_code ec;if(root.parent_path()==fs::temp_directory_path())fs::remove_all(root,ec);}}cleanup{root};
+        auto input=OIIO::ImageInput::open(files["valid"].get<std::string>());require(bool(input),OIIO::geterror());
+        auto layout=crypto_layout(input->spec(),"Object");require(layout && layout->layers.size()==3 && layout->channels.size()==12,"metadata/rank discovery");
+        auto image=read_crypto_image(*input,input->spec(),0,*layout,InvalidData::error,1024*1024,3);require(input->close(),"close input");
+        require(image.statistics.invalid_pixels==0,"valid signed/overshoot/unused-ID values rejected");
+        float p0[4],p2[4],background[4];image.image.getpixel(0,0,p0,4);image.image.getpixel(2,0,p2,4);image.image.getpixel(3,0,background,4);
+        require(std::memcmp(p0,p2,sizeof(p0))==0 && p0[3]==1 && background[0]==0 && background[3]==0,"rank accumulation/background semantics");
+        thumbgen::Engine engine;auto job=[&](const char* name,const char* suffix){thumbgen::Job j;j.id=suffix;j.input=files[name];j.options.visualization="cryptomatte";j.options.channels="Object";j.outputs.push_back({(root/(std::string(suffix)+".png")).u8string(),"png",128,128,90});return j;};
+        auto first=job("bad","bad-error");first.sequence_id="crypto-sequence";first.options.invalid_values="error";auto result=engine.convert(first);
+        require(result["error"]["code"]=="data_invalid_value" && result["visualization"]["invalid_pixels"]==2 && !fs::exists(first.outputs[0].path),result.dump());
+        auto lock=engine.sequence_lock(first.sequence_id);thumbgen::Engine replacement;replacement.restore_sequence_lock(first.sequence_id,lock);
+        auto second=job("valid","restored");second.sequence_id=first.sequence_id;second.options.invalid_values="error";result=replacement.convert(second);
+        require(result["ok"].get<bool>() && result["selection"]["lock_status"]=="reused",result.dump());
+        auto many=job("many","bounded");many.options.max_decode_mib=1;result=engine.convert(many);require(result["ok"].get<bool>() && result["decoded_mib"]==0.25 && result["cryptomatte"]["ranks"]==20,result.dump());
+        auto split=job("split","incomplete");split.options.part_name="left";result=engine.convert(split);require(result["error"]["code"]=="cryptomatte_layout_unsupported" && !fs::exists(split.outputs[0].path),result.dump());
+        auto plain=job("valid","default");plain.options.visualization="colour";plain.options.channels="";result=engine.convert(plain);require(result["error"]["code"]=="visualization_required",result.dump());
+        std::cout<<"Cryptomatte opaque IDs, streamed ranks, coverage overview, metadata and stable sequence passed\n";return 0;
+    }catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
+}
+#ifdef _WIN32
+int wmain(int count,wchar_t** values){std::vector<fs::path> args;for(int i=0;i<count;++i)args.emplace_back(values[i]);return run(args);}
+#else
+int main(int count,char** values){std::vector<fs::path> args;for(int i=0;i<count;++i)args.emplace_back(values[i]);return run(args);}
+#endif

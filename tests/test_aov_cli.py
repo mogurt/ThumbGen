@@ -84,7 +84,7 @@ class Aov(unittest.TestCase):
         if sequence is not None:job['sequence_id']=sequence
         return job
     def test_capabilities(self):
-        self.assertEqual(self.invoke('capabilities')[0]['visualization_modes'],['colour','depth','normal','vector','id','id_rgb'])
+        self.assertEqual(self.invoke('capabilities')[0]['visualization_modes'],['colour','depth','normal','vector','id','id_rgb','cryptomatte'])
     def test_depth_native_and_no_ocio(self):
         result=self.convert('depth16.tif','depth','GRAY','--data-range','0,10')[0]
         self.assertEqual(result['colour']['config_basis'],'none');self.assertEqual(result['colour']['basis'],'data_visualization')

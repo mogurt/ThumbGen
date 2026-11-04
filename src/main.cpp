@@ -76,7 +76,7 @@ static void usage() {
         "  --input-space SPACE, --ocio-config FILE, --display NAME --view NAME\n"
         "  --channels RGB|GRAY|GROUP, --part N or --part-name NAME\n"
         "  --selection-policy primary|root_rgb, --threads N, --max-decode-mib N\n"
-        "  --visualize colour|depth|normal|vector|id|id_rgb, --data-range MIN,MAX, --invalid-values black|magenta|error\n"
+        "  --visualize colour|depth|normal|vector|id|id_rgb|cryptomatte, --data-range MIN,MAX, --invalid-values black|magenta|error\n"
         "  --existing error|skip|replace (default: error)\n"
         "  --workers N, --thread-budget N, --memory-budget-mib N, --startup-timeout-ms N, --task-timeout-ms N\n"
         "Defaults: balanced, JPEG Q90, fit 1024x1024 without upscaling, black background.\n"

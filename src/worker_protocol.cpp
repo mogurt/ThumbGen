@@ -77,12 +77,12 @@ Job job_from_wire(const Json& value) {
     o.channels=text(options["channels"]);o.part_name=text(options["part_name"]);o.selection_policy=text(options["selection_policy"]);member(o.selection_policy,{"primary","root_rgb"});
     o.part=integer(options["part"],-1,std::numeric_limits<int>::max());require(o.part<0 || o.part_name.empty(),"conflicting part selectors");
     o.threads=integer(options["threads"],1,256);o.max_decode_mib=size_t(integer(options["max_decode_mib"],1,16384));
-    o.visualization=text(options["visualization"]);member(o.visualization,{"colour","depth","normal","vector","id","id_rgb"});
+    o.visualization=text(options["visualization"]);member(o.visualization,{"colour","depth","normal","vector","id","id_rgb","cryptomatte"});
     o.invalid_values=text(options["invalid_values"]);member(o.invalid_values,{"black","magenta","error"});
     require(options["data_range"].is_array() && (options["data_range"].empty() || options["data_range"].size()==2),"invalid worker data range");
     for(const auto& endpoint:options["data_range"]) {require(endpoint.is_number() && std::isfinite(endpoint.get<double>()),"invalid worker range number");o.data_range.push_back(endpoint.get<double>());}
     if(!o.data_range.empty())require(o.data_range[1]>o.data_range[0] && std::isfinite(o.data_range[1]-o.data_range[0]),"invalid worker range extent");
-    if(o.visualization=="colour" || o.visualization=="id")require(o.data_range.empty(),"range not supported by visualization");
+    if(o.visualization=="colour" || o.visualization=="id" || o.visualization=="cryptomatte")require(o.data_range.empty(),"range not supported by visualization");
     if(o.visualization=="depth" || o.visualization=="vector" || o.visualization=="id_rgb")require(o.data_range.size()==2,"missing fixed data range");
     if(o.visualization=="colour")require(o.invalid_values=="magenta","data value policy without data mode");
     else require(!o.channels.empty() && o.input_space=="auto" && o.ocio_config.empty() && o.display.empty() && o.view.empty(),"invalid data selection/colour options");

@@ -60,7 +60,7 @@
         "channels": {"type": "string"},
         "part_name": {"type": "string", "minLength": 1},
         "selection_policy": {"enum": ["primary", "root_rgb"]},
-        "visualization": {"enum": ["colour", "depth", "normal", "vector", "id", "id_rgb"]},
+        "visualization": {"enum": ["colour", "depth", "normal", "vector", "id", "id_rgb", "cryptomatte"]},
         "data_range": {"type": "array", "items": {"type": "number"}, "maxItems": 2, "anyOf": [{"maxItems": 0}, {"minItems": 2}]},
         "invalid_values": {"enum": ["black", "magenta", "error"]},
         "part": {"type": "integer", "minimum": -1, "maximum": 2147483647},

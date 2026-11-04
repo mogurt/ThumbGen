@@ -125,7 +125,9 @@
             "visualization_layout_unsupported",
             "cryptomatte_requires_visualization",
             "data_type_unsupported",
-            "data_invalid_value"
+            "data_invalid_value",
+            "cryptomatte_metadata_invalid",
+            "cryptomatte_layout_unsupported"
           ]
         },
         "message": {
@@ -623,7 +625,8 @@
                 "normal",
                 "vector",
                 "id",
-                "id_rgb"
+                "id_rgb",
+                "cryptomatte"
               ]
             },
             "policy": {
@@ -668,6 +671,9 @@
             "invalid_pixels",
             "clipped_components"
           ]
+        },
+        "cryptomatte": {
+          "$ref": "#/$defs/cryptomatte"
         }
       },
       "required": [
@@ -1094,6 +1100,14 @@
                 "items": {
                   "$ref": "#/$defs/candidate"
                 }
+              },
+              "cryptomatte_families": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "uniqueItems": true
               }
             },
             "required": [
@@ -1295,7 +1309,8 @@
               "normal",
               "vector",
               "id",
-              "id_rgb"
+              "id_rgb",
+              "cryptomatte"
             ]
           },
           "uniqueItems": true
@@ -1541,6 +1556,68 @@
             ]
           }
         }
+      ]
+    },
+    "cryptomatte": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "metadata_key": {
+          "type": "string",
+          "minLength": 1
+        },
+        "hash": {
+          "const": "MurmurHash3_32"
+        },
+        "conversion": {
+          "const": "uint32_to_float32"
+        },
+        "layers": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "ranks": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "manifest": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "embedded_attribute": {
+              "type": "boolean"
+            },
+            "sidecar_attribute": {
+              "type": "boolean"
+            },
+            "used": {
+              "const": false
+            }
+          },
+          "required": [
+            "embedded_attribute",
+            "sidecar_attribute",
+            "used"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "metadata_key",
+        "hash",
+        "conversion",
+        "layers",
+        "ranks",
+        "manifest"
       ]
     }
   }

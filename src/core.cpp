@@ -5,6 +5,7 @@
 #include "quantize.h"
 #include "data_image.h"
 #include "selected_input.h"
+#include "cryptomatte.h"
 #include <OpenImageIO/color.h>
 #include <OpenImageIO/imagebuf.h>
 #include <OpenImageIO/imagebufalgo.h>
@@ -21,6 +22,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <limits>
+#include <set>
 #include <map>
 #include <stdexcept>
 #ifdef _WIN32
@@ -150,7 +152,7 @@ void Engine::restore_sequence_lock(const std::string& id,const Json& lock) {
     valid(!key["group"].get<std::string>().empty() && (data?key["kind"]=="data":(key["kind"]=="colour" || key["kind"]=="grey")));
     valid(named?!key["part_name"].get<std::string>().empty():key["part_name"]=="");
     if(named)valid(!key.contains("part"));else valid(key.contains("part") && key["part"].is_number_integer() && key["part"]==0);
-    valid(key.contains("channels") && key["channels"].is_array() && (data?(key["channels"].size()>=1 && key["channels"].size()<=3):(key["channels"].size()==3 || key["channels"].size()==4)));
+    valid(key.contains("channels") && key["channels"].is_array() && (data?key["channels"].size()>=1:(key["channels"].size()==3 || key["channels"].size()==4)));
     for(const auto& channel:key["channels"])valid(channel.is_string() && !channel.get<std::string>().empty());
     valid(request.is_object() && request.size()==(data?5u:4u));
     if(data) {
@@ -160,7 +162,7 @@ void Engine::restore_sequence_lock(const std::string& id,const Json& lock) {
         for(const auto& number:options["range"])valid(number.is_number());
         auto mapping=detail::data_mapping(options["mode"].get<std::string>(),options["range"].get<std::vector<double>>(),options["invalid_values"].get<std::string>());
         valid(mapping.mode!=detail::DataMode::colour);
-        auto count=key["channels"].size();valid(mapping.mode==detail::DataMode::normal || mapping.mode==detail::DataMode::id_rgb?count==3:mapping.mode==detail::DataMode::vector?(count==2 || count==3):count==1);
+        auto count=key["channels"].size();valid(mapping.mode==detail::DataMode::cryptomatte?(count>=2 && count%2==0):mapping.mode==detail::DataMode::normal || mapping.mode==detail::DataMode::id_rgb?count==3:mapping.mode==detail::DataMode::vector?(count==2 || count==3):count==1);
     }
     for(const char* field:{"part_name","channels","strategy"})valid(request.contains(field) && request[field].is_string());
     valid(request["strategy"]=="primary" || request["strategy"]=="root_rgb");
@@ -188,12 +190,12 @@ Json Engine::capabilities() {
         {"cpu",{{"runtime_simd",OIIO::get_string_attribute("hw:simd")},{"oiio_simd",OIIO::get_string_attribute("build:simd")}}},
         {"selection_policy","v2"},
         {"quantization","unorm8-half-up-v1"},
-        {"visualization_modes",{"colour","depth","normal","vector","id","id_rgb"}},
+        {"visualization_modes",{"colour","depth","normal","vector","id","id_rgb","cryptomatte"}},
         {"libraries",OIIO::get_string_attribute("library_list")},
         {"output_formats",output_formats},{"presets",{"fast","balanced","quality"}},
         {"defaults",{{"format","jpeg"},{"quality",90},{"size",{1024,1024}},
                      {"background","black"},{"preset","balanced"}}},
-        {"limitations",{"no Deep flattening or Cryptomatte visualization yet",
+        {"limitations",{"no Deep flattening; Cryptomatte overview requires a complete family within one part",
             "batch defaults to one worker; explicit execution budgets enable a bounded process pool",
             "max_decode_mib limits decoded source buffer, not process RSS"}}};
 }
@@ -206,6 +208,7 @@ Json Engine::inspect(const std::string& input) {
     OIIO::ImageSpec spec;
     for(int part=0;in->seek_subimage(part,0,spec);++part) {
         auto value=spec_json(spec,part);value["candidates"]=candidates_json(spec,part);
+        const auto crypto=detail::crypto_names(spec);if(!crypto.empty())value["cryptomatte_families"]=crypto;
         result["parts"].push_back(value);
     }
     if(result["parts"].empty()) {
@@ -230,6 +233,7 @@ Json Engine::convert(const Job& job) {
         catch(const std::invalid_argument& error){throw Failure("visualization_options_invalid",error.what());}
         const bool data=mapping.mode!=detail::DataMode::colour;
         const bool categorical=mapping.mode==detail::DataMode::id || mapping.mode==detail::DataMode::id_rgb;
+        const bool crypto=mapping.mode==detail::DataMode::cryptomatte;
         if(data && (job.options.channels.empty() || job.options.input_space!="auto" || !job.options.ocio_config.empty() || !job.options.display.empty() || !job.options.view.empty()))
             throw Failure("visualization_options_invalid","data visualization needs explicit channels and does not accept colour transform options");
         OIIO::attribute("threads",job.options.threads);
@@ -269,16 +273,32 @@ Json Engine::convert(const Job& job) {
         struct Choice {int part;OIIO::ImageSpec spec;detail::Candidate candidate;};
         std::vector<Choice> choices,all_choices;
         int part_count=0;
-        bool part_exists=false,has_deep=false,has_data=false,matched_group=false;
+        bool part_exists=false,has_deep=false,has_data=false,matched_group=false,crypto_metadata_seen=false;
+        std::set<std::string> crypto_rank_groups;
         for(int p=0;;++p) {
             OIIO::ImageSpec candidate;
             if(!in->seek_subimage(p,0,candidate))break;
             ++part_count;
             auto groups=detail::classify(candidate);
+            if(crypto) {
+                const std::vector<std::string> family{job.options.channels};
+                auto record=[&](const std::string& group){if(group!=job.options.channels && detail::crypto_group(family,group))crypto_rank_groups.insert(group);};
+                for(const auto& channel:candidate.channelnames){auto dot=channel.rfind('.');if(dot!=std::string::npos)record(channel.substr(0,dot));}
+                record(std::string(candidate.get_string_attribute("oiio:subimagename")));
+            }
             for(const auto& group:groups)r["selection"]["candidates"].push_back(detail::candidate_json(candidate,group,p));
             if(job.options.part>=0 && p!=job.options.part)continue;
             if(!job.options.part_name.empty() && candidate.get_string_attribute("oiio:subimagename")!=job.options.part_name)continue;
             part_exists=true;has_deep=has_deep || candidate.deep;
+            if(crypto) {
+                const auto names=detail::crypto_names(candidate);
+                crypto_metadata_seen=crypto_metadata_seen || std::find(names.begin(),names.end(),job.options.channels)!=names.end();
+                if(auto layout=detail::crypto_layout(candidate,job.options.channels)) {
+                    detail::Candidate group{job.options.channels,"data","explicit Cryptomatte coverage overview",layout->channels};
+                    all_choices.push_back({p,candidate,group});choices.push_back({p,candidate,std::move(group)});
+                }
+                continue;
+            }
             std::vector<detail::Candidate> eligible;
             for(const auto& group:groups) {
                 bool literal=data && std::any_of(group.channels.begin(),group.channels.end(),[&](int c){return candidate.channelnames[c]==job.options.channels;});
@@ -325,6 +345,7 @@ Json Engine::convert(const Job& job) {
         if(!part_exists)throw Failure("part_not_found","requested part does not exist");
         if(choices.empty()) {
             if(has_deep)throw Failure("deep_requires_flattening","Deep data requires flattening");
+            if(crypto)throw Failure(crypto_metadata_seen?"cryptomatte_layout_unsupported":"cryptomatte_metadata_invalid","requested Cryptomatte family requires metadata and complete same-part rank layers");
             if(has_data)throw Failure("visualization_required","data AOV requires dedicated visualization; colour selection cannot override it");
             if(!job.options.channels.empty() && !matched_group)throw Failure("channels_not_found","requested channel group does not exist");
             throw Failure("ambiguous_channels","no recognized colour or luminance layout; inspect candidates");
@@ -338,6 +359,13 @@ Json Engine::convert(const Job& job) {
         r["selection"]["chosen"]=detail::candidate_json(spec,chosen.candidate,part);
         if(spec.width<1 || spec.height<1 || spec.depth!=1 || spec.full_width<1 || spec.full_height<1)
             throw Failure("invalid_dimensions","unsupported image dimensions");
+        auto crypto_layout=crypto?detail::crypto_layout(spec,job.options.channels):std::optional<detail::CryptoLayout>{};
+        if(crypto_layout) {
+            std::set<std::string> contained;for(const auto& layer:crypto_layout->layers)contained.insert(layer.name);
+            if(!std::includes(contained.begin(),contained.end(),crypto_rank_groups.begin(),crypto_rank_groups.end()))
+                throw Failure("cryptomatte_layout_unsupported","Cryptomatte ranks span parts; incomplete same-part preview is refused");
+        }
+        if(crypto_layout)r["cryptomatte"]=crypto_layout->info();
         if(!job.sequence_id.empty() && pin==impl_->sequences.end()) {
             bool named=!spec.get_string_attribute("oiio:subimagename").empty();
             if(!named && part_count!=1)throw Failure("sequence_part_identity_required","sequence selection requires unique named parts for multipart files");
@@ -360,7 +388,8 @@ Json Engine::convert(const Job& job) {
             for(const auto& output:job.outputs)r["outputs"].push_back({{"path",output.path},{"status","skipped"},{"reason","output_exists"},{"existing_policy","skip"}});
             r["status"]="skipped";r["ok"]=true;r["timings_ms"]["total"]=ms(started);return r;
         }
-        const auto input_plan=detail::channel_plan(spec,channels,data);
+        auto input_plan=detail::channel_plan(spec,crypto?crypto_layout->layers.front().channels:channels,data);
+        if(crypto)input_plan.pixel_bytes=detail::crypto_source_pixel_bytes(spec,*crypto_layout);
         if(impl_->control.planned) {
             auto span=std::minmax_element(channels.begin(),channels.end());
             int display_width=spec.full_width,display_height=spec.full_height;
@@ -435,7 +464,7 @@ Json Engine::convert(const Job& job) {
         } else {
             r["colour"]={{"input_space","data"},{"input_requested",job.options.visualization},{"basis","data_visualization"},
                 {"working_space","display-referred"},{"output_space","sRGB"},{"ocio_config",""},{"config_basis","none"},{"display",""},{"view",""}};
-            r["visualization"]={{"mode",job.options.visualization},{"policy","v1"},{"range",mapping.mode==detail::DataMode::id?Json::array():Json::array({mapping.minimum,mapping.maximum})},
+            r["visualization"]={{"mode",job.options.visualization},{"policy","v1"},{"range",mapping.mode==detail::DataMode::id || crypto?Json::array():Json::array({mapping.minimum,mapping.maximum})},
                 {"invalid_values",job.options.invalid_values},{"invalid_pixels",0},{"clipped_components",0}};
         }
         OIIO::ImageBuf working;
@@ -447,7 +476,8 @@ Json Engine::convert(const Job& job) {
         if(data) {
             stage="visualization";
             try {
-                data_image=detail::read_data_image(*in,spec,part,channels,mapping,job.options.max_decode_mib*1024ULL*1024ULL,job.options.threads);
+                data_image=crypto?detail::read_crypto_image(*in,spec,part,*crypto_layout,mapping.invalid,job.options.max_decode_mib*1024ULL*1024ULL,job.options.threads):
+                    detail::read_data_image(*in,spec,part,channels,mapping,job.options.max_decode_mib*1024ULL*1024ULL,job.options.threads);
                 working=std::move(data_image.image);order={0,1,2,3};
                 r["decoded_mib"]=double(data_image.decoded_bytes)/1048576;
                 r["timings_ms"]["decode"]=data_image.decode_ms;r["timings_ms"]["visualization"]=data_image.mapping_ms;
@@ -547,7 +577,9 @@ Json Engine::convert(const Job& job) {
                 int w=std::max(1,int(std::lround(display_width*scale))),h=std::max(1,int(std::lround(display_height*scale)));
                 OIIO::ImageBuf preview;
                 tick=Clock::now();
-                if(categorical)
+                if(crypto && w==display_width && h==display_height)
+                    check(preview.copy(working),preview,"resize_failed");
+                else if(categorical)
                     preview=detail::categorical_preview(data_image,w,h,job.options.max_decode_mib*1024ULL*1024ULL,job.options.threads);
                 else check(iba::resize(preview,working,{{"filtername",filter}},OIIO::ROI(0,w,0,h,0,1,0,int(order.size())),job.options.threads),preview,"resize_failed");
                 result["resize_ms"]=ms(tick);tick=Clock::now();

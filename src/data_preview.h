@@ -7,7 +7,7 @@
 #include <vector>
 
 namespace thumbgen::detail {
-enum class DataMode { colour,depth,normal,vector,id,id_rgb };
+enum class DataMode { colour,depth,normal,vector,id,id_rgb,cryptomatte };
 enum class InvalidData { black,magenta,error };
 struct DataMapping {
     DataMode mode=DataMode::colour;
