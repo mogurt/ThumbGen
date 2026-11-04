@@ -8,6 +8,7 @@ import sys
 import re
 
 cache = Path(sys.argv[1]).resolve()
+tools_cache = Path(os.environ.get('THUMBGEN_LINUX_TOOLS_CACHE', cache)).resolve()
 repo = Path(os.environ.get('THUMBGEN_SOURCE_DIR', Path(__file__).resolve().parents[2])).resolve()
 build = Path(os.environ.get('THUMBGEN_PRODUCT_BUILD_DIR', cache / 'thumbgen-build')).resolve()
 stage = Path(os.environ.get('THUMBGEN_VALIDATION_DIR', repo / '.deps/linux/validation')).resolve()
@@ -46,7 +47,7 @@ for path in (repo / 'schemas').glob('*.json'):
     shutil.copy2(path, stage / 'schemas' / path.name)
 # Discover the authoritative suite from configured CTest, rather than maintaining
 # a second image-case list that can silently fall behind CMakeLists.txt.
-ctest = cache / 'tools/cmake-3.31.8-linux-x86_64/bin/ctest'
+ctest = tools_cache / 'tools/cmake-3.31.8-linux-x86_64/bin/ctest'
 suite = json.loads(subprocess.check_output(
     [str(ctest), '--test-dir', str(build), '--show-only=json-v1'], text=True))
 replacements = {str(build / name): '@BIN@/' + name for name in binaries}
@@ -55,7 +56,7 @@ replacements.update({str(repo / 'tests/test_cli.py'): '@TESTS@/test_cli.py',
                      str(repo / 'tests/test_interrupt.py'): '@TESTS@/test_interrupt.py',
                      str(repo / 'schemas'): '@SCHEMAS@',
                      str(cache / 'sdk/lib'): '@LIB@',
-                     str(cache / 'tools/python-3.11.11/bin/python3'): '@PYTHON@'})
+                     str(tools_cache / 'tools/python-3.11.11/bin/python3'): '@PYTHON@'})
 tests = []
 for test in suite['tests']:
     command = []
@@ -89,7 +90,7 @@ if not any(test['name'] == 'public_interrupt' for test in tests):
 (stage / 'tools/cmake/bin').mkdir(parents=True, exist_ok=True)
 shutil.copy2(ctest, stage / 'tools/cmake/bin/ctest')
 # Strip build-host paths from staged ELF copies using CMake's built-in editor.
-cmake = cache / 'tools/cmake-3.31.8-linux-x86_64/bin/cmake'
+cmake = tools_cache / 'tools/cmake-3.31.8-linux-x86_64/bin/cmake'
 commands = []
 for path in sorted(list((stage / 'bin').iterdir()) + list((stage / 'lib').iterdir())):
     dynamic = subprocess.check_output(['readelf', '-d', str(path)], text=True)
