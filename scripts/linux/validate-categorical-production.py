@@ -28,9 +28,19 @@ def previous_references(previous, colour_reference=None):
         if colour_reference is None:
             raise ValueError('A checks-shaped previous report requires --colour-reference-report')
         utility = module('aov_reference_utility', 'validate-aov-production.py')
-        if utility.digest(colour_reference) != previous['previous_report_sha256']:
-            raise ValueError('Colour reference is not the bound predecessor of the previous report')
-        ancestor = json.loads(colour_reference.read_text())
+        ancestor = previous
+        seen = set()
+        while 'runs' not in ancestor:
+            if len(seen) >= 16 or not {'previous_report','previous_report_sha256'}.issubset(ancestor):
+                raise ValueError('Colour reference chain is incomplete or too deep')
+            path = Path(ancestor['previous_report'])
+            expected = ancestor['previous_report_sha256']
+            if expected in seen or utility.digest(path) != expected:
+                raise ValueError('Colour reference chain checksum/cycle failure')
+            seen.add(expected)
+            ancestor = json.loads(path.read_text())
+        if utility.digest(colour_reference) != expected:
+            raise ValueError('Colour reference is not the bound ancestor of the previous report')
         baseline = next(run for run in ancestor['runs'] if run['name'] == 'd095-colour-baseline')
         return previous['sources'], previous['exe_sha256'], [baseline, dict(name='aov-mixed', checks=previous['checks'])]
     raise ValueError('Unsupported previous production report structure')
