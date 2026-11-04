@@ -90,6 +90,8 @@ static Json candidates_json(const OIIO::ImageSpec& spec,int part) {
 
 struct Engine::Impl {
     Engine::Observer observer;
+    Engine::Control control;
+    bool converting=false;
     struct Pin {Json key,request;bool named;};
     std::map<std::string,Pin> sequences;
     std::map<std::string,std::unique_ptr<OIIO::ColorConfig>> configs;
@@ -105,6 +107,41 @@ struct Engine::Impl {
 };
 Engine::Engine(Observer observer) : impl_(std::make_unique<Impl>()) {impl_->observer=std::move(observer);}
 Engine::~Engine() = default;
+void Engine::set_control(Control control) {
+    if(impl_->converting)throw std::logic_error("cannot change control hooks during conversion");
+    if(bool(control.reserve)!=bool(control.commit))throw std::invalid_argument("reserve and commit hooks must be paired");
+    impl_->control=std::move(control);
+}
+Json Engine::sequence_lock(const std::string& id) const {
+    auto pin=impl_->sequences.find(id);if(pin==impl_->sequences.end())return nullptr;
+    return {{"key",pin->second.key},{"request",pin->second.request},{"named",pin->second.named}};
+}
+void Engine::restore_sequence_lock(const std::string& id,const Json& lock) {
+    if(impl_->converting)throw std::logic_error("cannot restore a sequence lock during conversion");
+    auto valid=[](bool ok){if(!ok)throw std::invalid_argument("invalid internal sequence lock");};
+    valid(!id.empty() && lock.is_object() && lock.size()==3 && lock.contains("key") && lock.contains("request") && lock.contains("named"));
+    valid(lock["named"].is_boolean());const bool named=lock["named"].get<bool>();
+    const auto& key=lock["key"];const auto& request=lock["request"];
+    valid(key.is_object() && key.size()==(named?4u:5u));
+    for(const char* field:{"part_name","group","kind"})valid(key.contains(field) && key[field].is_string());
+    valid(!key["group"].get<std::string>().empty() && (key["kind"]=="colour" || key["kind"]=="grey"));
+    valid(named?!key["part_name"].get<std::string>().empty():key["part_name"]=="");
+    if(named)valid(!key.contains("part"));else valid(key.contains("part") && key["part"].is_number_integer() && key["part"]==0);
+    valid(key.contains("channels") && key["channels"].is_array() && (key["channels"].size()==3 || key["channels"].size()==4));
+    for(const auto& channel:key["channels"])valid(channel.is_string() && !channel.get<std::string>().empty());
+    valid(request.is_object() && request.size()==4);
+    for(const char* field:{"part_name","channels","strategy"})valid(request.contains(field) && request[field].is_string());
+    valid(request["strategy"]=="primary" || request["strategy"]=="root_rgb");
+    valid(request.contains("part") && request["part"].is_number_integer());
+    auto part=request["part"].get<long double>();valid(part>=-1 && part<=std::numeric_limits<int>::max());
+    valid(part<0 || request["part_name"]=="");
+    valid(request["part_name"]=="" || request["part_name"]==key["part_name"]);
+    valid(request["channels"]=="" || request["channels"]==key["group"]);
+    valid(named || part<=0);
+    auto previous=sequence_lock(id);
+    if(!previous.is_null()) {valid(previous==lock);return;}
+    impl_->sequences.emplace(id,Impl::Pin{key,request,named});
+}
 
 Json Engine::capabilities() {
     Json output_formats=Json::array();
@@ -145,6 +182,8 @@ Json Engine::inspect(const std::string& input) {
 }
 
 Json Engine::convert(const Job& job) {
+    if(impl_->converting)throw std::logic_error("Engine conversion is not reentrant");
+    struct Active {bool& value;explicit Active(bool& v):value(v){value=true;}~Active(){value=false;}} active{impl_->converting};
     auto started=Clock::now();
     Json r{{"schema_version",1},{"type","result"},{"id",job.id},{"input",job.input},
            {"ok",false},{"status","failed"},{"outputs",Json::array()},{"warnings",Json::array()}};
@@ -276,6 +315,28 @@ Json Engine::convert(const Job& job) {
             for(const auto& output:job.outputs)r["outputs"].push_back({{"path",output.path},{"status","skipped"},{"reason","output_exists"},{"existing_policy","skip"}});
             r["status"]="skipped";r["ok"]=true;r["timings_ms"]["total"]=ms(started);return r;
         }
+        if(impl_->control.planned) {
+            auto span=std::minmax_element(channels.begin(),channels.end());
+            int display_width=spec.full_width,display_height=spec.full_height;
+            auto orientation=spec.get_int_attribute("Orientation",1);
+            if(orientation>=5 && orientation<=8)std::swap(display_width,display_height);
+            int largest_w=1,largest_h=1;std::uint64_t largest_pixels=0;
+            for(const auto& out:job.outputs) {
+                double scale=std::min({double(out.width)/display_width,double(out.height)/display_height,1.0});
+                int w=std::max(1,int(std::lround(display_width*scale))),h=std::max(1,int(std::lround(display_height*scale)));
+                auto pixels=std::uint64_t(w)*std::uint64_t(h);
+                if(pixels>largest_pixels){largest_pixels=pixels;largest_w=w;largest_h=h;}
+            }
+            Json plan{{"base",r},{"source_stamp",{{"identity",stamp.identity},{"size",stamp.size},
+                {"modified_seconds",stamp.modified_seconds},{"modified_fraction",stamp.modified_fraction}}},
+                {"footprint",{{"data_width",spec.width},{"data_height",spec.height},
+                    {"display_width",display_width},{"display_height",display_height},
+                    {"channel_span",*span.second-*span.first+1},{"selected_channels",channels.size()},
+                    {"output_width",largest_w},{"output_height",largest_h},{"threads",job.options.threads}}},
+                {"sequence_pin",sequence_lock(job.sequence_id)}};
+            impl_->control.planned(job,plan);
+            verify_source();
+        }
         stage="colour";
         std::string config_name=job.options.ocio_config,config_basis="explicit";
         if(config_name.empty()) {
@@ -383,7 +444,8 @@ Json Engine::convert(const Job& job) {
         r["timings_ms"]["working_colour"]=ms(tick);
         const std::string filter=job.options.preset=="fast"?"box":job.options.preset=="quality"?"lanczos3":"triangle";
         r["preset"]=job.options.preset;r["filter"]=filter;
-        for(const auto& out:job.outputs) {
+        for(size_t output_index=0;output_index<job.outputs.size();++output_index) {
+            const auto& out=job.outputs[output_index];
             Json result{{"path",out.path},{"status","failed"},{"existing_policy",out.existing}};
             std::unique_ptr<detail::TemporaryOutput> temp;
             try {
@@ -427,15 +489,39 @@ Json Engine::convert(const Job& job) {
                 }
                 preview.specmod().attribute("CompressionQuality",out.quality);
                 preview.specmod().attribute("oiio:ColorSpace",job.options.display.empty()?"sRGB":"display-referred");
-                temp=std::make_unique<detail::TemporaryOutput>(dest,out.format);
-                write_preview(preview,temp->path());
+                fs::path temporary;
+                if(impl_->control.reserve) {
+                    temporary=fs::u8path(impl_->control.reserve(job,output_index));
+                    if(temporary.empty() || !temporary.is_absolute())throw Failure("temporary_create_failed","controller must reserve an absolute temporary path");
+                    auto a=fs::weakly_canonical(temporary),b=fs::weakly_canonical(dest);
+#ifdef _WIN32
+                    bool same=CompareStringOrdinal(a.c_str(),int(a.native().size()),b.c_str(),int(b.native().size()),TRUE)==CSTR_EQUAL;
+#else
+                    bool same=a==b;
+#endif
+                    if(same)throw Failure("temporary_create_failed","controller temporary path aliases the final output");
+                    if(detail::existing_target(temporary,source_path))throw Failure("output_exists","reserved temporary path already exists");
+                } else {
+                    temp=std::make_unique<detail::TemporaryOutput>(dest,out.format);temporary=temp->path();
+                }
+                write_preview(preview,temporary);
                 if(impl_->observer)impl_->observer("encoded",job);
                 verify_source();
-                if(temp->commit(dest,source_path,out.existing)) {
+                bool committed;
+                if(impl_->control.commit) {
+                    auto encoded=result;encoded["status"]="success";encoded["width"]=w;encoded["height"]=h;
+                    encoded["format"]=out.format;encoded["finish_ms"]=ms(tick);
+                    committed=impl_->control.commit(job,output_index,temporary.u8string(),{{"base",r},{"output",encoded}});
+                    if(!committed && out.existing!="skip")throw Failure("commit_failed","controller returned skip for a non-skip policy");
+                } else committed=temp->commit(dest,source_path,out.existing);
+                if(committed) {
                     result["status"]="success";result["width"]=w;result["height"]=h;
                     result["finish_ms"]=ms(tick);result["format"]=out.format;
                 } else {result["status"]="skipped";result["reason"]="output_exists";}
-            }catch(const Failure& e){result["error"]={{"code",e.code},{"message",e.what()},{"retryable",e.retryable}};}
+            }catch(const Failure& e){
+                if(e.code=="source_changed")r["source_check"]["stable"]=false;
+                result["error"]={{"code",e.code},{"message",e.what()},{"retryable",e.retryable}};
+            }
              catch(const fs::filesystem_error& e){result["error"]={{"code","output_failed"},{"message",detail::error_message(e.code())}};}
              catch(const std::exception& e){result["error"]={{"code","output_failed"},{"message",e.what()}};}
             if(temp) {

@@ -28,10 +28,22 @@ class Engine {
 public:
     // Internal phase observer; used by native integration tests and future scheduling.
     using Observer = std::function<void(const std::string&,const Job&)>;
+    struct Control {
+        // Called after metadata selection, before colour/pixel allocation.
+        std::function<void(const Job&,const Json&)> planned;
+        // The controller owns the returned absolute, nonexistent temporary path.
+        std::function<std::string(const Job&,size_t)> reserve;
+        // Called only after the encoded stream is closed. False means skip.
+        std::function<bool(const Job&,size_t,const std::string&,const Json&)> commit;
+    };
     explicit Engine(Observer observer = {});
     ~Engine();
     Json inspect(const std::string& input);
     Json convert(const Job& job);
+    // Set/import only while idle. reserve and commit must be supplied together.
+    void set_control(Control control);
+    Json sequence_lock(const std::string& sequence_id) const;
+    void restore_sequence_lock(const std::string& sequence_id,const Json& lock);
     static Json capabilities();
 private:
     struct Impl;
