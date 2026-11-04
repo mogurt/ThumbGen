@@ -25,6 +25,13 @@ int main() {
         auto doubles=ImageFootprint{8,8,8,8,3,4,8,8,4,8};
         auto floats=doubles;floats.source_sample_bytes=4;
         require(estimate_memory(doubles).source==2*estimate_memory(floats).source,"native DOUBLE source bytes missing");
+        auto compact_source=ImageFootprint{1024,1024,1024,1024,64,4,256,256,4,4,false,16};
+        auto full=compact_source;full.source_pixel_bytes=0;
+        require(estimate_memory(compact_source).source==16ULL*1024*1024 && estimate_memory(full).source==256ULL*1024*1024,"compact colour source still includes unrelated channels");
+        auto mixed=compact_source;mixed.native_categorical=true;mixed.source_pixel_bytes=10;
+        require(estimate_memory(mixed).source==10ULL*1024*1024,"mixed native source rounded to widest channel");
+        rejects<std::invalid_argument>([&]{auto invalid=compact_source;invalid.source_pixel_bytes=3;estimate_memory(invalid);});
+        rejects<std::invalid_argument>([&]{auto invalid=compact_source;invalid.source_pixel_bytes=33;estimate_memory(invalid);});
         auto ids=ImageFootprint{8192,8192,16384,16384,1,4,1024,1024,4,4,true};
         auto legacy=ids;legacy.native_categorical=false;
         require(estimate_memory(ids).source==256ULL*1024*1024 && estimate_memory(ids).source==estimate_memory(legacy).source,"categorical native source omitted");

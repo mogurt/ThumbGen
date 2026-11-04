@@ -1,5 +1,6 @@
 #include "data_image.h"
 #include "files.h"
+#include "selected_input.h"
 #include <OpenImageIO/half.h>
 #include <OpenImageIO/parallel.h>
 #include <algorithm>
@@ -43,30 +44,17 @@ bool valid_integer_ids(OIIO::TypeDesc type) noexcept {
     }
 }
 }
-std::size_t data_sample_bytes(const OIIO::ImageSpec& spec,const std::vector<int>& channels) {
-    if(channels.empty() || std::any_of(channels.begin(),channels.end(),[&](int c){return c<0 || c>=spec.nchannels;}))throw FileFailure("visualization_layout_unsupported","invalid data channels");
-    auto span=std::minmax_element(channels.begin(),channels.end());std::size_t maximum=1;
-    for(int c=*span.first;c<=*span.second;++c) {
-        auto type=spec.channelformat(c);unsigned char zero[8]={};
-        if(type.size()>sizeof(zero) || type.aggregate!=OIIO::TypeDesc::SCALAR || type.arraylen)throw FileFailure("data_type_unsupported","unsupported native data channel type");
-        sample(zero,type);maximum=std::max(maximum,type.size());
-    }
-    return maximum;
-}
 DataImage read_data_image(OIIO::ImageInput& input,const OIIO::ImageSpec& spec,int part,
     const std::vector<int>& channels,const DataMapping& mapping,std::size_t limit,int threads) {
-    data_sample_bytes(spec,channels);
     if(spec.width<1 || spec.height<1 || spec.depth!=1)throw FileFailure("invalid_dimensions","unsupported data image dimensions");
-    auto span=std::minmax_element(channels.begin(),channels.end());const int first=*span.first,end=*span.second+1;
-    std::vector<std::size_t> offsets;std::size_t stride=0;
-    for(int c=first;c<end;++c){offsets.push_back(stride);stride+=spec.channelformat(c).size();}
+    const auto plan=channel_plan(spec,channels,true);const auto stride=plan.pixel_bytes;
     const auto pixels=std::size_t(spec.width)*std::size_t(spec.height);
     if(!stride || pixels>limit/stride)throw FileFailure("decode_limit_exceeded","native data source buffer exceeds limit");
     const bool categorical=mapping.mode==DataMode::id || mapping.mode==DataMode::id_rgb;
     if(!categorical && pixels>limit/(4*sizeof(float)))throw FileFailure("canvas_limit_exceeded","mapped RGBA data buffer exceeds limit");
     DataImage result;result.decoded_bytes=pixels*stride;
     auto tick=Clock::now();std::vector<unsigned char> native(result.decoded_bytes);
-    if(!input.read_image(part,0,first,end,OIIO::TypeDesc::UNKNOWN,native.data()))throw FileFailure("decode_failed",input.geterror());
+    if(!read_selected(input,spec,part,plan,true,native.data()))throw FileFailure("decode_failed",input.geterror());
     result.decode_ms=elapsed(tick);tick=Clock::now();
     float* target=nullptr;
     if(!categorical) {
@@ -76,7 +64,10 @@ DataImage read_data_image(OIIO::ImageInput& input,const OIIO::ImageSpec& spec,in
         if(!target || !result.image.contiguous())throw FileFailure("conversion_failed","cannot allocate mapped data image");
     }
     // Cache component metadata outside the per-pixel loop (mixed native types).
-    for(int c:channels){result.offsets.push_back(offsets[c-first]);result.types.push_back(spec.channelformat(c));}
+    for(int c:channels) {
+        auto index=std::size_t(std::lower_bound(plan.channels.begin(),plan.channels.end(),c)-plan.channels.begin());
+        result.offsets.push_back(plan.offsets[index]);result.strides.push_back(plan.strides[index]);result.types.push_back(spec.channelformat(c));
+    }
     std::vector<int> ordered(channels.size());std::iota(ordered.begin(),ordered.end(),0);
     map_data_double(nullptr,nullptr,0,ordered.size(),ordered,mapping); // Validate before parallel execution.
     std::atomic<std::uint64_t> invalid{0},clipped{0};std::exception_ptr failure;std::mutex mutex;
@@ -87,7 +78,7 @@ DataImage read_data_image(OIIO::ImageInput& input,const OIIO::ImageSpec& spec,in
             std::vector<double> row(std::size_t(spec.width)*channels.size());DataStats stats;
             for(auto y=begin;y<finish;++y) {
                 for(int x=0;x<spec.width;++x)for(std::size_t c=0;c<channels.size();++c)
-                    row[std::size_t(x)*channels.size()+c]=sample(native.data()+(std::size_t(y)*spec.width+x)*stride+result.offsets[c],result.types[c]);
+                    row[std::size_t(x)*channels.size()+c]=sample(native.data()+(std::size_t(y)*spec.width+x)*result.strides[c]+result.offsets[c],result.types[c]);
                 auto one=categorical?data_stats_double(row.data(),spec.width,channels.size(),ordered,nonthrowing):
                     map_data_double(row.data(),target+std::size_t(y)*spec.width*4,spec.width,channels.size(),ordered,nonthrowing);
                 stats.invalid_pixels+=one.invalid_pixels;stats.clipped_components+=one.clipped_components;
@@ -98,7 +89,7 @@ DataImage read_data_image(OIIO::ImageInput& input,const OIIO::ImageSpec& spec,in
     if(failure)std::rethrow_exception(failure);
     result.statistics={invalid.load(),clipped.load()};result.mapping_ms=elapsed(tick);
     if(mapping.invalid==InvalidData::error && result.statistics.invalid_pixels)throw InvalidDataValues(result.statistics);
-    if(categorical){result.native=std::move(native);result.source_spec=spec;result.stride=stride;result.mapping=mapping;}
+    if(categorical){result.native=std::move(native);result.source_spec=spec;result.mapping=mapping;}
     return result;
 }
 
@@ -153,8 +144,9 @@ OIIO::ImageBuf categorical_preview(const DataImage& image,int width,int height,s
                 // Int64 avoids overflow for negative/nonzero EXR origins.
                 auto dx=std::int64_t(sx)+spec.full_x-spec.x,dy=std::int64_t(sy)+spec.full_y-spec.y;
                 if(dx<0 || dx>=spec.width || dy<0 || dy>=spec.height){std::fill_n(target,4,0.0f);continue;}
-                auto* source=image.native.data()+(std::size_t(dy)*spec.width+std::size_t(dx))*image.stride;
-                double values[3]={};for(std::size_t c=0;c<image.offsets.size();++c)values[c]=sample(source+image.offsets[c],image.types[c]);
+                auto pixel=std::size_t(dy)*spec.width+std::size_t(dx);
+                double values[3]={};for(std::size_t c=0;c<image.offsets.size();++c)
+                    values[c]=sample(image.native.data()+pixel*image.strides[c]+image.offsets[c],image.types[c]);
                 map_data_double(values,target,1,image.offsets.size(),ordered,image.mapping);
             }
         }catch(...){std::lock_guard<std::mutex> guard(mutex);if(!failure)failure=std::current_exception();}

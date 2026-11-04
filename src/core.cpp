@@ -4,6 +4,7 @@
 #include "files.h"
 #include "quantize.h"
 #include "data_image.h"
+#include "selected_input.h"
 #include <OpenImageIO/color.h>
 #include <OpenImageIO/imagebuf.h>
 #include <OpenImageIO/imagebufalgo.h>
@@ -359,6 +360,7 @@ Json Engine::convert(const Job& job) {
             for(const auto& output:job.outputs)r["outputs"].push_back({{"path",output.path},{"status","skipped"},{"reason","output_exists"},{"existing_policy","skip"}});
             r["status"]="skipped";r["ok"]=true;r["timings_ms"]["total"]=ms(started);return r;
         }
+        const auto input_plan=detail::channel_plan(spec,channels,data);
         if(impl_->control.planned) {
             auto span=std::minmax_element(channels.begin(),channels.end());
             int display_width=spec.full_width,display_height=spec.full_height;
@@ -376,7 +378,7 @@ Json Engine::convert(const Job& job) {
                 {"footprint",{{"data_width",spec.width},{"data_height",spec.height},
                     {"display_width",display_width},{"display_height",display_height},
                     {"channel_span",*span.second-*span.first+1},{"selected_channels",data?4:channels.size()},
-                    {"source_sample_bytes",data?detail::data_sample_bytes(spec,channels):sizeof(float)},
+                    {"source_sample_bytes",input_plan.sample_bytes},{"source_pixel_bytes",input_plan.pixel_bytes},
                     {"native_categorical",categorical},
                     {"output_width",largest_w},{"output_height",largest_h},{"threads",job.options.threads}}},
                 {"sequence_pin",sequence_lock(job.sequence_id)}};
@@ -458,17 +460,15 @@ Json Engine::convert(const Job& job) {
             }catch(...){in->close();verify_source();throw;}
             in->close();if(impl_->observer)impl_->observer("decoded",job);verify_source();
         } else {
-            auto bounds=std::minmax_element(channels.begin(),channels.end());
-            int first=*bounds.first,end=*bounds.second+1;
             const size_t limit=job.options.max_decode_mib*1024ULL*1024ULL/sizeof(float);
             size_t count=size_t(spec.width);
-            for(size_t factor:{size_t(spec.height),size_t(end-first)}) {
+            for(size_t factor:{size_t(spec.height),input_plan.channels.size()}) {
                 if(factor==0 || count>limit/factor)throw Failure("decode_limit_exceeded","decoded source buffer exceeds limit");
                 count*=factor;
             }
             stage="decode";tick=Clock::now();
             pixels.resize(count);
-            bool read_ok=in->read_image(part,0,first,end,OIIO::TypeDesc::FLOAT,pixels.data());
+            bool read_ok=detail::read_selected(*in,spec,part,input_plan,false,pixels.data());
             const std::string read_error=read_ok?std::string{}:in->geterror();
             in->close();
             if(impl_->observer)impl_->observer("decoded",job);
@@ -477,11 +477,14 @@ Json Engine::convert(const Job& job) {
             r["timings_ms"]["decode"]=ms(tick);
             r["decoded_mib"]=double(count*sizeof(float))/1048576;
             OIIO::ImageSpec subset=spec;
-            subset.nchannels=end-first;subset.format=OIIO::TypeDesc::FLOAT;subset.channelformats.clear();
-            subset.channelnames.assign(spec.channelnames.begin()+first,spec.channelnames.begin()+end);
-            subset.alpha_channel=spec.alpha_channel>=first && spec.alpha_channel<end ? spec.alpha_channel-first:-1;
+            subset.nchannels=int(input_plan.channels.size());subset.format=OIIO::TypeDesc::FLOAT;subset.channelformats.clear();
+            subset.channelnames.clear();for(int c:input_plan.channels)subset.channelnames.push_back(spec.channelnames[c]);
+            auto alpha=std::find(input_plan.channels.begin(),input_plan.channels.end(),spec.alpha_channel);
+            subset.alpha_channel=alpha!=input_plan.channels.end()?int(alpha-input_plan.channels.begin()):-1;
+            auto depth=std::find(input_plan.channels.begin(),input_plan.channels.end(),spec.z_channel);
+            subset.z_channel=depth!=input_plan.channels.end()?int(depth-input_plan.channels.begin()):-1;
             OIIO::ImageBuf buffer(subset,pixels.data());
-            for(int c:channels)order.push_back(c-first);
+            for(int c:channels)order.push_back(int(std::lower_bound(input_plan.channels.begin(),input_plan.channels.end(),c)-input_plan.channels.begin()));
             std::vector<std::string> names{"R","G","B"};if(order.size()==4)names.push_back("A");
             check(iba::channels(working,buffer,int(order.size()),order,{},names),working,"channels_failed");
             if(spec.get_int_attribute("oiio:UnassociatedAlpha",0) && order.size()==4)

@@ -21,13 +21,14 @@ MemoryEstimate estimate_memory(const ImageFootprint& s) {
     if(!s.data_width || !s.data_height || !s.display_width || !s.display_height || !s.channel_span ||
        (s.selected_channels!=3 && s.selected_channels!=4) || !s.output_width || !s.output_height ||
        !s.threads || s.threads>256 || !s.source_sample_bytes || s.source_sample_bytes>8 ||
-       (s.native_categorical && s.selected_channels!=4))throw std::invalid_argument("invalid memory estimate shape");
+       (s.native_categorical && s.selected_channels!=4) || s.source_pixel_bytes>32 ||
+       (s.source_pixel_bytes && s.source_pixel_bytes<s.source_sample_bytes))throw std::invalid_argument("invalid memory estimate shape");
     const Bytes data=multiply(s.data_width,s.data_height);
     const Bytes canvas=multiply(s.display_width,s.display_height);
     const Bytes preview=multiply(s.output_width,s.output_height);
     if(preview>canvas)throw std::invalid_argument("preview footprint exceeds display canvas");
     MemoryEstimate e;
-    e.source=multiply(multiply(data,s.channel_span),s.source_sample_bytes);
+    e.source=multiply(data,s.source_pixel_bytes?s.source_pixel_bytes:multiply(s.channel_span,s.source_sample_bytes));
     // Categorical modes retain native source + per-thread DOUBLE scan rows;
     // RGBA is allocated at preview size and already covered by output below.
     // Other modes keep full colour/mapping, padding and orientation temporaries.

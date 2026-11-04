@@ -14,6 +14,7 @@ struct ImageFootprint {
     unsigned threads=0;
     unsigned source_sample_bytes=4;
     bool native_categorical=false;
+    std::uint64_t source_pixel_bytes=0; // 0 retains the old span-based estimate for internal callers.
 };
 struct MemoryEstimate {
     // incremental is charged per active task; worker is already reserved by the pool.
