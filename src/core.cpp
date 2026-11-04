@@ -228,6 +228,7 @@ Json Engine::convert(const Job& job) {
         try {mapping=detail::data_mapping(job.options.visualization,job.options.data_range,job.options.invalid_values);}
         catch(const std::invalid_argument& error){throw Failure("visualization_options_invalid",error.what());}
         const bool data=mapping.mode!=detail::DataMode::colour;
+        const bool categorical=mapping.mode==detail::DataMode::id || mapping.mode==detail::DataMode::id_rgb;
         if(data && (job.options.channels.empty() || job.options.input_space!="auto" || !job.options.ocio_config.empty() || !job.options.display.empty() || !job.options.view.empty()))
             throw Failure("visualization_options_invalid","data visualization needs explicit channels and does not accept colour transform options");
         OIIO::attribute("threads",job.options.threads);
@@ -376,6 +377,7 @@ Json Engine::convert(const Job& job) {
                     {"display_width",display_width},{"display_height",display_height},
                     {"channel_span",*span.second-*span.first+1},{"selected_channels",data?4:channels.size()},
                     {"source_sample_bytes",data?detail::data_sample_bytes(spec,channels):sizeof(float)},
+                    {"native_categorical",categorical},
                     {"output_width",largest_w},{"output_height",largest_h},{"threads",job.options.threads}}},
                 {"sequence_pin",sequence_lock(job.sequence_id)}};
             impl_->control.planned(job,plan);
@@ -435,6 +437,7 @@ Json Engine::convert(const Job& job) {
                 {"invalid_values",job.options.invalid_values},{"invalid_pixels",0},{"clipped_components",0}};
         }
         OIIO::ImageBuf working;
+        detail::DataImage data_image;
         std::vector<int> order;
         // ImageBuf may wrap caller-owned storage. Keep the colour source alive
         // throughout all outputs, as in the original colour conversion path.
@@ -442,12 +445,12 @@ Json Engine::convert(const Job& job) {
         if(data) {
             stage="visualization";
             try {
-                auto image=detail::read_data_image(*in,spec,part,channels,mapping,job.options.max_decode_mib*1024ULL*1024ULL,job.options.threads);
-                working=std::move(image.image);order={0,1,2,3};
-                r["decoded_mib"]=double(image.decoded_bytes)/1048576;
-                r["timings_ms"]["decode"]=image.decode_ms;r["timings_ms"]["visualization"]=image.mapping_ms;
-                r["visualization"]["invalid_pixels"]=image.statistics.invalid_pixels;r["visualization"]["clipped_components"]=image.statistics.clipped_components;
-                if(image.statistics.invalid_pixels)r["warnings"].push_back("data visualization replaced "+std::to_string(image.statistics.invalid_pixels)+" invalid pixels using "+job.options.invalid_values);
+                data_image=detail::read_data_image(*in,spec,part,channels,mapping,job.options.max_decode_mib*1024ULL*1024ULL,job.options.threads);
+                working=std::move(data_image.image);order={0,1,2,3};
+                r["decoded_mib"]=double(data_image.decoded_bytes)/1048576;
+                r["timings_ms"]["decode"]=data_image.decode_ms;r["timings_ms"]["visualization"]=data_image.mapping_ms;
+                r["visualization"]["invalid_pixels"]=data_image.statistics.invalid_pixels;r["visualization"]["clipped_components"]=data_image.statistics.clipped_components;
+                if(data_image.statistics.invalid_pixels)r["warnings"].push_back("data visualization replaced "+std::to_string(data_image.statistics.invalid_pixels)+" invalid pixels using "+job.options.invalid_values);
             }catch(const detail::InvalidDataValues& error) {
                 in->close();verify_source();r["visualization"]["invalid_pixels"]=error.statistics.invalid_pixels;
                 r["visualization"]["clipped_components"]=error.statistics.clipped_components;
@@ -488,27 +491,28 @@ Json Engine::convert(const Job& job) {
         const size_t limit=job.options.max_decode_mib*1024ULL*1024ULL/sizeof(float);
         // resize() clamps outside the data window. Pad a cropped display window
         // with zero pixels first, rather than stretching edge pixels into it.
-        const auto& window=working.spec();
-        if(window.x!=window.full_x || window.y!=window.full_y ||
-           window.width!=window.full_width || window.height!=window.full_height) {
-            size_t canvas=size_t(window.full_width);
-            for(size_t factor:{size_t(window.full_height),size_t(working.nchannels())}) {
-                if(factor==0 || canvas>limit/factor)throw Failure("canvas_limit_exceeded","display canvas exceeds pixel buffer limit");
-                canvas*=factor;
+        if(!categorical) {
+            const auto& window=working.spec();
+            if(window.x!=window.full_x || window.y!=window.full_y ||
+               window.width!=window.full_width || window.height!=window.full_height) {
+                size_t canvas=size_t(window.full_width);
+                for(size_t factor:{size_t(window.full_height),size_t(working.nchannels())}) {
+                    if(factor==0 || canvas>limit/factor)throw Failure("canvas_limit_exceeded","display canvas exceeds pixel buffer limit");
+                    canvas*=factor;
+                }
+                auto xmax=static_cast<long long>(window.full_x)+window.full_width;
+                auto ymax=static_cast<long long>(window.full_y)+window.full_height;
+                if(xmax>std::numeric_limits<int>::max()||ymax>std::numeric_limits<int>::max())
+                    throw Failure("invalid_dimensions","display window endpoint overflow");
+                OIIO::ImageBuf padded;
+                check(iba::crop(padded,working,OIIO::ROI(window.full_x,int(xmax),window.full_y,int(ymax),0,1,0,working.nchannels())),padded,"window_failed");
+                working=std::move(padded);
             }
-            auto xmax=static_cast<long long>(window.full_x)+window.full_width;
-            auto ymax=static_cast<long long>(window.full_y)+window.full_height;
-            if(xmax>std::numeric_limits<int>::max()||ymax>std::numeric_limits<int>::max())
-                throw Failure("invalid_dimensions","display window endpoint overflow");
-            OIIO::ImageBuf padded;
-            check(iba::crop(padded,working,OIIO::ROI(window.full_x,int(xmax),window.full_y,int(ymax),0,1,0,working.nchannels())),padded,"window_failed");
-            working=std::move(padded);
         }
         // Orient a complete, zero-origin display canvas. Some OIIO rotations
         // position cropped data incorrectly when the full window has an origin.
-        working.set_origin(0,0,0);
-        working.set_roi_full(working.roi());
-        if(spec.get_int_attribute("Orientation",1)!=1) {
+        if(!categorical){working.set_origin(0,0,0);working.set_roi_full(working.roi());}
+        if(!categorical && spec.get_int_attribute("Orientation",1)!=1) {
             OIIO::ImageBuf oriented;
             check(iba::reorient(oriented,working),oriented,"orientation_failed");working=std::move(oriented);
         }
@@ -517,7 +521,6 @@ Json Engine::convert(const Job& job) {
         if(!data && input_space!=working_space)
             check(iba::colorconvert(working,working,input_space,working_space,true,"","",config),working,"colour_failed");
         r["timings_ms"]["working_colour"]=ms(tick);
-        const bool categorical=mapping.mode==detail::DataMode::id || mapping.mode==detail::DataMode::id_rgb;
         const std::string filter=categorical?"nearest":job.options.preset=="fast"?"box":job.options.preset=="quality"?"lanczos3":"triangle";
         r["preset"]=job.options.preset;r["filter"]=filter;
         for(size_t output_index=0;output_index<job.outputs.size();++output_index) {
@@ -534,13 +537,15 @@ Json Engine::convert(const Job& job) {
                     r["outputs"].push_back(result);continue;
                 }
                 verify_source();
-                const auto& s=working.spec();
-                double scale=std::min({double(out.width)/s.full_width,double(out.height)/s.full_height,1.0});
-                int w=std::max(1,int(std::lround(s.full_width*scale))),h=std::max(1,int(std::lround(s.full_height*scale)));
+                int display_width=categorical?spec.full_width:working.spec().full_width;
+                int display_height=categorical?spec.full_height:working.spec().full_height;
+                if(categorical && spec.get_int_attribute("Orientation",1)>=5 && spec.get_int_attribute("Orientation",1)<=8)std::swap(display_width,display_height);
+                double scale=std::min({double(out.width)/display_width,double(out.height)/display_height,1.0});
+                int w=std::max(1,int(std::lround(display_width*scale))),h=std::max(1,int(std::lround(display_height*scale)));
                 OIIO::ImageBuf preview;
                 tick=Clock::now();
                 if(categorical)
-                    check(iba::resample(preview,working,false,OIIO::ROI(0,w,0,h,0,1,0,int(order.size())),job.options.threads),preview,"resize_failed");
+                    preview=detail::categorical_preview(data_image,w,h,job.options.max_decode_mib*1024ULL*1024ULL,job.options.threads);
                 else check(iba::resize(preview,working,{{"filtername",filter}},OIIO::ROI(0,w,0,h,0,1,0,int(order.size())),job.options.threads),preview,"resize_failed");
                 result["resize_ms"]=ms(tick);tick=Clock::now();
                 if(job.options.background!="transparent" && preview.nchannels()==4) {

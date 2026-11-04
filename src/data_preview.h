@@ -32,6 +32,9 @@ DataStats map_data_float(const float* source,float* rgba,std::size_t pixels,std:
     const std::vector<int>& components,const DataMapping& mapping);
 DataStats map_data_double(const double* source,float* rgba,std::size_t pixels,std::size_t stride,
     const std::vector<int>& components,const DataMapping& mapping);
+// Validate/count the complete source without allocating a mapped image.
+DataStats data_stats_double(const double* source,std::size_t pixels,std::size_t stride,
+    const std::vector<int>& components,const DataMapping& mapping);
 void map_ids_u32(const std::uint32_t* source,float* rgba,std::size_t pixels,std::size_t stride,std::size_t component);
 void map_ids_i32(const std::int32_t* source,float* rgba,std::size_t pixels,std::size_t stride,std::size_t component);
 }

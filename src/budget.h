@@ -13,6 +13,7 @@ struct ImageFootprint {
     std::uint64_t channel_span=0,selected_channels=0,output_width=0,output_height=0;
     unsigned threads=0;
     unsigned source_sample_bytes=4;
+    bool native_categorical=false;
 };
 struct MemoryEstimate {
     // incremental is charged per active task; worker is already reserved by the pool.

@@ -8,8 +8,16 @@ struct DataImage {
     DataStats statistics;
     std::size_t decoded_bytes=0;
     double decode_ms=0,mapping_ms=0;
+    // Categorical modes retain native samples and allocate RGBA only at output size.
+    std::vector<unsigned char> native;
+    OIIO::ImageSpec source_spec;
+    std::size_t stride=0;
+    std::vector<std::size_t> offsets;
+    std::vector<OIIO::TypeDesc> types;
+    DataMapping mapping;
 };
 std::size_t data_sample_bytes(const OIIO::ImageSpec& spec,const std::vector<int>& channels);
 DataImage read_data_image(OIIO::ImageInput& input,const OIIO::ImageSpec& spec,int part,
     const std::vector<int>& channels,const DataMapping& mapping,std::size_t limit,int threads);
+OIIO::ImageBuf categorical_preview(const DataImage& image,int width,int height,std::size_t limit,int threads);
 }

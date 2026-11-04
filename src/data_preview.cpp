@@ -60,7 +60,7 @@ template<class T> void ids(const T* source,float* rgba,std::size_t pixels,std::s
 }
 }
 template<class Sample> static DataStats map_samples(const Sample* source,float* rgba,std::size_t pixels,std::size_t stride,
-                        const std::vector<int>& components,const DataMapping& mapping) {
+                        const std::vector<int>& components,const DataMapping& mapping,bool statistics_only=false) {
     const auto size=components.size();
     bool shape=false;
     switch(mapping.mode) {
@@ -73,7 +73,7 @@ template<class Sample> static DataStats map_samples(const Sample* source,float* 
     if(mapping.invalid!=InvalidData::black && mapping.invalid!=InvalidData::magenta && mapping.invalid!=InvalidData::error)
         throw std::invalid_argument("invalid data value policy");
     for(int c:components){if(c<0)throw std::invalid_argument("negative data component");layout(pixels,stride,std::size_t(c));}
-    if(pixels && (!source || !rgba))throw std::invalid_argument("null data buffer");
+    if(pixels && (!source || (!rgba && !statistics_only)))throw std::invalid_argument("null data buffer");
     if(mapping.mode!=DataMode::id && (!std::isfinite(mapping.minimum) || !std::isfinite(mapping.maximum) ||
        !std::isfinite(mapping.maximum-mapping.minimum) || mapping.maximum<=mapping.minimum))
         throw std::invalid_argument("invalid mapping range");
@@ -82,10 +82,16 @@ template<class Sample> static DataStats map_samples(const Sample* source,float* 
         double values[3]={0,0,0};bool valid=true;
         for(std::size_t c=0;c<size;++c){values[c]=source[p*stride+std::size_t(components[c])];valid=valid && std::isfinite(values[c]);}
         if(mapping.mode==DataMode::id)valid=valid && values[0]>=-2147483648.0 && values[0]<=4294967295.0 && std::trunc(values[0])==values[0];
-        auto* target=rgba+4*p;
+        auto* target=statistics_only?nullptr:rgba+4*p;
         if(!valid) {
             ++stats.invalid_pixels;const bool magenta=mapping.invalid==InvalidData::magenta;
+            if(statistics_only)continue;
             target[0]=target[2]=magenta?1.0f:0.0f;target[1]=0;target[3]=1;
+            continue;
+        }
+        if(statistics_only) {
+            if(mapping.mode!=DataMode::id)for(std::size_t c=0;c<size;++c)
+                if(values[c]<mapping.minimum || values[c]>mapping.maximum)++stats.clipped_components;
             continue;
         }
         if(mapping.mode==DataMode::id)palette(static_cast<std::uint32_t>(static_cast<std::int64_t>(values[0])),target);
@@ -105,6 +111,10 @@ DataStats map_data_float(const float* source,float* rgba,std::size_t pixels,std:
 DataStats map_data_double(const double* source,float* rgba,std::size_t pixels,std::size_t stride,const std::vector<int>& components,const DataMapping& mapping) {
     if(stride && pixels>std::numeric_limits<std::size_t>::max()/sizeof(double)/stride)throw std::invalid_argument("data buffer overflow");
     return map_samples(source,rgba,pixels,stride,components,mapping);
+}
+DataStats data_stats_double(const double* source,std::size_t pixels,std::size_t stride,const std::vector<int>& components,const DataMapping& mapping) {
+    if(stride && pixels>std::numeric_limits<std::size_t>::max()/sizeof(double)/stride)throw std::invalid_argument("data buffer overflow");
+    return map_samples(source,static_cast<float*>(nullptr),pixels,stride,components,mapping,true);
 }
 void map_ids_u32(const std::uint32_t* source,float* rgba,std::size_t pixels,std::size_t stride,std::size_t component) {ids(source,rgba,pixels,stride,component);}
 void map_ids_i32(const std::int32_t* source,float* rgba,std::size_t pixels,std::size_t stride,std::size_t component) {ids(source,rgba,pixels,stride,component);}

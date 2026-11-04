@@ -25,6 +25,11 @@ int main() {
         auto doubles=ImageFootprint{8,8,8,8,3,4,8,8,4,8};
         auto floats=doubles;floats.source_sample_bytes=4;
         require(estimate_memory(doubles).source==2*estimate_memory(floats).source,"native DOUBLE source bytes missing");
+        auto ids=ImageFootprint{8192,8192,16384,16384,1,4,1024,1024,4,4,true};
+        auto legacy=ids;legacy.native_categorical=false;
+        require(estimate_memory(ids).source==256ULL*1024*1024 && estimate_memory(ids).source==estimate_memory(legacy).source,"categorical native source omitted");
+        require(estimate_memory(ids).working==8192ULL*4*3*sizeof(double) && estimate_memory(ids).total<estimate_memory(legacy).total,"categorical full canvas still charged");
+        rejects<std::invalid_argument>([&]{auto invalid=ids;invalid.selected_channels=3;estimate_memory(invalid);});
         rejects<std::invalid_argument>([&]{auto invalid=doubles;invalid.source_sample_bytes=0;estimate_memory(invalid);});
         rejects<std::invalid_argument>([&]{auto invalid=doubles;invalid.source_sample_bytes=9;estimate_memory(invalid);});
         rejects<std::invalid_argument>([]{estimate_memory({8,8,8,8,3,3,16,16,4});});
