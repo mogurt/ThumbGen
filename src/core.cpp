@@ -257,6 +257,12 @@ Json Engine::convert(const Job& job) {
                     check(iba::colorconvert(preview,preview,"linear","sRGB",true,"","",config),preview,"colour_failed");
                 else
                     check(iba::ociodisplay(preview,preview,job.options.display,job.options.view,"linear","",true,false,"","",config),preview,"colour_failed");
+                if(job.options.background=="transparent" && preview.nchannels()==4) {
+                    // Supply straight display RGB explicitly. PNG and WebP plugins
+                    // otherwise deassociate in different spaces (WebP uses gamma 2.2).
+                    check(iba::unpremult(preview,preview),preview,"alpha_failed");
+                    preview.specmod().attribute("oiio:UnassociatedAlpha",1);
+                }
                 if(job.options.background!="transparent" || out.format=="jpeg") {
                     OIIO::ImageBuf rgb;std::vector<int> rgb_order{0,1,2};
                     check(iba::channels(rgb,preview,3,rgb_order),rgb,"channels_failed");preview=std::move(rgb);

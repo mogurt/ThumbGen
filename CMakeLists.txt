@@ -56,6 +56,27 @@ if(BUILD_TESTING)
     add_test(NAME core_images COMMAND thumbgen_core_tests)
     set_tests_properties(core_images PROPERTIES ENVIRONMENT_MODIFICATION
         "PATH=path_list_prepend:$<TARGET_FILE_DIR:OpenImageIO::OpenImageIO>;LD_LIBRARY_PATH=path_list_prepend:$<TARGET_FILE_DIR:OpenImageIO::OpenImageIO>")
+    add_executable(thumbgen_image_matrix tests/test_image_matrix.cpp)
+    target_link_libraries(thumbgen_image_matrix PRIVATE thumbgen_core OpenImageIO::OpenImageIO)
+    set(THUMBGEN_IMAGE_CASES
+        jpeg_rgb8 jpeg_gray8 png_rgb8 png_rgb16 png_rgba16 png_gray8 png_grayalpha16
+        tiff_rgb8 tiff_rgb16 tiff_rgbfloat tiff_rgba16 tga_rgb8 tga_rgba8 bmp_rgb8
+        hdr_rgbfloat dpx_rgb10 exr_float exr_mixed
+        exr_half_none exr_half_rle exr_half_zip exr_half_zips exr_half_piz
+        exr_half_pxr24 exr_half_b44 exr_half_b44a exr_half_dwaa exr_half_dwab
+        orientation_1 orientation_2 orientation_3 orientation_4
+        orientation_5 orientation_6 orientation_7 orientation_8
+        output_jpeg output_png output_webp
+        window_negative window_outside geometry_portrait geometry_ultrawide)
+    foreach(image_case IN LISTS THUMBGEN_IMAGE_CASES)
+        add_test(NAME image_${image_case} COMMAND thumbgen_image_matrix ${image_case})
+        set_tests_properties(image_${image_case} PROPERTIES LABELS "image-matrix" TIMEOUT 30
+            ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:$<TARGET_FILE_DIR:OpenImageIO::OpenImageIO>;LD_LIBRARY_PATH=path_list_prepend:$<TARGET_FILE_DIR:OpenImageIO::OpenImageIO>")
+    endforeach()
+    if(MSVC)
+        target_compile_options(thumbgen_image_matrix PRIVATE /W4 /utf-8 /permissive-)
+    endif()
     find_package(Python3 3.9 COMPONENTS Interpreter QUIET)
     if(Python3_Interpreter_FOUND)
         add_test(NAME public_cli COMMAND ${Python3_EXECUTABLE}
