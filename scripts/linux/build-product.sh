@@ -19,4 +19,5 @@ ctest --test-dir "$cache/thumbgen-build" --output-on-failure 2>&1 | tee "$logs/c
 python3 "$repo/scripts/linux/audit-abi.py" "$cache/thumbgen-build/thumbgen" \
     "$cache/thumbgen-build/thumbgen_core_tests" "$cache/thumbgen-build/thumbgen_image_matrix" \
     "$cache/thumbgen-build/thumbgen_budget_tests" "$cache/thumbgen-build/thumbgen_process_tests" \
+    "$cache/thumbgen-build/thumbgen_control_tests" \
     > "$logs/abi.json"

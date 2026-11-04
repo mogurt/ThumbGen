@@ -13,7 +13,7 @@ stage = Path(os.environ.get('THUMBGEN_VALIDATION_DIR', repo / '.deps/linux/valid
 stage.mkdir(parents=True, exist_ok=True)
 for directory in ('bin', 'lib', 'tests', 'schemas', 'tools'):
     (stage / directory).mkdir(exist_ok=True)
-binaries = ('thumbgen', 'thumbgen_core_tests', 'thumbgen_image_matrix', 'thumbgen_budget_tests', 'thumbgen_process_tests')
+binaries = ('thumbgen', 'thumbgen_core_tests', 'thumbgen_image_matrix', 'thumbgen_budget_tests', 'thumbgen_process_tests', 'thumbgen_control_tests')
 for name in binaries:
     shutil.copy2(cache / 'thumbgen-build' / name, stage / 'bin' / name)
 logs = Path(os.environ.get('THUMBGEN_BUILD_LOG_DIR', cache / 'logs'))
