@@ -62,7 +62,7 @@ for test in suite['tests']:
         command.append(value)
     properties = {}
     for prop in test.get('properties', []):
-        if prop['name'] in ('LABELS', 'TIMEOUT'):
+        if prop['name'] in ('LABELS', 'TIMEOUT', 'SKIP_RETURN_CODE'):
             properties[prop['name']] = prop['value']
         elif prop['name'] == 'ENVIRONMENT_MODIFICATION':
             supported = {f'{key}=path_list_prepend:{cache / "sdk/lib"}'
