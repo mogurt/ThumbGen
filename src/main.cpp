@@ -1,6 +1,7 @@
 #include <thumbgen/core.h>
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -154,6 +155,7 @@ static void preflight(const std::vector<Job>& jobs) {
     }
 }
 static std::vector<Job> manifest(const std::string& filename) {
+    if(filename=="-")throw std::invalid_argument("stdin manifests are not supported; pass a manifest file");
     fs::path path=fs::absolute(fs::u8path(filename));
     std::ifstream file(path);
     if(!file)throw std::invalid_argument("cannot open manifest");
@@ -194,7 +196,7 @@ static int execute(const std::vector<std::string>& args) {
         if(command=="capabilities"||command=="--version") {
             for(size_t i=2;i<args.size();++i)if(args[i]!="--json")throw std::invalid_argument("unexpected argument");
             auto data=thumbgen::Engine::capabilities();
-            if(command=="--version")data={{"schema_version",1},{"type","version"},{"version",data["version"]},{"oiio_version",data["oiio_version"]}};
+            if(command=="--version")data={{"schema_version",1},{"type","version"},{"version",data["version"]},{"oiio_version",data["oiio_version"]},{"build",data["build"]}};
             std::cout<<data.dump(json_mode?-1:2)<<std::endl;return 0;
         }
         if(command!="convert"&&command!="batch"&&command!="inspect")throw std::invalid_argument("unknown command: "+command);
@@ -250,18 +252,24 @@ static int execute(const std::vector<std::string>& args) {
             }
             jobs.push_back(std::move(job));preflight(jobs);
         }
-        size_t success=0,partial=0,failed=0;
+        const auto batch_start=std::chrono::steady_clock::now();
+        size_t success=0,partial=0,failed=0,outputs_total=0,outputs_success=0,outputs_failed=0;
         for(const auto& job:jobs) {
+            outputs_total+=job.outputs.size();
             auto r=engine.convert(job);
             if(r["status"]=="success")++success;
             else if(r["status"]=="partial")++partial;
             else ++failed;
+            for(const auto& out:r["outputs"])if(out["status"]=="success")++outputs_success;else ++outputs_failed;
             if(json_mode)std::cout<<r.dump()<<std::endl;
             else std::cout<<job.input<<": "<<r["status"].get<std::string>()<<'\n';
             if(!r["ok"].get<bool>()&&!json_mode)std::cerr<<r.dump(2)<<'\n';
         }
         Json end{{"schema_version",1},{"type","summary"},{"total",jobs.size()},
-                 {"success",success},{"partial",partial},{"failed",failed}};
+                 {"success",success},{"partial",partial},{"failed",failed},
+                 {"output_counts",{{"total",outputs_total},{"success",outputs_success},{"failed",outputs_failed},
+                     {"not_attempted",outputs_total-outputs_success-outputs_failed}}},
+                 {"elapsed_ms",std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-batch_start).count()}};
         if(json_mode)std::cout<<end.dump()<<std::endl;
         if(success==jobs.size())return 0;
         return success||partial?3:4;

@@ -3,10 +3,24 @@ project(ThumbGen VERSION 0.1.0 LANGUAGES CXX)
 
 find_package(OpenImageIO 3.2 CONFIG REQUIRED)
 find_package(nlohmann_json 3.11 CONFIG REQUIRED)
+set(THUMBGEN_SOURCE_REVISION "unknown")
+set(THUMBGEN_SOURCE_DIRTY false)
+find_package(Git QUIET)
+if(Git_FOUND AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.git")
+    execute_process(COMMAND ${GIT_EXECUTABLE} rev-parse --short=12 HEAD
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} OUTPUT_VARIABLE THUMBGEN_SOURCE_REVISION OUTPUT_STRIP_TRAILING_WHITESPACE)
+    execute_process(COMMAND ${GIT_EXECUTABLE} status --porcelain --untracked-files=normal
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} OUTPUT_VARIABLE THUMBGEN_GIT_CHANGES)
+    if(THUMBGEN_GIT_CHANGES)
+        set(THUMBGEN_SOURCE_DIRTY true)
+    endif()
+endif()
+configure_file(src/build_info.h.in generated/build_info.h @ONLY)
 
-add_library(thumbgen_core STATIC src/core.cpp)
+add_library(thumbgen_core STATIC src/core.cpp src/selection.cpp)
 target_compile_features(thumbgen_core PUBLIC cxx_std_17)
 target_include_directories(thumbgen_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_include_directories(thumbgen_core PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
 target_link_libraries(thumbgen_core PUBLIC nlohmann_json::nlohmann_json PRIVATE OpenImageIO::OpenImageIO)
 add_executable(thumbgen src/main.cpp)
 target_link_libraries(thumbgen PRIVATE thumbgen_core)
@@ -71,7 +85,10 @@ if(BUILD_TESTING)
         colour_builtin colour_custom colour_environment colour_explicit_priority colour_metadata colour_override
         colour_display colour_missing_role colour_missing_space colour_missing_display colour_missing_view colour_invalid_repeat
         colour_nonlinear_role colour_invalid_environment
-        alpha_exr_associated alpha_png alpha_webp alpha_tiff alpha_edge alpha_zero)
+        alpha_exr_associated alpha_png alpha_webp alpha_tiff alpha_edge alpha_zero
+        data_z data_normal data_normal_part data_id data_crypto data_explicit_data data_unknown data_grey data_lowercase
+        data_beauty_z data_beauty_normal data_beauty_crypto data_root_priority data_ambiguous data_explicit
+        data_missing_part data_missing_group data_black data_visible)
     foreach(image_case IN LISTS THUMBGEN_IMAGE_CASES)
         add_test(NAME image_${image_case} COMMAND thumbgen_image_matrix ${image_case})
         set_tests_properties(image_${image_case} PROPERTIES LABELS "image-matrix" TIMEOUT 30
@@ -86,5 +103,17 @@ if(BUILD_TESTING)
         add_test(NAME public_cli COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cli.py --exe $<TARGET_FILE:thumbgen>
             --runtime-dir $<TARGET_FILE_DIR:OpenImageIO::OpenImageIO>)
+        option(THUMBGEN_TEST_PROTOCOL "Validate public records using jsonschema (test dependency)" ON)
+        if(THUMBGEN_TEST_PROTOCOL)
+            execute_process(COMMAND ${Python3_EXECUTABLE} -c "import jsonschema" RESULT_VARIABLE THUMBGEN_SCHEMA_IMPORT)
+            if(NOT THUMBGEN_SCHEMA_IMPORT EQUAL 0)
+                message(FATAL_ERROR "Protocol tests require tests/requirements.txt in Python3_EXECUTABLE; or explicitly set THUMBGEN_TEST_PROTOCOL=OFF")
+            endif()
+            add_test(NAME public_protocol COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_protocol.py --exe $<TARGET_FILE:thumbgen>
+                --matrix-exe $<TARGET_FILE:thumbgen_image_matrix> --schema-dir ${CMAKE_CURRENT_SOURCE_DIR}/schemas
+                --runtime-dir $<TARGET_FILE_DIR:OpenImageIO::OpenImageIO>)
+            set_tests_properties(public_protocol PROPERTIES TIMEOUT 120 LABELS "protocol")
+        endif()
     endif()
 endif()

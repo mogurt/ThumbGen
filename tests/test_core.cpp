@@ -45,6 +45,24 @@ int main() {
         auto ambiguous=engine.convert(job);require(!ambiguous["ok"].get<bool>() && ambiguous["error"]["code"]=="ambiguous_parts",ambiguous.dump());
         job.options.part=1;
         auto explicit_part=engine.convert(job);require(explicit_part["ok"].get<bool>() && explicit_part["source"]["part"]==1,explicit_part.dump());
+        // An ambiguous first part must not be silently discarded in favour of
+        // a later part that happens to contain a single RGB group.
+        path=(root/"multi-group-parts.exr").u8string();
+        parts[0]=OIIO::ImageSpec(2,2,6,OIIO::TypeDesc::FLOAT);
+        parts[0].channelnames={"Diffuse.R","Diffuse.G","Diffuse.B","Specular.R","Specular.G","Specular.B"};
+        parts[0].attribute("oiio:subimagename","layers");
+        out=OIIO::ImageOutput::create(path);require(bool(out),OIIO::geterror());
+        require(out->open(path,2,parts),out->geterror());std::vector<float> multiple(24,0.5f);
+        require(out->write_image(OIIO::TypeDesc::FLOAT,multiple.data()),"group part write failed");
+        require(out->open(path,parts[1],OIIO::ImageOutput::AppendSubimage),out->geterror());
+        require(out->write_image(OIIO::TypeDesc::FLOAT,pixels),"second group part write failed");require(out->close(),"close failed");
+        job.input=path;job.options.part=-1;job.outputs[0].path=(root/"groups.png").u8string();
+        auto groups=engine.convert(job);require(groups["error"]["code"]=="ambiguous_parts",groups.dump());
+        require(groups["selection"]["candidates"].size()==3,groups.dump());
+        job.options.part=0;
+        auto within=engine.convert(job);require(within["error"]["code"]=="ambiguous_channels",within.dump());
+        job.options.channels="Diffuse";
+        auto selected=engine.convert(job);require(selected["ok"].get<bool>(),selected.dump());
         std::cout<<"cropped display window and multipart selection passed\n";return 0;
     }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}
 }

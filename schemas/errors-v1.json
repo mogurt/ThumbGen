@@ -1,0 +1,160 @@
+{
+  "schema_version": 1,
+  "errors": [
+    {
+      "code": "invalid_request",
+      "category": "request",
+      "description": "参数、清单或路径预检无效"
+    },
+    {
+      "code": "internal_error",
+      "category": "internal",
+      "description": "命令执行的未预期异常"
+    },
+    {
+      "code": "open_failed",
+      "category": "input",
+      "description": "无法打开输入文件"
+    },
+    {
+      "code": "metadata_failed",
+      "category": "input",
+      "description": "无法读取图像元数据"
+    },
+    {
+      "code": "part_not_found",
+      "category": "selection",
+      "description": "指定 part 不存在"
+    },
+    {
+      "code": "channels_not_found",
+      "category": "selection",
+      "description": "指定通道组不存在"
+    },
+    {
+      "code": "ambiguous_channels",
+      "category": "selection",
+      "description": "颜色组有歧义或布局无法识别"
+    },
+    {
+      "code": "ambiguous_parts",
+      "category": "selection",
+      "description": "多个 part 含可选颜色"
+    },
+    {
+      "code": "visualization_required",
+      "category": "selection",
+      "description": "数据 AOV 需要专用可视化"
+    },
+    {
+      "code": "deep_requires_flattening",
+      "category": "selection",
+      "description": "Deep 需要展平"
+    },
+    {
+      "code": "invalid_dimensions",
+      "category": "input",
+      "description": "维度无效或窗口端点溢出"
+    },
+    {
+      "code": "colour_config_failed",
+      "category": "colour",
+      "description": "配置读取失败"
+    },
+    {
+      "code": "colour_space_not_found",
+      "category": "colour",
+      "description": "输入或输出空间无法解析"
+    },
+    {
+      "code": "colour_working_space_missing",
+      "category": "colour",
+      "description": "缺少 scene_linear 角色"
+    },
+    {
+      "code": "colour_working_space_invalid",
+      "category": "colour",
+      "description": "工作空间不是线性响应"
+    },
+    {
+      "code": "colour_display_not_found",
+      "category": "colour",
+      "description": "display 不存在"
+    },
+    {
+      "code": "colour_view_not_found",
+      "category": "colour",
+      "description": "view 不存在"
+    },
+    {
+      "code": "colour_failed",
+      "category": "colour",
+      "description": "色彩处理器或变换失败"
+    },
+    {
+      "code": "decode_limit_exceeded",
+      "category": "resource",
+      "description": "解码像素缓冲区超过限额"
+    },
+    {
+      "code": "canvas_limit_exceeded",
+      "category": "resource",
+      "description": "补齐画布超过限额"
+    },
+    {
+      "code": "decode_failed",
+      "category": "input",
+      "description": "输入解码失败"
+    },
+    {
+      "code": "channels_failed",
+      "category": "processing",
+      "description": "通道映射失败"
+    },
+    {
+      "code": "alpha_failed",
+      "category": "processing",
+      "description": "Alpha 或背景处理失败"
+    },
+    {
+      "code": "window_failed",
+      "category": "processing",
+      "description": "画布处理失败"
+    },
+    {
+      "code": "orientation_failed",
+      "category": "processing",
+      "description": "方向处理失败"
+    },
+    {
+      "code": "resize_failed",
+      "category": "processing",
+      "description": "缩放失败"
+    },
+    {
+      "code": "output_exists",
+      "category": "output",
+      "description": "目标存在，默认禁止覆盖"
+    },
+    {
+      "code": "encode_failed",
+      "category": "output",
+      "description": "编码失败"
+    },
+    {
+      "code": "commit_failed",
+      "category": "output",
+      "description": "临时文件提交失败"
+    },
+    {
+      "code": "output_failed",
+      "category": "output",
+      "description": "输出阶段其他异常"
+    },
+    {
+      "code": "conversion_failed",
+      "category": "internal",
+      "description": "任务转换未预期异常"
+    }
+  ]
+}

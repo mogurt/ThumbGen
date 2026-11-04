@@ -1,0 +1,959 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ThumbGen JSONL protocol v1",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/result"
+    },
+    {
+      "$ref": "#/$defs/summary"
+    },
+    {
+      "$ref": "#/$defs/inspection"
+    },
+    {
+      "$ref": "#/$defs/version"
+    },
+    {
+      "$ref": "#/$defs/capabilities"
+    },
+    {
+      "$ref": "#/$defs/request_error"
+    }
+  ],
+  "$defs": {
+    "candidate": {
+      "type": "object",
+      "properties": {
+        "part": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "part_name": {
+          "type": "string"
+        },
+        "group": {
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "colour",
+            "grey",
+            "data",
+            "deep",
+            "unknown"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "channels": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "part",
+        "part_name",
+        "group",
+        "kind",
+        "reason",
+        "channels"
+      ],
+      "additionalProperties": false
+    },
+    "error": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "enum": [
+            "invalid_request",
+            "internal_error",
+            "open_failed",
+            "metadata_failed",
+            "part_not_found",
+            "channels_not_found",
+            "ambiguous_channels",
+            "ambiguous_parts",
+            "visualization_required",
+            "deep_requires_flattening",
+            "invalid_dimensions",
+            "colour_config_failed",
+            "colour_space_not_found",
+            "colour_working_space_missing",
+            "colour_working_space_invalid",
+            "colour_display_not_found",
+            "colour_view_not_found",
+            "colour_failed",
+            "decode_limit_exceeded",
+            "canvas_limit_exceeded",
+            "decode_failed",
+            "channels_failed",
+            "alpha_failed",
+            "window_failed",
+            "orientation_failed",
+            "resize_failed",
+            "output_exists",
+            "encode_failed",
+            "commit_failed",
+            "output_failed",
+            "conversion_failed"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "stage": {
+          "enum": [
+            "open",
+            "selection",
+            "colour",
+            "decode"
+          ]
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "additionalProperties": false
+    },
+    "output": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "status": {
+              "const": "success"
+            },
+            "width": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "height": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "resize_ms": {
+              "type": "number",
+              "minimum": 0
+            },
+            "finish_ms": {
+              "type": "number",
+              "minimum": 0
+            },
+            "format": {
+              "enum": [
+                "jpeg",
+                "png",
+                "webp"
+              ]
+            }
+          },
+          "required": [
+            "path",
+            "status",
+            "width",
+            "height",
+            "resize_ms",
+            "finish_ms",
+            "format"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "status": {
+              "const": "failed"
+            },
+            "error": {
+              "$ref": "#/$defs/error"
+            },
+            "resize_ms": {
+              "type": "number",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "path",
+            "status",
+            "error"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "selection": {
+      "type": "object",
+      "properties": {
+        "policy": {
+          "const": "v1"
+        },
+        "basis": {
+          "enum": [
+            "automatic",
+            "explicit_channels",
+            "explicit_part",
+            "explicit_part_channels"
+          ]
+        },
+        "candidates": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/candidate"
+          }
+        },
+        "chosen": {
+          "$ref": "#/$defs/candidate"
+        }
+      },
+      "required": [
+        "policy",
+        "basis",
+        "candidates"
+      ],
+      "additionalProperties": false
+    },
+    "source": {
+      "type": "object",
+      "properties": {
+        "part": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "name": {
+          "type": "string"
+        },
+        "width": {
+          "type": "integer"
+        },
+        "height": {
+          "type": "integer"
+        },
+        "channels": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "sample_type": {
+          "type": "string"
+        },
+        "deep": {
+          "type": "boolean"
+        },
+        "compression": {
+          "type": "string"
+        },
+        "data_window": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          },
+          "minItems": 4,
+          "maxItems": 4
+        },
+        "display_window": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          },
+          "minItems": 4,
+          "maxItems": 4
+        },
+        "colour_space": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "part",
+        "name",
+        "width",
+        "height",
+        "channels",
+        "sample_type",
+        "deep",
+        "compression",
+        "data_window",
+        "display_window",
+        "colour_space"
+      ],
+      "additionalProperties": false
+    },
+    "build": {
+      "type": "object",
+      "properties": {
+        "revision": {
+          "type": "string"
+        },
+        "dirty": {
+          "type": "boolean"
+        },
+        "compiler": {
+          "type": "string"
+        },
+        "platform": {
+          "type": "string"
+        },
+        "architecture": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "revision",
+        "dirty",
+        "compiler",
+        "platform",
+        "architecture"
+      ],
+      "additionalProperties": false
+    },
+    "result": {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "type": {
+          "const": "result"
+        },
+        "id": {
+          "type": "string"
+        },
+        "input": {
+          "type": "string"
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "status": {
+          "enum": [
+            "success",
+            "partial",
+            "failed"
+          ]
+        },
+        "outputs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/output"
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "error": {
+          "$ref": "#/$defs/error"
+        },
+        "selection": {
+          "$ref": "#/$defs/selection"
+        },
+        "source": {
+          "$ref": "#/$defs/source"
+        },
+        "selected_channels": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "colour": {
+          "type": "object",
+          "properties": {
+            "input_space": {
+              "type": "string"
+            },
+            "input_requested": {
+              "type": "string"
+            },
+            "basis": {
+              "enum": [
+                "explicit",
+                "metadata",
+                "format_assumption"
+              ]
+            },
+            "working_space": {
+              "type": "string"
+            },
+            "output_space": {
+              "type": "string"
+            },
+            "ocio_config": {
+              "type": "string"
+            },
+            "config_basis": {
+              "enum": [
+                "explicit",
+                "environment",
+                "builtin"
+              ]
+            },
+            "display": {
+              "type": "string"
+            },
+            "view": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "ocio_config",
+            "config_basis",
+            "input_requested",
+            "display",
+            "view"
+          ],
+          "additionalProperties": false
+        },
+        "decoded_mib": {
+          "type": "number",
+          "minimum": 0
+        },
+        "preset": {
+          "enum": [
+            "fast",
+            "balanced",
+            "quality"
+          ]
+        },
+        "filter": {
+          "enum": [
+            "box",
+            "triangle",
+            "lanczos3"
+          ]
+        },
+        "timings_ms": {
+          "type": "object",
+          "required": [
+            "total"
+          ],
+          "additionalProperties": {
+            "type": "number",
+            "minimum": 0
+          }
+        }
+      },
+      "required": [
+        "schema_version",
+        "type",
+        "id",
+        "input",
+        "ok",
+        "status",
+        "outputs",
+        "warnings",
+        "timings_ms"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "success"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "ok": {
+                "const": true
+              },
+              "outputs": {
+                "minItems": 1,
+                "items": {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/output"
+                    },
+                    {
+                      "properties": {
+                        "status": {
+                          "const": "success"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "required": [
+              "selection",
+              "source",
+              "colour",
+              "selected_channels"
+            ]
+          },
+          "else": {
+            "properties": {
+              "ok": {
+                "const": false
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "outputs": {
+                "maxItems": 0
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "error"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "partial"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "outputs": {
+                "allOf": [
+                  {
+                    "contains": {
+                      "properties": {
+                        "status": {
+                          "const": "success"
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "status": {
+                          "const": "failed"
+                        }
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "failed"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "outputs": {
+                "items": {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/output"
+                    },
+                    {
+                      "properties": {
+                        "status": {
+                          "const": "failed"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "summary": {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "type": {
+          "const": "summary"
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "success": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "partial": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "failed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "output_counts": {
+          "type": "object",
+          "properties": {
+            "total": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "success": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "failed": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "not_attempted": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "total",
+            "success",
+            "failed",
+            "not_attempted"
+          ],
+          "additionalProperties": false
+        },
+        "elapsed_ms": {
+          "type": "number",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "schema_version",
+        "type",
+        "total",
+        "success",
+        "partial",
+        "failed",
+        "output_counts",
+        "elapsed_ms"
+      ],
+      "additionalProperties": false
+    },
+    "inspection": {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "type": {
+          "const": "inspection"
+        },
+        "input": {
+          "type": "string"
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "parts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "part": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "name": {
+                "type": "string"
+              },
+              "width": {
+                "type": "integer"
+              },
+              "height": {
+                "type": "integer"
+              },
+              "channels": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "sample_type": {
+                "type": "string"
+              },
+              "deep": {
+                "type": "boolean"
+              },
+              "compression": {
+                "type": "string"
+              },
+              "data_window": {
+                "type": "array",
+                "items": {
+                  "type": "integer"
+                },
+                "minItems": 4,
+                "maxItems": 4
+              },
+              "display_window": {
+                "type": "array",
+                "items": {
+                  "type": "integer"
+                },
+                "minItems": 4,
+                "maxItems": 4
+              },
+              "colour_space": {
+                "type": "string"
+              },
+              "candidates": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/candidate"
+                }
+              }
+            },
+            "required": [
+              "part",
+              "name",
+              "width",
+              "height",
+              "channels",
+              "sample_type",
+              "deep",
+              "compression",
+              "data_window",
+              "display_window",
+              "colour_space",
+              "candidates"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "error": {
+          "$ref": "#/$defs/error"
+        }
+      },
+      "required": [
+        "schema_version",
+        "type",
+        "input",
+        "ok"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "ok": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "parts"
+            ],
+            "properties": {
+              "parts": {
+                "minItems": 1
+              }
+            }
+          },
+          "else": {
+            "required": [
+              "error"
+            ]
+          }
+        }
+      ]
+    },
+    "version": {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "type": {
+          "const": "version"
+        },
+        "version": {
+          "type": "string"
+        },
+        "oiio_version": {
+          "type": "string"
+        },
+        "build": {
+          "$ref": "#/$defs/build"
+        }
+      },
+      "required": [
+        "schema_version",
+        "type",
+        "version",
+        "oiio_version",
+        "build"
+      ],
+      "additionalProperties": false
+    },
+    "capabilities": {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "type": {
+          "const": "capabilities"
+        },
+        "version": {
+          "type": "string"
+        },
+        "oiio_version": {
+          "type": "string"
+        },
+        "input_plugins": {
+          "type": "string"
+        },
+        "output_plugins": {
+          "type": "string"
+        },
+        "build": {
+          "$ref": "#/$defs/build"
+        },
+        "cpu": {
+          "type": "object",
+          "properties": {
+            "runtime_simd": {
+              "type": "string"
+            },
+            "oiio_simd": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "runtime_simd",
+            "oiio_simd"
+          ],
+          "additionalProperties": false
+        },
+        "selection_policy": {
+          "const": "v1"
+        },
+        "libraries": {
+          "type": "string"
+        },
+        "output_formats": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "jpeg",
+              "png",
+              "webp"
+            ]
+          },
+          "uniqueItems": true
+        },
+        "presets": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "defaults": {
+          "type": "object",
+          "properties": {
+            "format": {
+              "type": "string"
+            },
+            "quality": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "size": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "minItems": 2,
+              "maxItems": 2
+            },
+            "background": {
+              "type": "string"
+            },
+            "preset": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "format",
+            "quality",
+            "size",
+            "background",
+            "preset"
+          ],
+          "additionalProperties": false
+        },
+        "limitations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "schema_version",
+        "type",
+        "version",
+        "oiio_version",
+        "input_plugins",
+        "output_plugins",
+        "build",
+        "cpu",
+        "selection_policy",
+        "libraries",
+        "output_formats",
+        "presets",
+        "defaults",
+        "limitations"
+      ],
+      "additionalProperties": false
+    },
+    "request_error": {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "type": {
+          "const": "error"
+        },
+        "error": {
+          "$ref": "#/$defs/error"
+        }
+      },
+      "required": [
+        "schema_version",
+        "type",
+        "error"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

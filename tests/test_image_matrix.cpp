@@ -373,6 +373,63 @@ static Json alpha_case(const fs::path& root, const std::string& name) {
     return {{"backgrounds", {"black", "white", "transparent"}}, {"source_unchanged", true}};
 }
 
+static Json data_case(const fs::path& root,const std::string& name) {
+    std::vector<std::string> names{"R","G","B"};
+    std::string error,explicit_group,part_name;
+    if(name=="data_z"){names={"Z"};error="visualization_required";}
+    if(name=="data_normal" || name=="data_explicit_data") {
+        names={"normal.R","normal.G","normal.B"};error="visualization_required";
+        if(name=="data_explicit_data")explicit_group="normal";
+    }
+    if(name=="data_normal_part"){part_name="normal";error="visualization_required";}
+    if(name=="data_id"){names={"object_id.R","object_id.G","object_id.B"};error="visualization_required";}
+    if(name=="data_crypto"){names={"CryptoObject00.R","CryptoObject00.G","CryptoObject00.B"};error="visualization_required";}
+    if(name=="data_unknown"){names={"arbitrary"};error="ambiguous_channels";}
+    if(name=="data_grey")names={"Y"};
+    if(name=="data_lowercase")names={"r","g","b"};
+    if(name=="data_beauty_z")names={"R","G","B","A","Z"};
+    if(name=="data_beauty_normal")names={"Beauty.R","Beauty.G","Beauty.B","normal.R","normal.G","normal.B"};
+    if(name=="data_beauty_crypto")names={"Beauty.R","Beauty.G","Beauty.B","CryptoObject00.R","CryptoObject00.G","CryptoObject00.B"};
+    if(name=="data_root_priority")names={"R","G","B","Beauty.R","Beauty.G","Beauty.B"};
+    if(name=="data_ambiguous" || name=="data_explicit") {
+        names={"Diffuse.R","Diffuse.G","Diffuse.B","Specular.R","Specular.G","Specular.B"};
+        if(name=="data_ambiguous")error="ambiguous_channels";else explicit_group="Specular";
+    }
+    if(name=="data_missing_part")error="part_not_found";
+    if(name=="data_missing_group"){error="channels_not_found";explicit_group="missing";}
+    ImageSpec spec(4,2,int(names.size()),TypeDesc::FLOAT);spec.channelnames=names;
+    if(!part_name.empty())spec.attribute("oiio:subimagename",part_name);
+    const auto input=root/"source.exr";
+    std::vector<float> pixels(size_t(8*spec.nchannels),name=="data_black"?0.0f:0.4f);
+    auto alpha=std::find(names.begin(),names.end(),"A");
+    if(alpha!=names.end()) {spec.alpha_channel=int(alpha-names.begin());for(int i=0;i<8;++i)pixels[size_t(i*spec.nchannels+spec.alpha_channel)]=1.0f;}
+    write(input,spec,pixels);const auto original=bytes(input);
+    thumbgen::Job job;job.id=name;job.input=input.u8string();job.options.input_space="linear";
+    job.options.channels=explicit_group;if(name=="data_missing_part")job.options.part=99;
+    job.outputs.push_back({(root/"preview.png").u8string(),"png",4,2,90});
+    thumbgen::Engine engine;auto inspection=engine.inspect(job.input);auto result=engine.convert(job);
+    require(inspection["ok"].get<bool>() && !inspection["parts"][0]["candidates"].empty(),inspection.dump());
+    require(!result["selection"]["candidates"].empty(),result.dump());
+    if(!error.empty()) {
+        require(!result["ok"].get<bool>() && result["error"]["code"]==error,result.dump());
+        require(!fs::exists(root/"preview.png"),"data or ambiguous input wrote a preview");
+    } else {
+        require(result["ok"].get<bool>(),result.dump());
+        auto chosen=result["selection"]["chosen"];
+        if(name=="data_beauty_normal" || name=="data_beauty_crypto")require(chosen["group"]=="Beauty",result.dump());
+        if(name=="data_root_priority" || name=="data_beauty_z")require(chosen["group"]=="RGB",result.dump());
+        if(name=="data_grey")require(chosen["kind"]=="grey",result.dump());
+        if(name=="data_explicit")require(chosen["group"]=="Specular",result.dump());
+        OIIO::ImageBuf image(job.outputs[0].path);require(image.read(),image.geterror());
+        for(int y=0;y<2;++y)for(int x=0;x<4;++x) {
+            float p[3];image.getpixel(x,y,p,3);
+            for(float value:p)require(std::abs(value-(name=="data_black"?0.0f:srgb(0.4f)))<0.012f,"black/visible reference mismatch");
+        }
+    }
+    require(bytes(input)==original,"classification source changed");
+    return {{"inspection",inspection},{"result",result}};
+}
+
 int main(int argc, char** argv) {
     if (argc != 2) { std::cerr << "expected one matrix case\n"; return 2; }
     const std::string name = argv[1];
@@ -383,6 +440,7 @@ int main(int argc, char** argv) {
     try {
         fs::create_directory(root);
         if (name.rfind("orientation_", 0) == 0) record["checks"] = orientation_case(root, std::stoi(name.substr(12)));
+        else if (name.rfind("data_", 0) == 0) record["checks"] = data_case(root,name);
         else if (name.rfind("colour_", 0) == 0) record["checks"] = colour_case(root, name);
         else if (name.rfind("alpha_", 0) == 0) record["checks"] = alpha_case(root, name);
         else if (name.rfind("output_", 0) == 0) record["checks"] = output_case(root, name.substr(7));

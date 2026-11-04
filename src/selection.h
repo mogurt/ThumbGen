@@ -1,0 +1,12 @@
+#pragma once
+#include <thumbgen/core.h>
+#include <OpenImageIO/imageio.h>
+
+namespace thumbgen::detail {
+struct Candidate {
+    std::string group, kind, reason;
+    std::vector<int> channels;
+};
+std::vector<Candidate> classify(const OIIO::ImageSpec& spec);
+Json candidate_json(const OIIO::ImageSpec& spec, const Candidate& candidate, int part);
+}

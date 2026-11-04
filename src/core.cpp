@@ -1,4 +1,6 @@
 #include <thumbgen/core.h>
+#include "selection.h"
+#include "build_info.h"
 #include <OpenImageIO/color.h>
 #include <OpenImageIO/imagebuf.h>
 #include <OpenImageIO/imagebufalgo.h>
@@ -43,43 +45,10 @@ static Json spec_json(const OIIO::ImageSpec& s, int part) {
         {"display_window",{s.full_x,s.full_y,s.full_width,s.full_height}},
         {"colour_space",s.get_string_attribute("oiio:ColorSpace")}};
 }
-static std::vector<int> select(const OIIO::ImageSpec& s, const std::string& group) {
-    auto index = [&](const std::string& n) {
-        auto it=std::find(s.channelnames.begin(),s.channelnames.end(),n);
-        return it==s.channelnames.end() ? -1 : int(it-s.channelnames.begin());
-    };
-    auto rgb = [&](const std::string& prefix) {
-        std::vector<int> out{index(prefix+"R"),index(prefix+"G"),index(prefix+"B")};
-        if (*std::min_element(out.begin(),out.end())<0) return std::vector<int>{};
-        int alpha=index(prefix+"A");
-        if(alpha<0)alpha=index("A");
-        if(alpha>=0)out.push_back(alpha);
-        return out;
-    };
-    if(!group.empty()) {
-        auto out=rgb(group=="RGB" ? "" : group+".");
-        if(out.empty())throw Failure("channels_not_found","requested RGB channel group does not exist");
-        return out;
-    }
-    auto root=rgb("");
-    if(!root.empty())return root;
-    std::vector<std::vector<int>> candidates;
-    bool crypto=false;
-    for(const auto& name:s.channelnames) {
-        crypto=crypto || name.find("Crypto")==0 || name.find("crypto")==0;
-        if(name.size()>2 && name.substr(name.size()-2)==".R") {
-            auto out=rgb(name.substr(0,name.size()-1));
-            if(!out.empty())candidates.push_back(out);
-        }
-    }
-    if(crypto)throw Failure("visualization_required","Cryptomatte data requires dedicated visualization");
-    if(candidates.size()==1)return candidates[0];
-    if(s.nchannels==1 || (s.nchannels==2 && s.alpha_channel==1)) {
-        std::vector<int> out{0,0,0};
-        if(s.alpha_channel==1)out.push_back(1);
-        return out;
-    }
-    throw Failure("ambiguous_channels","specify --channels for ambiguous or non-colour channels");
+static Json candidates_json(const OIIO::ImageSpec& spec,int part) {
+    Json result=Json::array();
+    for(const auto& candidate:detail::classify(spec))result.push_back(detail::candidate_json(spec,candidate,part));
+    return result;
 }
 
 struct Engine::Impl {
@@ -102,7 +71,12 @@ Json Engine::capabilities() {
     for(const char* format:{"jpeg","png","webp"})
         if(OIIO::ImageOutput::create(std::string("capability.")+format))output_formats.push_back(format);
     return {{"schema_version",1},{"type","capabilities"},{"version","0.1.0-dev"},
-        {"oiio_version",OIIO_VERSION_STRING},{"input_plugins",OIIO::get_string_attribute("format_list")},
+        {"oiio_version",OIIO_VERSION_STRING},{"input_plugins",OIIO::get_string_attribute("input_format_list")},
+        {"output_plugins",OIIO::get_string_attribute("output_format_list")},
+        {"build",{{"revision",THUMBGEN_SOURCE_REVISION},{"dirty",THUMBGEN_SOURCE_DIRTY},
+            {"compiler",THUMBGEN_COMPILER},{"platform",THUMBGEN_PLATFORM},{"architecture",THUMBGEN_ARCH}}},
+        {"cpu",{{"runtime_simd",OIIO::get_string_attribute("hw:simd")},{"oiio_simd",OIIO::get_string_attribute("build:simd")}}},
+        {"selection_policy","v1"},
         {"libraries",OIIO::get_string_attribute("library_list")},
         {"output_formats",output_formats},{"presets",{"fast","balanced","quality"}},
         {"defaults",{{"format","jpeg"},{"quality",90},{"size",{1024,1024}},
@@ -118,7 +92,10 @@ Json Engine::inspect(const std::string& input) {
     if(!in){result["error"]={{"code","open_failed"},{"message",OIIO::geterror()}};return result;}
     result["parts"]=Json::array();
     OIIO::ImageSpec spec;
-    for(int part=0;in->seek_subimage(part,0,spec);++part)result["parts"].push_back(spec_json(spec,part));
+    for(int part=0;in->seek_subimage(part,0,spec);++part) {
+        auto value=spec_json(spec,part);value["candidates"]=candidates_json(spec,part);
+        result["parts"].push_back(value);
+    }
     if(result["parts"].empty()) {
         result["error"]={{"code","metadata_failed"},{"message",in->geterror()}};
         return result;
@@ -146,25 +123,48 @@ Json Engine::convert(const Job& job) {
         OIIO::ImageSpec spec;
         std::vector<int> channels;
         int part=-1;
-        std::string selection_error;
-        std::string selection_code="selection_failed";
+        const std::string selection_basis=job.options.part>=0?
+            (job.options.channels.empty()?"explicit_part":"explicit_part_channels"):
+            (job.options.channels.empty()?"automatic":"explicit_channels");
+        r["selection"]={{"policy","v1"},{"basis",selection_basis},
+            {"candidates",Json::array()}};
+        struct Choice {int part;OIIO::ImageSpec spec;detail::Candidate candidate;};
+        std::vector<Choice> choices;
+        bool part_exists=false,has_deep=false,has_data=false,matched_group=false;
         for(int p=0;;++p) {
             OIIO::ImageSpec candidate;
             if(!in->seek_subimage(p,0,candidate))break;
+            auto groups=detail::classify(candidate);
+            for(const auto& group:groups)r["selection"]["candidates"].push_back(detail::candidate_json(candidate,group,p));
             if(job.options.part>=0 && p!=job.options.part)continue;
-            if(candidate.deep){selection_error="Deep data requires flattening";selection_code="deep_requires_flattening";continue;}
-            try {
-                auto found=select(candidate,job.options.channels);
-                if(part>=0)throw Failure("ambiguous_parts","multiple colour parts; specify --part");
-                channels=std::move(found);spec=candidate;part=p;
-                if(job.options.part>=0)break;
+            part_exists=true;has_deep=has_deep || candidate.deep;
+            std::vector<detail::Candidate> eligible;
+            for(const auto& group:groups) {
+                if(!job.options.channels.empty() && group.group!=job.options.channels)continue;
+                matched_group=true;has_data=has_data || group.kind=="data";
+                if(group.kind=="colour" || group.kind=="grey")eligible.push_back(group);
             }
-            catch(const Failure& e) {
-                if(job.options.part>=0 || e.code=="ambiguous_parts")throw;
-                selection_error=e.what();selection_code=e.code;
+            // Prefer root RGB within a part. Other parts still participate in
+            // ambiguity checks; do not silently skip a part with several groups.
+            if(job.options.channels.empty()) {
+                auto root=std::find_if(eligible.begin(),eligible.end(),[](const auto& c){return c.group=="RGB";});
+                if(root!=eligible.end()){auto chosen=*root;eligible={std::move(chosen)};}
             }
+            for(const auto& group:eligible)choices.push_back({p,candidate,group});
         }
-        if(part<0)throw Failure(selection_code,selection_error.empty()?"no suitable part found":selection_error);
+        if(!part_exists)throw Failure("part_not_found","requested part does not exist");
+        if(choices.empty()) {
+            if(has_deep)throw Failure("deep_requires_flattening","Deep data requires flattening");
+            if(has_data)throw Failure("visualization_required","data AOV requires dedicated visualization; colour selection cannot override it");
+            if(!job.options.channels.empty() && !matched_group)throw Failure("channels_not_found","requested channel group does not exist");
+            throw Failure("ambiguous_channels","no recognized colour or luminance layout; inspect candidates");
+        }
+        if(choices.size()!=1) {
+            bool same=std::all_of(choices.begin(),choices.end(),[&](const auto& c){return c.part==choices[0].part;});
+            throw Failure(same?"ambiguous_channels":"ambiguous_parts","multiple colour candidates; specify part and/or channels");
+        }
+        auto chosen=std::move(choices[0]);part=chosen.part;spec=std::move(chosen.spec);channels=chosen.candidate.channels;
+        r["selection"]["chosen"]=detail::candidate_json(spec,chosen.candidate,part);
         if(spec.width<1 || spec.height<1 || spec.depth!=1 || spec.full_width<1 || spec.full_height<1)
             throw Failure("invalid_dimensions","unsupported image dimensions");
         r["source"]=spec_json(spec,part);
