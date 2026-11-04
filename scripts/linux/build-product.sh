@@ -16,9 +16,5 @@ cmake --build "$cache/thumbgen-build" 2>&1 | tee "$logs/thumbgen-build.log"
 export LD_LIBRARY_PATH="$cache/sdk/lib:$cache/oiio-deps/dist/lib:${LD_LIBRARY_PATH:-}"
 "$cache/thumbgen-build/thumbgen" capabilities --json | tee "$logs/capabilities.json"
 ctest --test-dir "$cache/thumbgen-build" --output-on-failure 2>&1 | tee "$logs/ctest.log"
-python3 "$repo/scripts/linux/audit-abi.py" "$cache/thumbgen-build/thumbgen" \
-    "$cache/thumbgen-build/thumbgen_core_tests" "$cache/thumbgen-build/thumbgen_image_matrix" \
-    "$cache/thumbgen-build/thumbgen_budget_tests" "$cache/thumbgen-build/thumbgen_process_tests" \
-    "$cache/thumbgen-build/thumbgen_control_tests" \
-    "$cache/thumbgen-build/thumbgen_worker_protocol_tests" "$cache/thumbgen-build/thumbgen_isolated_tests" \
+python3 "$repo/scripts/linux/audit-abi.py" "$cache/thumbgen-build"/thumbgen* \
     > "$logs/abi.json"

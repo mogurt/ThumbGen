@@ -15,7 +15,15 @@ stage = Path(os.environ.get('THUMBGEN_VALIDATION_DIR', repo / '.deps/linux/valid
 stage.mkdir(parents=True, exist_ok=True)
 for directory in ('bin', 'lib', 'tests', 'schemas', 'tools'):
     (stage / directory).mkdir(exist_ok=True)
-binaries = ('thumbgen', 'thumbgen_core_tests', 'thumbgen_image_matrix', 'thumbgen_budget_tests', 'thumbgen_process_tests', 'thumbgen_control_tests', 'thumbgen_worker_protocol_tests', 'thumbgen_isolated_tests')
+# Discover native test programs from the configured suite, including new targets.
+ctest = tools_cache / 'tools/cmake-3.31.8-linux-x86_64/bin/ctest'
+suite = json.loads(subprocess.check_output(
+    [str(ctest), '--test-dir', str(build), '--show-only=json-v1'], text=True))
+binaries = tuple(sorted({'thumbgen'} | {
+    Path(test['command'][0]).name for test in suite['tests']
+    if Path(test['command'][0]).parent == build
+    and Path(test['command'][0]).name.startswith('thumbgen')
+}))
 for name in binaries:
     shutil.copy2(build / name, stage / 'bin' / name)
 logs = Path(os.environ.get('THUMBGEN_BUILD_LOG_DIR', cache / 'logs'))
@@ -47,9 +55,6 @@ for path in (repo / 'schemas').glob('*.json'):
     shutil.copy2(path, stage / 'schemas' / path.name)
 # Discover the authoritative suite from configured CTest, rather than maintaining
 # a second image-case list that can silently fall behind CMakeLists.txt.
-ctest = tools_cache / 'tools/cmake-3.31.8-linux-x86_64/bin/ctest'
-suite = json.loads(subprocess.check_output(
-    [str(ctest), '--test-dir', str(build), '--show-only=json-v1'], text=True))
 replacements = {str(build / name): '@BIN@/' + name for name in binaries}
 replacements.update({str(repo / 'tests/test_cli.py'): '@TESTS@/test_cli.py',
                      str(repo / 'tests/test_protocol.py'): '@TESTS@/test_protocol.py',

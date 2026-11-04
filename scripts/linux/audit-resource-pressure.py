@@ -12,10 +12,15 @@ parser=argparse.ArgumentParser()
 parser.add_argument('--stage',type=Path,required=True)
 parser.add_argument('--schema',type=Path,required=True)
 parser.add_argument('--windows-report',type=Path,required=True)
+parser.add_argument('--archive-identity',type=Path,help='New archive identity; otherwise retain historical 5709348 scope')
+parser.add_argument('--verify-encoding',action='store_true',help='Require separately collected byte-level encoding audits')
 args=parser.parse_args()
 validator=Draft202012Validator(json.loads(args.schema.read_text()))
 windows=json.loads(args.windows_report.read_text())
 binding=json.loads((args.stage/'measurement-binding.json').read_text())
+if args.archive_identity:
+    archive=json.loads(args.archive_identity.read_text())
+    assert binding['measurement_source_commit']==binding['product_source_commit']==archive['commit']
 summaries={}
 source_hashes=None
 for platform in ('CentOS-7.9','rocky'):
@@ -25,6 +30,8 @@ for platform in ('CentOS-7.9','rocky'):
     assert hashlib.sha256((directory/'report.json').read_bytes()).hexdigest()==storage['report_sha256']
     assert report['executable_sha256']==binding['product_sha256']
     assert report['native_image_validator']['sha256']==binding['tools']['thumbgen_validate_image']['measured_sha256']
+    if args.archive_identity:
+        assert report['capabilities']['quantization']=='unorm8-half-up-v1'
     assert report['cycles']==2 and report['guard_mib']==4096
     assert report['outputs_complete'] and report['sampled_calibration_pass'] and report['complete']
     assert report['source_sha256_unchanged'] and report['input_sha256']==windows['input_sha256']
@@ -72,6 +79,16 @@ for platform in ('CentOS-7.9','rocky'):
     copy=json.loads((directory/'source-copy.json').read_text())
     assert len(copy['inputs'])==12
     assert all(row['bytes_identical'] and row['sha256']==report['input_sha256'][row['id']] for row in copy['inputs'])
+    if args.verify_encoding:
+        encoded=json.loads((directory/'encoding-audit.json').read_text())
+        assert encoded['pressure_report_sha256']==storage['report_sha256']
+        assert encoded['actual_encoder_quality_verified']
+        assert encoded['counts']['pressure']==dict(jpeg=216,png=24,webp=24)
+        assert len(encoded['checks']['pressure'])==264
+        assert all(item.get('standard_q90_luminance') for item in encoded['checks']['pressure'] if item['format']=='jpeg')
+        assert all(item.get('lossy_vp8') for item in encoded['checks']['pressure'] if item['format']=='webp')
+        assert all(item.get('bit_depth')==8 for item in encoded['checks']['pressure'] if item['format']=='png')
+        summaries[platform]['encoding_checks']=encoded['counts']['pressure']
 centos_end=summaries['CentOS-7.9']['storage']['report_mtime_ns']/1e9
 rocky_start=datetime.fromisoformat(summaries['rocky']['created_utc']).timestamp()
 assert centos_end<rocky_start
@@ -87,6 +104,14 @@ summary=dict(platforms=summaries,linux_runs_sequential=True,centos_report_comple
         'Native read-back runs after measured CLI exit and is outside the CLI RSS/time samples.',
         'The two owned Linux runs are sequential; the physical host is not a dedicated isolated benchmark host.',
         'No shared-storage, actual-Q90, release-default or formal QA gate acceptance.'])
+if args.archive_identity:
+    archive=json.loads(args.archive_identity.read_text())
+    summary['measurement_source_commit']=archive['commit']
+    summary['product_source_commit']=archive['commit']
+if args.verify_encoding:
+    summary['quality_scope']=dict(preset_requested='balanced',quality_requested=90,actual_encoder_quality_verified=True,
+        proof='All JPEG luminance DQT equals standard Q90; WebP RIFF has VP8 without VP8L; PNG IHDR bit depth is 8')
+    summary['limits'][-1]='No shared-storage, release-default or formal QA gate acceptance; legacy timings are not a quality-equivalent baseline.'
 (args.stage/'pressure-summary.json').write_text(json.dumps(summary,indent=2)+'\n')
 print(json.dumps({key:dict(tasks=value['tasks'],previews=value['previews'],schema_records=value['schema_records'],
     oiio_simd=value['oiio_simd'],max_profile_ratio=max(p['peak_over_estimate_ratio'] for p in value['profiles']),batches=value['batches'])
