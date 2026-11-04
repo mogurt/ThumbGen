@@ -49,7 +49,10 @@ for obj in audit['objects']:
         # Use copies on the shared Windows filesystem so both WSL distros see them.
         shutil.copy2(path, alias)
     copied.append(str(path))
-for name in ('test_cli.py', 'test_protocol.py', 'test_interrupt.py', 'requirements.txt'):
+python_tests = ['test_cli.py', 'test_protocol.py', 'test_interrupt.py']
+if any(test['name'] == 'public_aov' for test in suite['tests']):
+    python_tests.append('test_aov_cli.py')
+for name in (*python_tests, 'requirements.txt'):
     shutil.copy2(repo / 'tests' / name, stage / 'tests' / name)
 for path in (repo / 'schemas').glob('*.json'):
     shutil.copy2(path, stage / 'schemas' / path.name)
@@ -59,6 +62,7 @@ replacements = {str(build / name): '@BIN@/' + name for name in binaries}
 replacements.update({str(repo / 'tests/test_cli.py'): '@TESTS@/test_cli.py',
                      str(repo / 'tests/test_protocol.py'): '@TESTS@/test_protocol.py',
                      str(repo / 'tests/test_interrupt.py'): '@TESTS@/test_interrupt.py',
+                     str(repo / 'tests/test_aov_cli.py'): '@TESTS@/test_aov_cli.py',
                      str(repo / 'schemas'): '@SCHEMAS@',
                      str(cache / 'sdk/lib'): '@LIB@',
                      str(tools_cache / 'tools/python-3.11.11/bin/python3'): '@PYTHON@'})
@@ -91,6 +95,8 @@ if not any(test['name'] == 'public_protocol' for test in tests):
     raise SystemExit('Configured protocol test is missing; refusing incomplete validation')
 if not any(test['name'] == 'public_interrupt' for test in tests):
     raise SystemExit('Configured interrupt test is missing; refusing incomplete validation')
+if 'thumbgen_aov_tests' in binaries and not any(test['name'] == 'public_aov' for test in tests):
+    raise SystemExit('Configured public AOV test is missing; refusing incomplete validation')
 (stage / 'tests/ctest-suite.json').write_text(json.dumps(dict(tests=tests), indent=2) + '\n')
 (stage / 'tools/cmake/bin').mkdir(parents=True, exist_ok=True)
 shutil.copy2(ctest, stage / 'tools/cmake/bin/ctest')

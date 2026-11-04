@@ -42,7 +42,7 @@ if set(targets) != {'thumbgen', 'libthumbgen_core.a', 'libthumbgen_runtime.a', '
     raise RuntimeError('Release product target set differs: ' + repr(targets))
 options = {key: value.upper() for key, value in re.findall(r'^([A-Za-z0-9_]+):BOOL=([^\r\n]*)$', cache, re.MULTILINE)}
 if (any(options.get(key) not in ('OFF','FALSE','NO','0') for key in
-        ('BUILD_TESTING','THUMBGEN_BUILD_PROBES','THUMBGEN_BUILD_VIPS')) or
+        ('BUILD_TESTING','THUMBGEN_BUILD_PROBES','THUMBGEN_BUILD_VIPS','THUMBGEN_BUILD_STRESS_FIXTURES')) or
         options.get('THUMBGEN_VERIFY_DEPENDENCY_VERSIONS') not in ('ON','TRUE','YES','1')):
     raise RuntimeError('Release preset options differ')
 versions = json.loads((source / 'dependencies/versions.json').read_text())
