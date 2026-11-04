@@ -20,4 +20,5 @@ python3 "$repo/scripts/linux/audit-abi.py" "$cache/thumbgen-build/thumbgen" \
     "$cache/thumbgen-build/thumbgen_core_tests" "$cache/thumbgen-build/thumbgen_image_matrix" \
     "$cache/thumbgen-build/thumbgen_budget_tests" "$cache/thumbgen-build/thumbgen_process_tests" \
     "$cache/thumbgen-build/thumbgen_control_tests" \
+    "$cache/thumbgen-build/thumbgen_worker_protocol_tests" "$cache/thumbgen-build/thumbgen_isolated_tests" \
     > "$logs/abi.json"
