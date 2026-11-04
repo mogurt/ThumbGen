@@ -491,6 +491,12 @@ Json Engine::convert(const Job& job) {
                     OIIO::ImageBuf rgb;std::vector<int> rgb_order{0,1,2};
                     check(iba::channels(rgb,preview,3,rgb_order),rgb,"channels_failed");preview=std::move(rgb);
                 }
+                // Processing preserves source metadata. A source compression
+                // (EXR zip, TIFF lzw, WebP lossless, or codec:quality) must not
+                // override the requested output codec and quality.
+                preview.specmod().erase_attribute("compression");
+                if(out.format=="jpeg" || out.format=="webp")
+                    preview.specmod().attribute("compression",out.format+":"+std::to_string(out.quality));
                 preview.specmod().attribute("CompressionQuality",out.quality);
                 preview.specmod().attribute("oiio:ColorSpace",job.options.display.empty()?"sRGB":"display-referred");
                 fs::path temporary;

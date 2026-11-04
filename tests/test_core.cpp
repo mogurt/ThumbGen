@@ -1,9 +1,12 @@
 #include <thumbgen/core.h>
 #include <OpenImageIO/imagebuf.h>
 #include <OpenImageIO/imageio.h>
+#include <algorithm>
 #include <chrono>
+#include <fstream>
 #include <filesystem>
 #include <iostream>
+#include <iterator>
 #include <stdexcept>
 
 namespace fs=std::filesystem;
@@ -15,12 +18,77 @@ static void write_exr(const fs::path& path,const OIIO::ImageSpec& spec) {
     require(out->write_image(OIIO::TypeDesc::FLOAT,pixels.data()),"cannot write EXR fixture");
     require(out->close(),"cannot close EXR fixture");
 }
+static std::vector<unsigned char> bytes(const fs::path& path) {
+    std::ifstream in(path,std::ios::binary);
+    require(bool(in),"cannot read encoded output");
+    return {std::istreambuf_iterator<char>(in),std::istreambuf_iterator<char>()};
+}
+static void jpeg_quality(const fs::path& path,int quality) {
+    // Independently inspect the actual JPEG luminance quantization table,
+    // rather than trusting requested metadata or a file size comparison.
+    const unsigned char standard[]={16,11,12,14,12,10,16,14,13,14,18,17,16,19,24,40,
+        26,24,22,22,24,49,35,37,29,40,58,51,61,60,57,51,56,55,64,72,92,78,64,68,
+        87,69,55,56,80,109,81,87,95,98,103,104,103,62,77,113,121,112,100,120,92,101,103,99};
+    auto data=bytes(path);require(data.size()>4 && data[0]==255 && data[1]==216,"JPEG header");
+    for(size_t pos=2;pos+4<=data.size();) {
+        require(data[pos]==255,"JPEG marker boundary");auto marker=data[pos+1];
+        if(marker==0xda || marker==0xd9)break;
+        size_t length=(size_t(data[pos+2])<<8)|data[pos+3];
+        require(length>=2 && pos+2+length<=data.size(),"JPEG segment length");
+        if(marker==0xdb)for(size_t q=pos+4;q<pos+2+length;) {
+            auto info=data[q++];require((info>>4)<=1,"JPEG DQT precision");
+            size_t size=(info>>4)?128:64;require(q+size<=pos+2+length,"JPEG DQT bounds");
+            if((info&15)==0) {
+                require(size==64,"expected 8-bit luminance table");
+                int scale=quality<50?5000/quality:200-2*quality;
+                for(size_t i=0;i<64;++i)require(data[q+i]==std::max(1,std::min(255,(standard[i]*scale+50)/100)),"requested JPEG quality ignored");
+                return;
+            }
+            q+=size;
+        }
+        pos+=2+length;
+    }
+    require(false,"missing JPEG luminance table");
+}
+static void output_compression(const fs::path& root,thumbgen::Engine& engine) {
+    const char* extensions[]={"exr","tif","png","webp"};
+    const char* compressions[]={"zip","lzw","zip","lossless"};
+    std::vector<float> pixels(32*16*3);
+    for(size_t i=0;i<pixels.size();++i)pixels[i]=float((i*37)%251)/250.0f;
+    for(int source=0;source<4;++source) {
+        auto input=root/(std::string("compression-source.")+extensions[source]);
+        OIIO::ImageSpec spec(32,16,3,source==0?OIIO::TypeDesc::FLOAT:OIIO::TypeDesc::UINT8);
+        spec.attribute("compression",compressions[source]);spec.attribute("CompressionQuality",100);
+        auto out=OIIO::ImageOutput::create(input.u8string());require(bool(out),OIIO::geterror());
+        require(out->open(input.u8string(),spec),out->geterror());
+        require(out->write_image(OIIO::TypeDesc::FLOAT,pixels.data()),"compression fixture write");
+        require(out->close(),"compression fixture close");
+        thumbgen::Job job;job.input=input.u8string();job.options.input_space=source==0?"linear":"sRGB";
+        for(int quality:{20,90}) {
+            auto stem=std::string("compression-")+extensions[source]+"-"+std::to_string(quality);
+            job.outputs={{(root/(stem+".jpg")).u8string(),"jpeg",32,16,quality},
+                         {(root/(stem+".webp")).u8string(),"webp",32,16,quality}};
+            auto result=engine.convert(job);require(result["ok"].get<bool>(),result.dump());
+            jpeg_quality(root/(stem+".jpg"),quality);
+            auto webp=bytes(root/(stem+".webp"));bool lossy=false;
+            for(size_t p=12;p+8<=webp.size();) {
+                size_t n=size_t(webp[p+4])|(size_t(webp[p+5])<<8)|(size_t(webp[p+6])<<16)|(size_t(webp[p+7])<<24);
+                require(n<=webp.size()-p-8,"WebP chunk bounds");
+                std::string tag(webp.begin()+p,webp.begin()+p+4);
+                require(tag!="VP8L","source lossless mode leaked into WebP preview");lossy=lossy || tag=="VP8 ";
+                p+=8+n+(n&1);
+            }
+            require(lossy,"missing lossy WebP payload");
+        }
+    }
+}
 int main() {
     auto root=fs::temp_directory_path()/fs::path("thumbgen-core-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     fs::create_directory(root);
     struct Cleanup {fs::path path;~Cleanup(){std::error_code ec;if(path.parent_path()==fs::temp_directory_path())fs::remove_all(path,ec);}} cleanup{root};
     try {
         thumbgen::Engine engine;
+        output_compression(root,engine);
         OIIO::ImageSpec cropped(1,1,3,OIIO::TypeDesc::FLOAT);
         cropped.x=2;cropped.y=1;cropped.full_x=0;cropped.full_y=0;cropped.full_width=4;cropped.full_height=3;
         write_exr(root/"crop.exr",cropped);
