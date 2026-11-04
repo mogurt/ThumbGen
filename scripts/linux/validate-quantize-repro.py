@@ -12,15 +12,48 @@ import sys
 from jsonschema import Draft202012Validator
 
 
+def verify_reference_input(corpus_path, reference_path):
+    """Reject source drift against the frozen Windows baseline before any copying or CLI calls."""
+    digest = lambda path: hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    corpus = json.loads(corpus_path.read_text())
+    reference = json.loads(reference_path.read_text())
+    if len(corpus) != 1 or not isinstance(reference.get('input_sha256'), dict):
+        raise ValueError('Expected one corpus source and explicit frozen input_sha256 mapping')
+    identity = corpus[0]['id']
+    if set(reference['input_sha256']) != {identity}:
+        raise ValueError('Frozen Windows input IDs differ from the unique corpus ID')
+    expected = reference['input_sha256'][identity]
+    if not isinstance(expected, str) or len(expected) != 64 or any(char not in '0123456789abcdef' for char in expected):
+        raise ValueError('Invalid frozen Windows SHA256')
+    original = PureWindowsPath(corpus[0]['path'])
+    original = (Path('/mnt') / original.drive[0].lower() / Path(*original.parts[1:])
+                if original.drive else Path(corpus[0]['path']))
+    actual = digest(original)
+    if actual != expected:
+        raise ValueError(f'Input SHA256 differs from frozen Windows reference: {identity}: expected {expected}, actual {actual}')
+    return dict(id=identity, original_path=str(original), expected_sha256=expected, actual_sha256=actual,
+                reference_input_hashes_sha256=digest(reference_path), corpus_sha256=digest(corpus_path))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--source', type=Path, required=True)
-    parser.add_argument('--stage', type=Path, required=True)
+    parser.add_argument('--source', type=Path)
+    parser.add_argument('--stage', type=Path)
     parser.add_argument('--corpus', type=Path, required=True)
-    parser.add_argument('--reference-report', type=Path, required=True)
-    parser.add_argument('--image-validator', type=Path, required=True)
-    parser.add_argument('--directory', type=Path, required=True)
+    parser.add_argument('--reference-report', type=Path)
+    parser.add_argument('--reference-input-hashes', type=Path, required=True,
+                        help='Frozen Windows report or explicit file containing the unique ID input_sha256 mapping')
+    parser.add_argument('--check-input-only', action='store_true', help='Verify the binding without copying, importing benchmarks or converting')
+    parser.add_argument('--image-validator', type=Path)
+    parser.add_argument('--directory', type=Path)
     args = parser.parse_args()
+    input_binding = verify_reference_input(args.corpus, args.reference_input_hashes)
+    if args.check_input_only:
+        print(json.dumps(dict(input_binding=input_binding, conversion_started=False, copied=False)))
+        return
+    for name in ('source', 'stage', 'reference_report', 'image_validator', 'directory'):
+        if getattr(args, name) is None:
+            parser.error('--' + name.replace('_', '-') + ' is required for conversion')
     sys.path.insert(0, str(args.source / 'benchmarks'))
     from cli_timing import native_unit
     digest = lambda path: hashlib.sha256(Path(path).read_bytes()).hexdigest()
@@ -34,9 +67,10 @@ def main():
     args.directory.mkdir(exist_ok=False)
     inputs = args.directory / 'inputs'
     inputs.mkdir()
-    original = PureWindowsPath(corpus[0]['path'])
-    original = Path('/mnt') / original.drive[0].lower() / Path(*original.parts[1:])
+    original = Path(input_binding['original_path'])
     source_sha = digest(original)
+    if source_sha != input_binding['expected_sha256']:
+        raise ValueError('Source changed after frozen reference verification')
     copied = inputs / original.name
     shutil.copyfile(original, copied)
     assert digest(copied) == source_sha and digest(original) == source_sha
@@ -49,7 +83,8 @@ def main():
     assert capabilities['quantization'] == 'unorm8-half-up-v1'
     report = dict(product_sha256=digest(exe), product_identity=run_json([exe, '--version', '--json']), capabilities=capabilities,
                   helper_sha256=digest(args.image_validator), source_sha256=source_sha, original_path=str(original), copy_path=str(copied),
-                  corpus_sha256=digest(args.corpus), reference_report_sha256=digest(args.reference_report), runs=[])
+                  corpus_sha256=digest(args.corpus), reference_report_sha256=digest(args.reference_report),
+                  input_binding=input_binding, runs=[])
 
     def validate_image(path):
         result = subprocess.run([str(args.image_validator), str(path)], env=environment, capture_output=True, text=True)
