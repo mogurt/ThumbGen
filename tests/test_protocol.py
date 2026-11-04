@@ -34,6 +34,28 @@ def png(path):
                      chunk(b'IDAT',zlib.compress(b'\0\xff\0\0\xff\0\0'))+chunk(b'IEND',b''))
 
 class Protocol(unittest.TestCase):
+    def test_execution_manifest(self):
+        path=self.root/'execution.json'
+        manifest={'schema_version':1,'execution':{'thread_budget':2,'memory_budget_mib':512,'startup_timeout_ms':10000,'task_timeout_ms':10000},
+                  'defaults':{'threads':8},'jobs':[{'id':'first','input':str(self.input),'outputs':[{'path':str(self.root/'first.png')}]},
+                                                {'id':'second','input':str(self.input),'options':{'threads':4},'outputs':[{'path':str(self.root/'second.png')}]}]}
+        Draft202012Validator(json.loads((args.schema_dir/'jobs-v1.schema.json').read_text())).validate(manifest)
+        path.write_text(json.dumps(manifest))
+        rows=self.records('batch','--manifest',path)
+        self.assertEqual([row['execution']['requested_threads'] for row in rows[:-1]],[8,4])
+        self.assertEqual([row['execution']['threads'] for row in rows[:-1]],[2,2])
+        self.assertEqual(rows[0]['execution']['worker_id'],rows[1]['execution']['worker_id'])
+        self.assertEqual(rows[-1]['execution']['thread_budget'],2)
+        self.assertGreater(rows[0]['execution']['estimated_task_mib'],0)
+        bad=copy.deepcopy(rows[0]);del bad['execution']['estimate_model']
+        with self.assertRaises(ValidationError):validator.validate(bad)
+        self.records('batch','--manifest',path,'--thread-budget',2,exit=2)
+        for value in [None,[],{'workers':2},{'thread_budget':0},{'thread_budget':1.5},{'task_timeout_ms':-1},{'startup_timeout_ms':0},{'memory_budget_mib':2**64-1}]:
+            with self.subTest(execution=value):
+                invalid=copy.deepcopy(manifest);invalid['execution']=value
+                invalid['jobs'][0]['outputs'][0]['path']=str(self.root/'never.png')
+                path.write_text(json.dumps(invalid));self.records('batch','--manifest',path,exit=2)
+                self.assertFalse((self.root/'never.png').exists())
     def native_records(self,executable,count):
         result=subprocess.run([str(executable)],env=ENV,capture_output=True,text=True,encoding='utf-8',timeout=30)
         self.assertEqual(result.returncode,0,result.stderr)

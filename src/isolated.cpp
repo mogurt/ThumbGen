@@ -29,6 +29,7 @@ namespace thumbgen::detail {
 namespace {
 namespace fs=std::filesystem;
 using Clock=std::chrono::steady_clock;
+constexpr std::uint64_t fixed_reserve_mib=128;
 void check(bool ok,const char* reason){if(!ok)throw ProtocolError(reason);}
 void fields(const Json& object,std::initializer_list<const char*> names) {
     check(object.is_object() && object.size()==names.size(),"invalid worker payload fields");
@@ -123,8 +124,9 @@ public:
     WorkerSession session;
     ChildProcess process;
     unsigned threads;
+    std::string id;
     Channel(const std::string& exe,const std::string& token,const std::string& worker,unsigned quota,std::chrono::milliseconds startup):
-        session(token,worker),process(exe,{"--internal-worker",token,worker,std::to_string(quota)}),threads(quota) {
+        session(token,worker),process(exe,{"--internal-worker",token,worker,std::to_string(quota)}),threads(quota),id(worker) {
         try {
         send("hello","",{{"identity",identity()},{"threads",quota},{"parent_pid",
 #ifdef _WIN32
@@ -205,19 +207,28 @@ int serve_worker(const std::string& token,const std::string& worker,unsigned thr
         }
     }catch(const std::exception& e){std::cerr<<"thumbgen worker: "<<e.what()<<'\n';return 1;}
 }
+Json execution_configuration(const std::vector<Job>& jobs,const IsolationOptions& options) {
+    if(options.memory_mib>2147483647ULL || options.thread_budget>256 || options.startup_timeout.count()<1 || options.startup_timeout.count()>86400000 ||
+       options.task_timeout.count()<0 || options.task_timeout.count()>86400000)throw std::invalid_argument("invalid execution configuration");
+    unsigned thread_budget=options.thread_budget;
+    if(!thread_budget){thread_budget=1;for(const auto& job:jobs)thread_budget=std::max(thread_budget,unsigned(job.options.threads));}
+    if(thread_budget>256)throw std::invalid_argument("invalid requested thread quota");
+    return {{"workers",1},{"thread_budget",thread_budget},{"memory_budget_mib",options.memory_mib},{"fixed_reserve_mib",fixed_reserve_mib},
+        {"startup_timeout_ms",options.startup_timeout.count()},{"task_timeout_ms",options.task_timeout.count()}};
+}
 void run_isolated(const std::vector<Job>& jobs,const std::string& executable,const std::function<void(const Json&)>& emit,IsolationOptions options) {
-    check(options.memory_mib<=std::numeric_limits<std::uint64_t>::max()/1048576 && options.startup_timeout.count()>0 && options.startup_timeout.count()<=86400000 &&
-        options.task_timeout.count()>=0 && options.task_timeout.count()<=86400000,"invalid isolation options");
-    unsigned thread_budget=1;
-    for(const auto& job:jobs){job_from_wire(job_to_wire(job));thread_budget=std::max(thread_budget,unsigned(job.options.threads));}
+    for(const auto& job:jobs)job_from_wire(job_to_wire(job));
+    const auto configuration=execution_configuration(jobs,options);const auto thread_budget=configuration["thread_budget"].get<unsigned>();
     std::unique_ptr<BudgetQueue> budget;
     const std::uint64_t memory=options.memory_mib?std::uint64_t(options.memory_mib)*1048576:std::numeric_limits<std::uint64_t>::max();
-    if(memory>128ULL*1048576)budget=std::make_unique<BudgetQueue>(BudgetLimits{1,thread_budget,memory,128ULL*1048576});
+    if(memory>fixed_reserve_mib*1048576)budget=std::make_unique<BudgetQueue>(BudgetLimits{1,thread_budget,memory,fixed_reserve_mib*1048576});
     std::random_device random;std::string token;for(int i=0;i<32;++i)token+="0123456789abcdef"[random()&15];
     std::unique_ptr<Channel> channel;std::uint64_t worker_serial=0,temp_serial=0;Engine pins;std::map<std::string,Json> requests;
     std::map<std::string,size_t> remaining;for(const auto& job:jobs)if(!job.sequence_id.empty())++remaining[job.sequence_id];
-    for(const auto& job:jobs) {
+    for(const auto& requested_job:jobs) {
+        auto job=requested_job;job.options.threads=int(std::min(unsigned(job.options.threads),thread_budget));
         auto started=Clock::now();Json base=task_base(job),result;
+        std::optional<double> estimate_mib;std::string worker_id;
         std::vector<std::optional<Json>> ledger(job.outputs.size());
         struct Owned {std::string id;std::unique_ptr<TemporaryOutput> file;};std::map<size_t,Owned> owned;
         std::set<size_t> reserved;std::optional<SourceStamp> source;
@@ -239,7 +250,7 @@ void run_isolated(const std::vector<Job>& jobs,const std::string& executable,con
                 if(previous!=requests.end() && previous->second!=request)throw FileFailure("sequence_selection_conflict","selection options differ within sequence_id");
                 requests.emplace(job.sequence_id,std::move(request));
             }
-            if(options.memory_mib && options.memory_mib<=128)throw FileFailure("task_memory_exceeds_budget","budget does not cover fixed controller/IPC reserve");
+            if(options.memory_mib && options.memory_mib<=fixed_reserve_mib)throw FileFailure("task_memory_exceeds_budget","budget does not cover fixed controller/IPC reserve");
             if(!channel || channel->threads!=unsigned(job.options.threads)) {
                 channel.reset();
                 try {channel=std::make_unique<Channel>(executable,token,"w"+std::to_string(++worker_serial),unsigned(job.options.threads),options.startup_timeout);}
@@ -247,7 +258,7 @@ void run_isolated(const std::vector<Job>& jobs,const std::string& executable,con
                 catch(const std::system_error& e){throw FileFailure("worker_start_failed",error_message(e.code()));}
                 catch(const std::exception& e){throw FileFailure("worker_start_failed",e.what());}
             }
-            sent=true;channel->send("prepare",job.id,{{"job",job_to_wire(job)},{"pin",pins.sequence_lock(job.sequence_id)}});
+            worker_id=channel->id;sent=true;channel->send("prepare",job.id,{{"job",job_to_wire(job)},{"pin",pins.sequence_lock(job.sequence_id)}});
             auto deadline=Clock::now()+options.startup_timeout;
             for(;;) {
                 auto message=channel->receive(deadline);check(message.task_id==job.id,"worker task id mismatch");const auto& payload=message.payload;
@@ -265,14 +276,13 @@ void run_isolated(const std::vector<Job>& jobs,const std::string& executable,con
                         check(shape.data_width && shape.data_height && shape.display_width && shape.display_height && shape.channel_span &&
                             (shape.selected_channels==3 || shape.selected_channels==4) && shape.output_width && shape.output_height,"invalid worker footprint");
                         std::uint64_t cost=1;
-                        if(options.memory_mib) {
-                            MemoryEstimate estimate;
-                            try {estimate=estimate_memory(shape);}catch(const std::exception&){throw FileFailure("task_memory_exceeds_budget","task memory estimate is invalid or overflows");}
-                            cost=estimate.total;
-                        }
+                        try {auto estimate=estimate_memory(shape);estimate_mib=double(estimate.total)/1048576;if(options.memory_mib)cost=estimate.total;}
+                        catch(const std::exception&){if(options.memory_mib)throw FileFailure("task_memory_exceeds_budget","task memory estimate is invalid or overflows");}
                         check(bool(budget),"missing runtime budget");budget->push({job.id,unsigned(job.options.threads),cost});auto admission=budget->take();
                         check(admission.state!=Admission::State::waiting,"serial budget reservation was not released");
-                        if(admission.state!=Admission::State::admitted)throw FileFailure("task_memory_exceeds_budget","task memory estimate exceeds scheduling budget");
+                        if(admission.state!=Admission::State::admitted)throw FileFailure("task_memory_exceeds_budget",
+                            "estimated task "+std::to_string(cost/1048576+(cost%1048576!=0))+" MiB + fixed reserve "+std::to_string(fixed_reserve_mib)+
+                            " MiB exceeds budget "+std::to_string(options.memory_mib)+" MiB");
                         admitted=true;
                         ran=true;
                     }catch(const FileFailure& e){reply["error"]=error(e);}
@@ -343,6 +353,10 @@ void run_isolated(const std::vector<Job>& jobs,const std::string& executable,con
         while(!owned.empty())cleanup(owned.begin()->first);
         if(admitted)budget->release(job.id);
         if(base.contains("warnings"))for(const auto& warning:base["warnings"])if(!result.contains("warnings") || std::find(result["warnings"].begin(),result["warnings"].end(),warning)==result["warnings"].end())result["warnings"].push_back(warning);
+        result["execution"]={{"requested_threads",requested_job.options.threads},{"threads",job.options.threads},{"thread_budget",thread_budget},
+            {"memory_budget_mib",options.memory_mib},{"fixed_reserve_mib",fixed_reserve_mib},{"wall_ms",std::chrono::duration<double,std::milli>(Clock::now()-started).count()}};
+        if(!worker_id.empty())result["execution"]["worker_id"]=worker_id;
+        if(estimate_mib){result["execution"]["estimated_task_mib"]=*estimate_mib;result["execution"]["estimate_model"]="buffers-v1";}
         emit(result);
         if(!job.sequence_id.empty() && --remaining.at(job.sequence_id)==0) {
             pins.forget_sequence_lock(job.sequence_id);requests.erase(job.sequence_id);remaining.erase(job.sequence_id);

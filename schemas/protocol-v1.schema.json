@@ -555,6 +555,9 @@
             "checks",
             "stable"
           ]
+        },
+        "execution": {
+          "$ref": "#/$defs/task_execution"
         }
       },
       "required": [
@@ -800,6 +803,9 @@
         "skipped": {
           "type": "integer",
           "minimum": 0
+        },
+        "execution": {
+          "$ref": "#/$defs/execution_settings"
         }
       },
       "required": [
@@ -1164,6 +1170,111 @@
           }
         }
       ]
+    },
+    "execution_settings": {
+      "type": "object",
+      "properties": {
+        "workers": {
+          "type": "integer",
+          "const": 1
+        },
+        "thread_budget": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 256
+        },
+        "memory_budget_mib": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2147483647
+        },
+        "startup_timeout_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 86400000
+        },
+        "task_timeout_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 86400000
+        },
+        "fixed_reserve_mib": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "workers",
+        "thread_budget",
+        "memory_budget_mib",
+        "startup_timeout_ms",
+        "task_timeout_ms",
+        "fixed_reserve_mib"
+      ],
+      "additionalProperties": false
+    },
+    "task_execution": {
+      "type": "object",
+      "properties": {
+        "requested_threads": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 256
+        },
+        "threads": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 256
+        },
+        "thread_budget": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 256
+        },
+        "memory_budget_mib": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2147483647
+        },
+        "wall_ms": {
+          "type": "number",
+          "minimum": 0
+        },
+        "worker_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9_-]+$"
+        },
+        "estimated_task_mib": {
+          "type": "number",
+          "minimum": 0
+        },
+        "estimate_model": {
+          "const": "buffers-v1"
+        },
+        "fixed_reserve_mib": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "requested_threads",
+        "threads",
+        "thread_budget",
+        "memory_budget_mib",
+        "wall_ms",
+        "fixed_reserve_mib"
+      ],
+      "additionalProperties": false,
+      "dependentRequired": {
+        "estimated_task_mib": [
+          "estimate_model"
+        ],
+        "estimate_model": [
+          "estimated_task_mib"
+        ]
+      }
     }
   }
 }

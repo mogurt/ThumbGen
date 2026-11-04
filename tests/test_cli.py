@@ -60,6 +60,25 @@ def png_pixels(path):
 
 
 class CLI(unittest.TestCase):
+    def test_execution_flags(self):
+        target=self.base/'budget.png'
+        rows=self.run_cli('convert',self.source,'--output',target,'--threads',8,'--thread-budget',1,
+                          '--memory-budget-mib',512,'--startup-timeout-ms',10000,'--task-timeout-ms',10000)
+        self.assertEqual(rows[0]['execution']['requested_threads'],8)
+        self.assertEqual(rows[0]['execution']['threads'],1)
+        self.assertEqual(rows[0]['execution']['thread_budget'],1)
+        self.assertGreater(rows[0]['execution']['estimated_task_mib'],0)
+        self.assertEqual(rows[-1]['execution'],{'workers':1,'thread_budget':1,'memory_budget_mib':512,'fixed_reserve_mib':128,'startup_timeout_ms':10000,'task_timeout_ms':10000})
+        rows=self.run_cli('convert',self.source,'--output',self.base/'refused.png','--memory-budget-mib',129,exit=4)
+        self.assertEqual(rows[0]['error']['code'],'task_memory_exceeds_budget')
+        self.assertFalse((self.base/'refused.png').exists())
+    def test_execution_validation(self):
+        for flag,value in [('--thread-budget',0),('--thread-budget',257),('--memory-budget-mib',-1),
+                           ('--startup-timeout-ms',0),('--task-timeout-ms',-1),('--task-timeout-ms',86400001)]:
+            with self.subTest(flag=flag,value=value):
+                self.run_cli('convert',self.source,'--output',self.base/'invalid.png',flag,value,exit=2)
+        self.run_cli('inspect',self.source,'--thread-budget',2,exit=2)
+        self.assertFalse((self.base/'invalid.png').exists())
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory(prefix="thumbgen-api-")
         self.base=Path(self.temp.name)

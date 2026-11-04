@@ -37,6 +37,7 @@ static void usage() {
         "  --channels RGB|GRAY|GROUP, --part N or --part-name NAME\n"
         "  --selection-policy primary|root_rgb, --threads N, --max-decode-mib N\n"
         "  --existing error|skip|replace (default: error)\n"
+        "  --thread-budget N, --memory-budget-mib N, --startup-timeout-ms N, --task-timeout-ms N\n"
         "Defaults: balanced, JPEG Q90, fit 1024x1024 without upscaling, black background.\n"
         "Default: no output overwriting. Exit: 0 success, 1 internal, 2 usage, 3 partial, 4 all failed.\n";
 }
@@ -179,16 +180,32 @@ static void preflight(const std::vector<Job>& jobs) {
         }
     }
 }
-static std::vector<Job> manifest(const std::string& filename) {
+static thumbgen::detail::IsolationOptions execution_options(const Json& value) {
+    keys(value,{"thread_budget","memory_budget_mib","startup_timeout_ms","task_timeout_ms"});
+    auto number=[&](const char* key,int minimum,int maximum,int fallback) {
+        if(!value.contains(key))return fallback;
+        const auto& item=value[key];
+        if(!item.is_number_integer() || item.get<long double>()<minimum || item.get<long double>()>maximum)
+            throw std::invalid_argument(std::string("invalid execution field: ")+key);
+        return item.get<int>();
+    };
+    thumbgen::detail::IsolationOptions result;
+    result.thread_budget=unsigned(number("thread_budget",1,256,0));
+    result.memory_mib=size_t(number("memory_budget_mib",0,2147483647,0));
+    result.startup_timeout=std::chrono::milliseconds(number("startup_timeout_ms",1,86400000,30000));
+    result.task_timeout=std::chrono::milliseconds(number("task_timeout_ms",0,86400000,0));return result;
+}
+static std::vector<Job> manifest(const std::string& filename,thumbgen::detail::IsolationOptions& execution) {
     if(filename=="-")throw std::invalid_argument("stdin manifests are not supported; pass a manifest file");
     fs::path path=fs::absolute(fs::u8path(filename));
     std::ifstream file(path);
     if(!file)throw std::invalid_argument("cannot open manifest");
     Json root;file>>root;
-    keys(root,{"schema_version","defaults","jobs"});
+    keys(root,{"schema_version","defaults","jobs","execution"});
     if(!root.contains("schema_version")||!root["schema_version"].is_number_integer()||root["schema_version"]!=1)
         throw std::invalid_argument("unsupported schema_version; expected integer 1");
     auto defaults=root.value("defaults",Json::object());options(defaults,true);
+    execution=execution_options(root.value("execution",Json::object()));
     if(!root.at("jobs").is_array()||root["jobs"].empty())throw std::invalid_argument("jobs must be a nonempty array");
     std::vector<Job> jobs;
     for(const auto& object:root["jobs"]) {
@@ -233,7 +250,7 @@ static int execute(const std::vector<std::string>& args) {
             std::cout<<data.dump(json_mode?-1:2,' ',false,Json::error_handler_t::replace)<<std::endl;return 0;
         }
         if(command!="convert"&&command!="batch"&&command!="inspect")throw std::invalid_argument("unknown command: "+command);
-        Json values=Json::object();std::vector<std::pair<int,int>> sizes;
+        Json values=Json::object(),execution_values=Json::object();std::vector<std::pair<int,int>> sizes;
         std::string input,output_file,output_dir,manifest_file;
         for(size_t i=2;i<args.size();++i) {
             const auto flag=args[i];
@@ -245,6 +262,10 @@ static int execute(const std::vector<std::string>& args) {
             else if(flag=="--size")sizes.push_back(parse_size(value()));
             else if(flag=="--quality")values["quality"]=number(value());
             else if(flag=="--threads")values["threads"]=number(value());
+            else if(flag=="--thread-budget")execution_values["thread_budget"]=number(value());
+            else if(flag=="--memory-budget-mib")execution_values["memory_budget_mib"]=number(value());
+            else if(flag=="--startup-timeout-ms")execution_values["startup_timeout_ms"]=number(value());
+            else if(flag=="--task-timeout-ms")execution_values["task_timeout_ms"]=number(value());
             else if(flag=="--part")values["part"]=number(value());
             else if(flag=="--part-name")values["part_name"]=value();
             else if(flag=="--selection-policy")values["selection_policy"]=value();
@@ -263,16 +284,17 @@ static int execute(const std::vector<std::string>& args) {
             else throw std::invalid_argument("unexpected argument: "+flag);
         }
         if(command=="inspect") {
-            if(input.empty()||!values.empty()||!sizes.empty()||!output_dir.empty()||!output_file.empty()||!manifest_file.empty())
+            if(input.empty()||!values.empty()||!execution_values.empty()||!sizes.empty()||!output_dir.empty()||!output_file.empty()||!manifest_file.empty())
                 throw std::invalid_argument("inspect expects only INPUT and optional --json");
             auto r=engine.inspect(path_string(fs::current_path(),input));
             std::cout<<r.dump(json_mode?-1:2,' ',false,Json::error_handler_t::replace)<<std::endl;return r["ok"].get<bool>()?0:4;
         }
         std::vector<Job> jobs;
+        auto execution=execution_options(execution_values);
         if(command=="batch") {
-            if(manifest_file.empty()||!input.empty()||!output_file.empty()||!output_dir.empty()||!sizes.empty()||!values.empty())
+            if(manifest_file.empty()||!input.empty()||!output_file.empty()||!output_dir.empty()||!sizes.empty()||!values.empty()||!execution_values.empty())
                 throw std::invalid_argument("batch expects --manifest FILE and optional --json; settings belong in the manifest");
-            jobs=manifest(manifest_file);
+            jobs=manifest(manifest_file,execution);
         } else {
             if(input.empty()||!manifest_file.empty()||output_dir.empty()==output_file.empty())
                 throw std::invalid_argument("convert requires INPUT and exactly one of --output/--output-dir");
@@ -304,6 +326,7 @@ static int execute(const std::vector<std::string>& args) {
 #else
         executable=fs::read_symlink("/proc/self/exe").u8string();
 #endif
+        const auto execution_settings=thumbgen::detail::execution_configuration(jobs,execution);
         thumbgen::detail::run_isolated(jobs,executable,[&](const Json& r) {
             if(r["status"]=="success")++success;
             else if(r["status"]=="partial")++partial;
@@ -317,12 +340,13 @@ static int execute(const std::vector<std::string>& args) {
             if(json_mode)std::cout<<r.dump(-1,' ',false,Json::error_handler_t::replace)<<std::endl;
             else std::cout<<r["input"].get<std::string>()<<": "<<r["status"].get<std::string>()<<'\n';
             if(!r["ok"].get<bool>()&&!json_mode)std::cerr<<r.dump(2)<<'\n';
-        });
+        },execution);
         Json end{{"schema_version",1},{"type","summary"},{"total",jobs.size()},
                  {"success",success},{"partial",partial},{"failed",failed},{"skipped",skipped},
                  {"output_counts",{{"total",outputs_total},{"success",outputs_success},{"failed",outputs_failed},
                      {"skipped",outputs_skipped},{"not_attempted",outputs_total-outputs_success-outputs_failed-outputs_skipped}}},
-                 {"elapsed_ms",std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-batch_start).count()}};
+                 {"elapsed_ms",std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-batch_start).count()},
+                 {"execution",execution_settings}};
         if(json_mode)std::cout<<end.dump()<<std::endl;
         if(success+skipped==jobs.size())return 0;
         return success||partial||skipped?3:4;
