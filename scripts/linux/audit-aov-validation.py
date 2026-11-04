@@ -23,6 +23,7 @@ def main():
     parser.add_argument('--production', type=Path, required=True)
     parser.add_argument('--baseline-stage', type=Path, required=True)
     parser.add_argument('--sdk', type=Path, help='Recheck installed SDK identity on build OS')
+    parser.add_argument('--expected-count', type=int, default=123, help='Expected full suite count for this archive (historical default: 123)')
     parser.add_argument('--audit-output', type=Path, help='Reaudit an identical collected report into a new output file')
     args = parser.parse_args()
     stage = args.stage.resolve()
@@ -41,9 +42,9 @@ def main():
     for line in (stage / 'PRODUCT-FROZEN.sha256').read_text().splitlines():
         expected, path = line.split(maxsplit=1)
         assert digest(path.lstrip('*')) == expected, path
-    assert '100% tests passed, 0 tests failed out of 123' in (directory / 'ctest.log').read_text()
+    assert f'100% tests passed, 0 tests failed out of {args.expected_count}' in (directory / 'ctest.log').read_text()
     suite = load(stage / 'tests/ctest-suite.json')['tests']
-    assert len(suite) == 123 and {'core_aov', 'core_data_preview', 'public_aov', 'public_interrupt'}.issubset({item['name'] for item in suite})
+    assert len(suite) == args.expected_count and {'core_aov', 'core_data_preview', 'public_aov', 'public_interrupt'}.issubset({item['name'] for item in suite})
     log = (directory / 'Testing/Temporary/LastTest.log').read_text()
     assert 'Ran 17 tests' in log and 'Ran 20 tests' in log and 'Ran 19 tests' in log
     block = log.split('<end of output>', 1)[0]
@@ -127,7 +128,7 @@ def main():
     libraries = [dict(path=path, sha256=digest(path)) for path in paths if Path(path).is_file()]
     (directory / 'actual-loaded-libraries.json').write_text(json.dumps(libraries, indent=2) + '\n')
     summary = dict(platform=label, archive_commit=archive['commit'], source_files_verified=len(archive['sha256']),
-                   ctest_passed=123, public_aov_cases=17, isolated_records_validated=77,
+                   ctest_passed=args.expected_count, public_aov_cases=17, isolated_records_validated=77,
                    new_exe_sha256=digest(stage / 'bin/thumbgen'), old_exe_sha256=digest(args.baseline_stage / 'bin/thumbgen'),
                    new_artifacts=artifacts, production_origin=str(production_path), production_report_sha256=digest(production_path),
                    data_previews=168, data_repeats_sha_equal=True, colour_previews_identical_to_linux_d095=120,
