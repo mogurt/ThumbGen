@@ -14,7 +14,9 @@ struct ImageFootprint {
     unsigned threads=0;
 };
 struct MemoryEstimate {
-    std::uint64_t source=0,working=0,output=0,codec=0,worker=0,margin=0,total=0;
+    // incremental is charged per active task; worker is already reserved by the pool.
+    // total includes both for comparing an isolated worker's observed RSS.
+    std::uint64_t source=0,working=0,output=0,codec=0,worker=0,margin=0,incremental=0,total=0;
 };
 // Conservative admission estimate, never an OS-enforced RSS bound.
 // Throws invalid_argument for invalid geometry; overflow_error for arithmetic overflow.

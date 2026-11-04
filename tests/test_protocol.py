@@ -86,6 +86,10 @@ class Protocol(unittest.TestCase):
         self.assertEqual(rows[0]['execution']['worker_id'],rows[1]['execution']['worker_id'])
         self.assertEqual(rows[-1]['execution']['thread_budget'],2)
         self.assertGreater(rows[0]['execution']['estimated_task_mib'],0)
+        self.assertEqual(rows[0]['execution']['estimate_model'],'buffers-v2')
+        self.assertAlmostEqual(rows[0]['execution']['estimated_task_mib']-rows[0]['execution']['admission_mib'],144)
+        missing=copy.deepcopy(rows[0]);del missing['execution']['admission_mib']
+        with self.assertRaises(ValidationError):validator.validate(missing)
         bad=copy.deepcopy(rows[0]);del bad['execution']['estimate_model']
         with self.assertRaises(ValidationError):validator.validate(bad)
         self.records('batch','--manifest',path,'--thread-budget',2,exit=2)

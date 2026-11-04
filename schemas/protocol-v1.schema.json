@@ -1394,7 +1394,10 @@
           "minimum": 0
         },
         "estimate_model": {
-          "const": "buffers-v1"
+          "enum": [
+            "buffers-v1",
+            "buffers-v2"
+          ]
         },
         "fixed_reserve_mib": {
           "type": "integer",
@@ -1406,6 +1409,10 @@
           "maximum": 256
         },
         "queue_ms": {
+          "type": "number",
+          "minimum": 0
+        },
+        "admission_mib": {
           "type": "number",
           "minimum": 0
         }
@@ -1427,8 +1434,31 @@
         ],
         "estimate_model": [
           "estimated_task_mib"
+        ],
+        "admission_mib": [
+          "estimated_task_mib",
+          "estimate_model"
         ]
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "estimate_model"
+            ],
+            "properties": {
+              "estimate_model": {
+                "const": "buffers-v2"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "admission_mib"
+            ]
+          }
+        }
+      ]
     }
   }
 }

@@ -222,7 +222,7 @@ Json execution_configuration(const std::vector<Job>& jobs,const IsolationOptions
     if(options.workers>1 && (!options.memory_mib || !options.thread_budget))throw std::invalid_argument("multiple workers require explicit positive memory and thread budgets");
     const auto workers=std::min({options.workers,thread_budget,unsigned(std::min<size_t>(256,std::max<size_t>(1,jobs.size())))});
     // Retained/preparing workers are charged even while no task holds admission.
-    // Active tasks also include their process allowance: deliberately conservative.
+    // Admission charges only incremental task buffers, never this allowance twice.
     const std::uint64_t fixed_reserve=128+std::uint64_t(workers)*(128+8*(thread_budget/workers));
     return {{"workers",workers},{"requested_workers",options.workers},{"thread_budget",thread_budget},{"memory_budget_mib",options.memory_mib},{"fixed_reserve_mib",fixed_reserve},
         {"startup_timeout_ms",options.startup_timeout.count()},{"task_timeout_ms",options.task_timeout.count()}};
@@ -238,7 +238,7 @@ bool run_isolated(const std::vector<Job>& jobs,const std::string& executable,con
     if(memory>fixed_reserve*1048576)budget=std::make_unique<BudgetQueue>(BudgetLimits{workers,thread_budget,memory,fixed_reserve*1048576});
     struct Task {
         Job job;size_t index;Clock::time_point started=Clock::now(),deadline,queued_at;
-        Json base,result;std::optional<double> estimate_mib;std::string worker_id;
+        Json base,result;std::optional<double> estimate_mib,admission_mib;std::string worker_id;
         std::vector<std::optional<Json>> ledger;
         struct Owned {std::string id;std::unique_ptr<TemporaryOutput> file;};
         std::map<size_t,Owned> owned;std::set<size_t> reserved;std::optional<SourceStamp> source;
@@ -325,7 +325,7 @@ bool run_isolated(const std::vector<Job>& jobs,const std::string& executable,con
                         check(shape.data_width && shape.data_height && shape.display_width && shape.display_height && shape.channel_span &&
                             (shape.selected_channels==3 || shape.selected_channels==4) && shape.output_width && shape.output_height,"invalid worker footprint");
                         std::uint64_t cost=1;
-                        try {auto estimate=estimate_memory(shape);estimate_mib=double(estimate.total)/1048576;if(options.memory_mib)cost=estimate.total;}
+                        try {auto estimate=estimate_memory(shape);estimate_mib=double(estimate.total)/1048576;task.admission_mib=double(estimate.incremental)/1048576;if(options.memory_mib)cost=estimate.incremental;}
                         catch(const std::exception&){if(options.memory_mib)throw FileFailure("task_memory_exceeds_budget","task memory estimate is invalid or overflows");}
                         check(bool(budget),"missing runtime budget");
                         budget->push({job.id,unsigned(job.options.threads),cost});queued=true;task.queued_at=Clock::now();
@@ -415,7 +415,7 @@ bool run_isolated(const std::vector<Job>& jobs,const std::string& executable,con
             result["execution"]={{"requested_threads",requested_job.options.threads},{"threads",job.options.threads},{"thread_budget",thread_budget},
                 {"memory_budget_mib",options.memory_mib},{"fixed_reserve_mib",fixed_reserve},{"wall_ms",std::chrono::duration<double,std::milli>(Clock::now()-started).count()}};
             if(!worker_id.empty())result["execution"]["worker_id"]=worker_id;
-            if(estimate_mib){result["execution"]["estimated_task_mib"]=*estimate_mib;result["execution"]["estimate_model"]="buffers-v1";}
+            if(estimate_mib){result["execution"]["estimated_task_mib"]=*estimate_mib;result["execution"]["admission_mib"]=*task.admission_mib;result["execution"]["estimate_model"]="buffers-v2";}
             result["execution"]["queue_ms"]=task.queue_ms;
             result["execution"]["workers"]=workers;
             emit(result);
@@ -437,7 +437,7 @@ bool run_isolated(const std::vector<Job>& jobs,const std::string& executable,con
             task.queue_ms=std::chrono::duration<double,std::milli>(Clock::now()-task.queued_at).count();
             Json reply=Json::object();
             if(!task.admitted)reply["error"]=error(FileFailure("task_memory_exceeds_budget",
-                "estimated task "+std::to_string(admission.task.estimated_memory/1048576+(admission.task.estimated_memory%1048576!=0))+
+                "incremental task "+std::to_string(admission.task.estimated_memory/1048576+(admission.task.estimated_memory%1048576!=0))+
                 " MiB + fixed reserve "+std::to_string(fixed_reserve)+" MiB exceeds budget "+std::to_string(options.memory_mib)+" MiB"));
             // A send failure closes this worker; the next poll recovers its ledger.
             try {it->channel->send("run",task.job.id,reply);}

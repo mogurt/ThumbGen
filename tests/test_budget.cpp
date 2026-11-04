@@ -20,6 +20,7 @@ int main() {
         require(padded.total>2ULL*1024*1024*1024,"display canvas missing from reservation");
         require(sparse.source>small.source && grey.source<small.source,"channel span ignored");
         require(small.total>small.source+small.working+small.output+small.codec,"worker/margin omitted");
+        require(small.total==small.incremental+small.worker && small.incremental==small.source+small.working+small.output+small.codec+small.margin,"incremental buffers or fixed worker allowance counted incorrectly");
         require(small.codec>0,"JPEG encoded destination omitted");
         rejects<std::invalid_argument>([]{estimate_memory({8,8,8,8,3,3,16,16,4});});
         rejects<std::invalid_argument>([]{estimate_memory({0,8,8,8,3,3,8,8,4});});

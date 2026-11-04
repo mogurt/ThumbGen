@@ -37,7 +37,8 @@ MemoryEstimate estimate_memory(const ImageFootprint& s) {
     e.worker=add(128*mib,multiply(s.threads,8*mib));
     Bytes dynamic=add(add(e.source,e.working),add(e.output,e.codec));
     e.margin=dynamic/4+(dynamic%4!=0); // ceil(25%), without overflow-prone +3
-    e.total=add(add(dynamic,e.margin),e.worker);
+    e.incremental=add(dynamic,e.margin);
+    e.total=add(e.incremental,e.worker);
     return e;
 }
 BudgetQueue::BudgetQueue(BudgetLimits limits):limits_(limits),memory_(limits.reserved_memory) {

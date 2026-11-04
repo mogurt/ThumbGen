@@ -158,7 +158,7 @@ static int test_main(const std::vector<std::string>& args) {
             }
             rows=run(inputs,pool);for(size_t i=0;i<rows.size();++i)require(rows[i]["status"]=="success" && rows[i]["execution"]["threads"]==(i%2==0?1:2) && rows[i]["execution"]["workers"]==workers,rows[i].dump());
         }
-        pool.workers=2;pool.thread_budget=2;pool.memory_mib=560;
+        pool.workers=2;pool.thread_budget=2;pool.memory_mib=402;
         rows=run({job("budget-slow"),job("queued-crash"),job("after-queue-crash")},pool);
         require(rows[0]["status"]=="success" && rows[1]["error"]["code"]=="worker_crashed" && rows[2]["status"]=="success",rows.dump());
         require(rows[2]["execution"]["queue_ms"].get<double>()>0,"low memory waiting diagnostic missing");
@@ -168,7 +168,7 @@ static int test_main(const std::vector<std::string>& args) {
         rows=run({job("parallel-partial",2),job("concurrent-with-partial")},pool);
         require(rows[0]["status"]=="partial" && rows[0]["outputs"][0]["status"]=="success" && rows[0]["outputs"][1]["status"]=="failed" && rows[1]["status"]=="success",rows.dump());
         auto oversized=job("oversized-head");image(fs::u8path(oversized.input),false,2048);originals[oversized.input]=bytes(fs::u8path(oversized.input));
-        oversized.outputs[0].width=oversized.outputs[0].height=1024;pool.memory_mib=560;
+        oversized.outputs[0].width=oversized.outputs[0].height=1024;pool.memory_mib=402;
         rows=run({oversized,job("after-oversized-head")},pool);
         require(rows[0]["error"]["code"]=="task_memory_exceeds_budget" && rows[1]["status"]=="success",rows.dump());
         auto pool_missing=job("pool-missing");pool_missing.input=(root/"missing-pool.exr").u8string();pool_missing.sequence_id="pool-missing-lock";
@@ -190,7 +190,7 @@ static int test_main(const std::vector<std::string>& args) {
         require(rows[0]["status"]=="cancelled" && rows[0]["outputs"][0]["status"]=="success" && rows[0]["outputs"][1]["status"]=="cancelled" && rows[1]["status"]=="cancelled",rows.dump());
         auto cancel_complete=job("cancel-after-commit");cancel.cancelled=[&] {return fs::exists(fs::u8path(cancel_complete.outputs[0].path));};
         rows=run({cancel_complete},cancel);require(rows[0]["status"]=="success",rows.dump());
-        auto cancel_block=job("cancel-block"),cancel_wait=job("cancel-wait");cancel=pool;cancel.memory_mib=560;
+        auto cancel_block=job("cancel-block"),cancel_wait=job("cancel-wait");cancel=pool;cancel.memory_mib=402;
         cancel.cancelled=[&] {return fs::exists(fs::u8path(cancel_block.input+".pid")) && fs::exists(fs::u8path(cancel_wait.input+".planned"));};
         rows=run({cancel_block,cancel_wait,job("cancel-unstarted")},cancel);
         for(const auto& row:rows)require(row["status"]=="cancelled",row.dump());
