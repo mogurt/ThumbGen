@@ -10,7 +10,7 @@ for executable in thumbgen thumbgen_core_tests thumbgen_image_matrix; do
 done
 "$stage/bin/thumbgen" --version --json > "$stage/results/$label/version.json"
 cd "$stage"
-sha256sum bin/* lib/* tests/test_cli.py tests/ctest-suite.json > "results/$label/artifacts.sha256"
+sha256sum bin/* lib/* tests/*.py tests/*.json tests/requirements.txt schemas/*.json > "results/$label/artifacts.sha256"
 if test "$label" = CentOS-7.9; then
     /home/builder/thumbgen-cache/tools/python-3.11.11/bin/python3 "$repo/scripts/linux/audit-abi.py" \
         "$stage/bin/thumbgen" "$stage/bin/thumbgen_core_tests" "$stage/bin/thumbgen_image_matrix" > "$stage/results/$label/abi.json"

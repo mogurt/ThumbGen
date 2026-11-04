@@ -7,6 +7,7 @@ stage = Path(sys.argv[1]).resolve()
 python = sys.argv[2]
 suite = json.loads((stage / 'tests/ctest-suite.json').read_text())
 mapping = {'@BIN@': str(stage / 'bin'), '@TESTS@': str(stage / 'tests'),
+           '@SCHEMAS@': str(stage / 'schemas'),
            '@LIB@': str(stage / 'lib'), '@PYTHON@': python}
 def quote(value):
     text = str(value)

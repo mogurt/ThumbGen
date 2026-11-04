@@ -10,7 +10,7 @@ cache = Path(sys.argv[1]).resolve()
 repo = Path(__file__).resolve().parents[2]
 stage = repo / '.deps/linux/validation'
 stage.mkdir(parents=True, exist_ok=True)
-for directory in ('bin', 'lib', 'tests', 'tools'):
+for directory in ('bin', 'lib', 'tests', 'schemas', 'tools'):
     (stage / directory).mkdir(exist_ok=True)
 binaries = ('thumbgen', 'thumbgen_core_tests', 'thumbgen_image_matrix')
 for name in binaries:
@@ -37,7 +37,10 @@ for obj in audit['objects']:
         # Use copies on the shared Windows filesystem so both WSL distros see them.
         shutil.copy2(path, alias)
     copied.append(str(path))
-shutil.copy2(repo / 'tests/test_cli.py', stage / 'tests/test_cli.py')
+for name in ('test_cli.py', 'test_protocol.py', 'requirements.txt'):
+    shutil.copy2(repo / 'tests' / name, stage / 'tests' / name)
+for path in (repo / 'schemas').glob('*.json'):
+    shutil.copy2(path, stage / 'schemas' / path.name)
 # Discover the authoritative suite from configured CTest, rather than maintaining
 # a second image-case list that can silently fall behind CMakeLists.txt.
 ctest = cache / 'tools/cmake-3.31.8-linux-x86_64/bin/ctest'
@@ -45,6 +48,8 @@ suite = json.loads(subprocess.check_output(
     [str(ctest), '--test-dir', str(cache / 'thumbgen-build'), '--show-only=json-v1'], text=True))
 replacements = {str(cache / 'thumbgen-build' / name): '@BIN@/' + name for name in binaries}
 replacements.update({str(repo / 'tests/test_cli.py'): '@TESTS@/test_cli.py',
+                     str(repo / 'tests/test_protocol.py'): '@TESTS@/test_protocol.py',
+                     str(repo / 'schemas'): '@SCHEMAS@',
                      str(cache / 'sdk/lib'): '@LIB@',
                      str(cache / 'tools/python-3.11.11/bin/python3'): '@PYTHON@'})
 tests = []
@@ -72,6 +77,8 @@ for test in suite['tests']:
     tests.append(dict(name=test['name'], command=command, properties=properties))
 if not tests or not any(test['command'][0] == '@BIN@/thumbgen_image_matrix' for test in tests):
     raise SystemExit('Configured image matrix is missing')
+if not any(test['name'] == 'public_protocol' for test in tests):
+    raise SystemExit('Configured protocol test is missing; refusing incomplete validation')
 (stage / 'tests/ctest-suite.json').write_text(json.dumps(dict(tests=tests), indent=2) + '\n')
 (stage / 'tools/cmake/bin').mkdir(parents=True, exist_ok=True)
 shutil.copy2(ctest, stage / 'tools/cmake/bin/ctest')

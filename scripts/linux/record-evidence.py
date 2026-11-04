@@ -31,13 +31,17 @@ for directory in ('bin', 'lib'):
     for path in sorted((stage / directory).iterdir()):
         artifacts[str(path.relative_to(stage))] = hashlib.sha256(path.read_bytes()).hexdigest()
 report = dict(source_dependencies=records, flags=flags, staged_artifacts=artifacts,
+              test_dependencies=json.loads((repo / 'scripts/linux/test-deps-lock.json').read_text()),
               ctest_suite=json.loads((stage / 'tests/ctest-suite.json').read_text()),
               product_source=dict(
                   commit=run('git', '-C', str(repo), 'rev-parse', 'HEAD'),
                   sha256={str(path.relative_to(repo)): hashlib.sha256(path.read_bytes()).hexdigest()
                           for path in [repo / 'CMakeLists.txt', *sorted((repo / 'src').glob('*.cpp')),
+                                       *sorted((repo / 'src').glob('*.h*')),
                                        *sorted((repo / 'include').rglob('*.h')),
-                                       *sorted((repo / 'tests').glob('*.cpp')), repo / 'tests/test_cli.py']}),
+                                       *sorted((repo / 'tests').glob('*.cpp')),
+                                       *sorted((repo / 'tests').glob('*.py')), repo / 'tests/requirements.txt',
+                                       *sorted((repo / 'schemas').glob('*.json'))]}),
               tools={name: run(*command) for name, command in {
                   'gcc': ['g++', '-dumpfullversion'], 'git': ['git', '--version'],
                   'cmake': ['cmake', '--version'], 'ninja': ['ninja', '--version'],
