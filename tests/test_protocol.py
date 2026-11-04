@@ -34,6 +34,24 @@ def png(path):
                      chunk(b'IDAT',zlib.compress(b'\0\xff\0\0\xff\0\0'))+chunk(b'IEND',b''))
 
 class Protocol(unittest.TestCase):
+    def test_parallel_manifest(self):
+        manifest={'schema_version':1,'execution':{'workers':8,'thread_budget':4,'memory_budget_mib':2048},
+                  'defaults':{'threads':8},'jobs':[{'id':str(i),'input':str(self.input),'sequence_id':'pool-sequence',
+                    'outputs':[{'path':str(self.root/(str(i)+'.png'))}]} for i in range(10)]}
+        Draft202012Validator(json.loads((args.schema_dir/'jobs-v1.schema.json').read_text(encoding='utf-8'))).validate(manifest)
+        path=self.root/'parallel.json';path.write_text(json.dumps(manifest))
+        rows=self.records('batch','--manifest',path)
+        self.assertEqual(rows[-1]['execution']['workers'],4)
+        self.assertEqual(rows[-1]['execution']['requested_workers'],8)
+        self.assertEqual({row['id'] for row in rows[:-1]},{str(i) for i in range(10)})
+        for row in rows[:-1]:
+            self.assertEqual(row['status'],'success')
+            self.assertEqual(row['execution']['threads'],1)
+            self.assertGreaterEqual(row['execution']['queue_ms'],0)
+        for values in [{'workers':0},{'workers':257},{'workers':2,'thread_budget':2},
+                       {'workers':2,'memory_budget_mib':1024},{'workers':2,'thread_budget':2,'memory_budget_mib':0}]:
+            manifest['execution']=values;path.write_text(json.dumps(manifest))
+            self.records('batch','--manifest',path,exit=2)
     def test_execution_manifest(self):
         path=self.root/'execution.json'
         manifest={'schema_version':1,'execution':{'thread_budget':2,'memory_budget_mib':512,'startup_timeout_ms':10000,'task_timeout_ms':10000},
@@ -63,7 +81,7 @@ class Protocol(unittest.TestCase):
         self.assertEqual(len(records),count)
         for record in records:validator.validate(record)
     def test_control_records(self):self.native_records(args.control_exe,14)
-    def test_isolated_records(self):self.native_records(args.isolated_exe,19)
+    def test_isolated_records(self):self.native_records(args.isolated_exe,65)
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory(prefix='thumbgen-protocol-')
         self.root=Path(self.temp.name);self.input=self.root/'source.png';png(self.input)

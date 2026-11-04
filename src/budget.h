@@ -43,6 +43,9 @@ public:
     explicit BudgetQueue(BudgetLimits limits);
     unsigned threads_for(unsigned requested) const;
     void push(ScheduledTask task);
+    // Remove a prepared task whose worker failed before admission.
+    // Its id stays seen, so it cannot be accidentally scheduled a second time.
+    bool erase_pending(const std::string& id);
     // Strict FIFO: an oversized head is rejected, a temporarily blocked head waits.
     Admission take();
     // Only an admitted task may release resources, exactly once.

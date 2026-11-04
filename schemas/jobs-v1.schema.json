@@ -27,11 +27,16 @@
     "execution": {
       "type": "object", "additionalProperties": false,
       "properties": {
+        "workers": {"type": "integer", "minimum": 1, "maximum": 256},
         "thread_budget": {"type": "integer", "minimum": 1, "maximum": 256},
         "memory_budget_mib": {"type": "integer", "minimum": 0, "maximum": 2147483647},
         "startup_timeout_ms": {"type": "integer", "minimum": 1, "maximum": 86400000},
         "task_timeout_ms": {"type": "integer", "minimum": 0, "maximum": 86400000}
-      }
+      },
+      "allOf": [{
+        "if": {"required": ["workers"], "properties": {"workers": {"minimum": 2}}},
+        "then": {"required": ["thread_budget", "memory_budget_mib"], "properties": {"memory_budget_mib": {"minimum": 1}}}
+      }]
     },
     "size": {
       "oneOf": [

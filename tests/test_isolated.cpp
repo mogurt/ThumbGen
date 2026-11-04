@@ -31,9 +31,10 @@ static void crash() {
     std::raise(SIGSEGV);
 #endif
 }
-static void image(const fs::path& path,bool beauty=false) {
+static void image(const fs::path& path,bool beauty=false,int canvas=0) {
     OIIO::ImageSpec spec(4,2,beauty?6:3,OIIO::TypeDesc::FLOAT);
     if(beauty)spec.channelnames={"R","G","B","Beauty.R","Beauty.G","Beauty.B"};
+    if(canvas){spec.full_width=canvas;spec.full_height=canvas;}
     std::vector<float> pixels(size_t(8*spec.nchannels),beauty?0.0f:0.4f);
     if(beauty)for(size_t i=0;i<pixels.size();++i)if(i%6>=3)pixels[i]=0.8f;
     auto output=OIIO::ImageOutput::create(path.u8string());require(bool(output),OIIO::geterror());
@@ -60,14 +61,40 @@ static int test_main(const std::vector<std::string>& args) {
     if(args.size()==5 && args[1]=="--internal-worker") {
         std::map<std::string,int> encoded;
         return serve_worker(args[2],args[3],unsigned(std::stoi(args[4])),[&](const std::string& phase,const Job& job) {
-            if(phase=="encoded" && job.id=="partial" && ++encoded[job.id]==2)crash();
+            if(phase=="encoded" && (job.id=="partial" || job.id=="parallel-partial") && ++encoded[job.id]==2)crash();
             if(phase=="decoded" && (job.id=="crash" || job.id=="restart-anchor" || job.id=="budget"))crash();
             if(phase=="committed" && job.id=="after-commit")crash();
             if(phase=="decoded" && job.id=="protocol")std::cout<<"not-json\n"<<std::flush;
             if(phase=="decoded" && job.id=="unknown-error")throw FileFailure("not_registered","injected unknown code");
             if(phase=="decoded" && job.id=="sleep")std::this_thread::sleep_for(std::chrono::seconds(10));
+            if(phase=="decoded" && (job.id=="parallel-anchor" || job.id=="parallel-frame")) {
+                {std::ofstream marker(fs::u8path(job.input+".ready"));marker<<"ready";}
+                auto peer=fs::u8path(job.input).parent_path().parent_path()/(job.id=="parallel-anchor"?"parallel-frame":"parallel-anchor")/"source.exr.ready";
+                auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(5);
+                while(!fs::exists(peer) && std::chrono::steady_clock::now()<deadline)std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                require(fs::exists(peer),"independent workers did not overlap in decode");
+            }
+            if(phase=="decoded" && job.id=="budget-slow") {
+                auto marker=fs::u8path(job.input).parent_path().parent_path()/"after-queue-crash"/"source.exr.planned";
+                auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(5);
+                while(!fs::exists(marker) && std::chrono::steady_clock::now()<deadline)std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                require(fs::exists(marker),"queued worker failure did not release its preparation lane");
+            }
+            if(phase=="committed" && job.id=="budget-slow"){std::ofstream marker(fs::u8path(job.input+".done"));marker<<"committed";}
+            if(phase=="planned" && job.id=="after-queue-crash"){std::ofstream marker(fs::u8path(job.input+".planned"));marker<<"planned";}
+            if(phase=="decoded" && job.id=="after-queue-crash") {
+                auto marker=fs::u8path(job.input).parent_path().parent_path()/"budget-slow"/"source.exr.done";
+                require(fs::exists(marker),"memory budget admitted a second decoder before the active task released resources");
+            }
+            if(phase=="planned" && job.id=="queued-crash")std::thread([]{std::this_thread::sleep_for(std::chrono::milliseconds(200));crash();}).detach();
+            if(phase=="decoded" && job.id=="emit-first") {
+                auto marker=fs::u8path(job.input).parent_path().parent_path()/"emit-hold"/"source.exr.pid";
+                auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(5);
+                while(!fs::exists(marker) && std::chrono::steady_clock::now()<deadline)std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                require(fs::exists(marker),"consumer failure did not overlap another encoder");
+            }
             if(phase=="planned" && job.id=="source-change"){std::ofstream file(fs::u8path(job.input),std::ios::app|std::ios::binary);file<<"producer write";}
-            if(phase=="decoded" && job.id=="parent-loss") {
+            if((phase=="decoded" && job.id=="parent-loss") || (phase=="encoded" && job.id=="emit-hold")) {
                 {std::ofstream marker(fs::u8path(job.input+".pid"));marker<<
 #ifdef _WIN32
                     GetCurrentProcessId()
@@ -89,7 +116,9 @@ static int test_main(const std::vector<std::string>& args) {
         };
         auto run=[&](std::vector<Job> jobs,IsolationOptions options=IsolationOptions{},std::string exe=std::string{}) {
             Json records=Json::array();run_isolated(jobs,exe.empty()?executable:exe,[&](const Json& record){records.push_back(record);all.push_back(record);},options);
-            require(records.size()==jobs.size(),"isolated batch lost a record");for(size_t i=0;i<jobs.size();++i)require(records[i]["id"]==jobs[i].id,"isolated id mismatch");return records;
+            require(records.size()==jobs.size(),"isolated batch lost a record");
+            std::map<std::string,Json> by_id;for(const auto& record:records)require(by_id.emplace(record["id"].get<std::string>(),record).second,"duplicate isolated result");
+            Json ordered=Json::array();for(const auto& item:jobs){require(by_id.count(item.id)!=0,"isolated id mismatch");ordered.push_back(by_id.at(item.id));}return ordered;
         };
         auto normal=job("normal"),partial=job("partial",2),after=job("after");auto rows=run({normal,partial,after});
         require(rows[0]["status"]=="success" && rows[1]["status"]=="partial" && rows[1]["outputs"][0]["status"]=="success" && rows[1]["outputs"][1]["error"]["code"]=="worker_crashed" && rows[2]["status"]=="success",rows.dump());
@@ -115,6 +144,43 @@ static int test_main(const std::vector<std::string>& args) {
         rows=run({missing,conflicting,dependent,later});require(rows[0]["error"]["code"]=="open_failed" && rows[1]["error"]["code"]=="sequence_selection_conflict" && rows[2]["status"]=="success" && rows[3]["status"]=="success" && rows[3]["selection"]["chosen"]["group"]=="RGB",rows.dump());
         auto skip=job("skip-anchor");skip.sequence_id="skip-lock";skip.outputs[0].existing="skip";{std::ofstream output(fs::u8path(skip.outputs[0].path));output<<"existing";}
         auto frame=job("skip-next",1,true);frame.sequence_id=skip.sequence_id;rows=run({skip,frame});require(rows[0]["status"]=="skipped" && rows[1]["status"]=="success" && rows[1]["selection"]["chosen"]["group"]=="RGB",rows.dump());
+        IsolationOptions pool;pool.workers=2;pool.thread_budget=2;pool.memory_mib=1024;
+        auto parallel_anchor=job("parallel-anchor"),parallel_frame=job("parallel-frame",1,true);
+        parallel_anchor.sequence_id="parallel-lock";parallel_frame.sequence_id=parallel_anchor.sequence_id;
+        rows=run({parallel_anchor,parallel_frame},pool);
+        require(rows[0]["status"]=="success" && rows[1]["status"]=="success" && rows[1]["selection"]["chosen"]["group"]=="RGB",rows.dump());
+        require(rows[0]["execution"]["worker_id"]!=rows[1]["execution"]["worker_id"] && rows[0]["execution"]["threads"]==1,"parallel quotas/ownership lost");
+        for(unsigned workers:{1u,2u,4u,8u}) {
+            pool.workers=workers;pool.thread_budget=workers*2;pool.memory_mib=8192;
+            std::vector<Job> inputs;for(unsigned i=0;i<workers*2;++i) {
+                auto value=job("gradient-"+std::to_string(workers)+"-"+std::to_string(i));if(i%2==0)value.options.threads=1;inputs.push_back(std::move(value));
+            }
+            rows=run(inputs,pool);for(size_t i=0;i<rows.size();++i)require(rows[i]["status"]=="success" && rows[i]["execution"]["threads"]==(i%2==0?1:2) && rows[i]["execution"]["workers"]==workers,rows[i].dump());
+        }
+        pool.workers=2;pool.thread_budget=2;pool.memory_mib=560;
+        rows=run({job("budget-slow"),job("queued-crash"),job("after-queue-crash")},pool);
+        require(rows[0]["status"]=="success" && rows[1]["error"]["code"]=="worker_crashed" && rows[2]["status"]=="success",rows.dump());
+        require(rows[2]["execution"]["queue_ms"].get<double>()>0,"low memory waiting diagnostic missing");
+        pool.memory_mib=1024;
+        rows=run({job("crash"),job("concurrent-normal"),job("after-concurrent-crash")},pool);
+        require(rows[0]["error"]["code"]=="worker_crashed" && rows[1]["status"]=="success" && rows[2]["status"]=="success",rows.dump());
+        rows=run({job("parallel-partial",2),job("concurrent-with-partial")},pool);
+        require(rows[0]["status"]=="partial" && rows[0]["outputs"][0]["status"]=="success" && rows[0]["outputs"][1]["status"]=="failed" && rows[1]["status"]=="success",rows.dump());
+        auto oversized=job("oversized-head");image(fs::u8path(oversized.input),false,2048);originals[oversized.input]=bytes(fs::u8path(oversized.input));
+        oversized.outputs[0].width=oversized.outputs[0].height=1024;pool.memory_mib=560;
+        rows=run({oversized,job("after-oversized-head")},pool);
+        require(rows[0]["error"]["code"]=="task_memory_exceeds_budget" && rows[1]["status"]=="success",rows.dump());
+        auto pool_missing=job("pool-missing");pool_missing.input=(root/"missing-pool.exr").u8string();pool_missing.sequence_id="pool-missing-lock";
+        auto pool_conflict=job("pool-conflict");pool_conflict.sequence_id=pool_missing.sequence_id;pool_conflict.options.selection_policy="root_rgb";
+        auto pool_valid=job("pool-valid");pool_valid.sequence_id=pool_missing.sequence_id;
+        auto pool_later=job("pool-later",1,true);pool_later.sequence_id=pool_missing.sequence_id;pool.memory_mib=1024;
+        rows=run({pool_missing,pool_conflict,pool_valid,pool_later},pool);
+        require(rows[0]["error"]["code"]=="open_failed" && rows[1]["error"]["code"]=="sequence_selection_conflict" && rows[2]["status"]=="success" && rows[3]["status"]=="success" && rows[3]["selection"]["chosen"]["group"]=="RGB",rows.dump());
+        auto emit_first=job("emit-first"),emit_hold=job("emit-hold");bool consumer_failed=false;
+        try {run_isolated({emit_first,emit_hold},executable,[](const Json&){throw std::runtime_error("consumer stopped");},pool);}
+        catch(const std::runtime_error& e){consumer_failed=std::string(e.what())=="consumer stopped";}
+        unsigned long held_pid=0;{std::ifstream marker(fs::u8path(emit_hold.input+".pid"));marker>>held_pid;}
+        require(consumer_failed && held_pid && !running(held_pid),"consumer failure leaked an encoding worker");
         auto orphan=job("parent-loss");auto wire=fs::u8path(orphan.input+".json");{std::ofstream output(wire);output<<job_to_wire(orphan);}
         {
             ChildProcess owner(executable,{"--orphan-parent",wire.u8string()});auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(5);unsigned long pid=0;

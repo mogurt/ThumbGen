@@ -37,7 +37,7 @@ static void usage() {
         "  --channels RGB|GRAY|GROUP, --part N or --part-name NAME\n"
         "  --selection-policy primary|root_rgb, --threads N, --max-decode-mib N\n"
         "  --existing error|skip|replace (default: error)\n"
-        "  --thread-budget N, --memory-budget-mib N, --startup-timeout-ms N, --task-timeout-ms N\n"
+        "  --workers N, --thread-budget N, --memory-budget-mib N, --startup-timeout-ms N, --task-timeout-ms N\n"
         "Defaults: balanced, JPEG Q90, fit 1024x1024 without upscaling, black background.\n"
         "Default: no output overwriting. Exit: 0 success, 1 internal, 2 usage, 3 partial, 4 all failed.\n";
 }
@@ -181,7 +181,7 @@ static void preflight(const std::vector<Job>& jobs) {
     }
 }
 static thumbgen::detail::IsolationOptions execution_options(const Json& value) {
-    keys(value,{"thread_budget","memory_budget_mib","startup_timeout_ms","task_timeout_ms"});
+    keys(value,{"workers","thread_budget","memory_budget_mib","startup_timeout_ms","task_timeout_ms"});
     auto number=[&](const char* key,int minimum,int maximum,int fallback) {
         if(!value.contains(key))return fallback;
         const auto& item=value[key];
@@ -190,6 +190,7 @@ static thumbgen::detail::IsolationOptions execution_options(const Json& value) {
         return item.get<int>();
     };
     thumbgen::detail::IsolationOptions result;
+    result.workers=unsigned(number("workers",1,256,1));
     result.thread_budget=unsigned(number("thread_budget",1,256,0));
     result.memory_mib=size_t(number("memory_budget_mib",0,2147483647,0));
     result.startup_timeout=std::chrono::milliseconds(number("startup_timeout_ms",1,86400000,30000));
@@ -262,6 +263,7 @@ static int execute(const std::vector<std::string>& args) {
             else if(flag=="--size")sizes.push_back(parse_size(value()));
             else if(flag=="--quality")values["quality"]=number(value());
             else if(flag=="--threads")values["threads"]=number(value());
+            else if(flag=="--workers")execution_values["workers"]=number(value());
             else if(flag=="--thread-budget")execution_values["thread_budget"]=number(value());
             else if(flag=="--memory-budget-mib")execution_values["memory_budget_mib"]=number(value());
             else if(flag=="--startup-timeout-ms")execution_values["startup_timeout_ms"]=number(value());

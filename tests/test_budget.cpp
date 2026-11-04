@@ -59,6 +59,11 @@ int main() {
         require(retained.memory_in_use()==200 && retained.take().state==State::rejected,"idle reserve was not charged");
         require(retained.take().state==State::admitted && retained.memory_in_use()==1000,"fixed reserve admission mismatch");
         retained.release("fits");require(retained.memory_in_use()==200,"release discarded idle/parent reserve");
+        retained.push({"lost-worker",1,1});retained.push({"survivor",1,1});
+        require(retained.erase_pending("lost-worker") && !retained.erase_pending("lost-worker"),"pending fault removal mismatch");
+        rejects<std::invalid_argument>([&]{retained.push({"lost-worker",1,1});});
+        require(retained.take().task.id=="survivor" && !retained.erase_pending("survivor"),"removal changed active reservations");
+        retained.release("survivor");
         rejects<std::invalid_argument>([]{BudgetQueue({1,1,100,101});});
         std::cout<<"budget: overflow, canvas/span, FIFO, rejection, thread limits and release passed\n";
     }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}

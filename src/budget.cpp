@@ -72,6 +72,11 @@ Admission BudgetQueue::take() {
     memory_+=result.task.estimated_memory;threads_+=result.threads;
     pending_.pop_front();return result;
 }
+bool BudgetQueue::erase_pending(const std::string& id) {
+    auto item=std::find_if(pending_.begin(),pending_.end(),[&](const ScheduledTask& task){return task.id==id;});
+    if(item==pending_.end())return false;
+    pending_.erase(item);return true;
+}
 void BudgetQueue::release(const std::string& id) {
     auto item=active_.find(id);
     if(item==active_.end())throw std::invalid_argument("task has no active reservation");
