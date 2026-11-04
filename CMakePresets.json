@@ -51,10 +51,10 @@
   ],
   "testPresets": [
     {"name": "windows-dev", "configurePreset": "windows-dev", "configuration": "Release",
-     "environment": {"OCIO": null},
+     "environment": {"OCIO": ""},
      "output": {"outputOnFailure": true}, "execution": {"jobs": 4, "noTestsAction": "error"}},
     {"name": "linux-dev", "configurePreset": "linux-dev",
-     "environment": {"OCIO": null},
+     "environment": {"OCIO": ""},
      "output": {"outputOnFailure": true}, "execution": {"jobs": 4, "noTestsAction": "error"}}
   ]
 }
