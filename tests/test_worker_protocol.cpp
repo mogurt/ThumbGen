@@ -35,6 +35,14 @@ int main() {
         bad=wire;bad["input"]="relative.exr";rejects([&]{job_from_wire(bad);});
         bad=wire;bad["options"]["extra"]=true;rejects([&]{job_from_wire(bad);});
         bad=wire;bad["outputs"].push_back(bad["outputs"][0]);rejects([&]{job_from_wire(bad);});
+        job.options.visualization="vector";job.options.channels="motion";job.options.data_range={-2,2};job.options.invalid_values="error";
+        wire=job_to_wire(job);require(job_to_wire(job_from_wire(wire))==wire);
+        for(const auto& range:{Json::array(),Json::array({0}),Json::array({1,1}),Json::array({2,1}),Json::array({true,1}),Json::array({-1e308,1e308})}) {
+            bad=wire;bad["options"]["data_range"]=range;rejects([&]{job_from_wire(bad);});
+        }
+        bad=wire;bad["options"]["visualization"]="unknown";rejects([&]{job_from_wire(bad);});
+        bad=wire;bad["options"]["input_space"]="linear";rejects([&]{job_from_wire(bad);});
+        bad=wire;bad["options"]["channels"]="";rejects([&]{job_from_wire(bad);});
         std::cout<<"worker protocol: association, serials, bounds, types and Job roundtrip passed\n";
     }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}
 }

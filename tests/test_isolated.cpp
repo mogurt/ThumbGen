@@ -62,7 +62,7 @@ static int test_main(const std::vector<std::string>& args) {
         std::map<std::string,int> encoded;
         return serve_worker(args[2],args[3],unsigned(std::stoi(args[4])),[&](const std::string& phase,const Job& job) {
             if(phase=="encoded" && (job.id=="partial" || job.id=="parallel-partial") && ++encoded[job.id]==2)crash();
-            if(phase=="decoded" && (job.id=="crash" || job.id=="restart-anchor" || job.id=="budget"))crash();
+            if(phase=="decoded" && (job.id=="crash" || job.id=="restart-anchor" || job.id=="budget" || job.id=="data-crash"))crash();
             if(phase=="committed" && job.id=="after-commit")crash();
             if(phase=="decoded" && job.id=="protocol")std::cout<<"not-json\n"<<std::flush;
             if(phase=="decoded" && job.id=="unknown-error")throw FileFailure("not_registered","injected unknown code");
@@ -127,6 +127,16 @@ static int test_main(const std::vector<std::string>& args) {
         auto anchor=job("restart-anchor");anchor.sequence_id="locked";auto next=job("restart-frame",1,true);next.sequence_id=anchor.sequence_id;
         rows=run({anchor,next});require(rows[0]["error"]["code"]=="worker_crashed" && rows[1]["status"]=="success" && rows[1]["selection"]["chosen"]["group"]=="RGB",rows.dump());
         OIIO::ImageBuf black(next.outputs[0].path);require(black.read(),black.geterror());float pixel[3];black.getpixel(0,0,pixel,3);require(pixel[0]==0 && pixel[1]==0 && pixel[2]==0,"worker restart changed primary image");
+        auto data_crash=job("data-crash"),data_after=job("data-after");
+        for(auto* value:{&data_crash,&data_after}) {
+            value->sequence_id="data-lock";value->options.input_space="auto";value->options.visualization="depth";
+            value->options.channels="R";value->options.data_range={0,1};
+        }
+        rows=run({data_crash,data_after});
+        require(rows[0]["error"]["code"]=="worker_crashed" && rows[1]["status"]=="success" && rows[1]["selection"]["lock_status"]=="reused" &&
+            rows[1]["visualization"]["range"]==Json::array({0,1}) && rows[1]["execution"]["worker_id"]!=rows[0]["execution"]["worker_id"],rows.dump());
+        OIIO::ImageBuf data_preview(data_after.outputs[0].path);require(data_preview.read(),data_preview.geterror());data_preview.getpixel(0,0,pixel,3);
+        require(pixel[0]>.399f && pixel[0]<.401f && pixel[0]==pixel[1] && pixel[1]==pixel[2],"data restart applied a colour transform");
         rows=run({job("protocol"),job("unknown-error"),job("after-protocol")});require(rows[0]["error"]["code"]=="worker_protocol_error" && rows[1]["error"]["code"]=="worker_protocol_error" && rows[2]["status"]=="success",rows.dump());
         rows=run({job("after-commit")});require(rows[0]["status"]=="success" && !rows[0]["warnings"].empty(),rows.dump());
         IsolationOptions budget;budget.memory_mib=129;rows=run({job("budget")},budget);require(rows[0]["error"]["code"]=="task_memory_exceeds_budget",rows.dump());

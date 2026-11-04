@@ -20,13 +20,13 @@ Bytes multiply(Bytes a,Bytes b) {
 MemoryEstimate estimate_memory(const ImageFootprint& s) {
     if(!s.data_width || !s.data_height || !s.display_width || !s.display_height || !s.channel_span ||
        (s.selected_channels!=3 && s.selected_channels!=4) || !s.output_width || !s.output_height ||
-       !s.threads || s.threads>256)throw std::invalid_argument("invalid memory estimate shape");
+       !s.threads || s.threads>256 || !s.source_sample_bytes || s.source_sample_bytes>8)throw std::invalid_argument("invalid memory estimate shape");
     const Bytes data=multiply(s.data_width,s.data_height);
     const Bytes canvas=multiply(s.display_width,s.display_height);
     const Bytes preview=multiply(s.output_width,s.output_height);
     if(preview>canvas)throw std::invalid_argument("preview footprint exceeds display canvas");
     MemoryEstimate e;
-    e.source=multiply(multiply(data,s.channel_span),sizeof(float));
+    e.source=multiply(multiply(data,s.channel_span),s.source_sample_bytes);
     // Selected colour, padding/orientation and colour conversion temporaries.
     e.working=multiply(multiply(std::max(data,canvas),s.selected_channels),3*sizeof(float));
     // Resize/composite/unpremult/RGB conversion can have overlapping buffers.

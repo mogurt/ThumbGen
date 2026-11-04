@@ -4,6 +4,7 @@
 #include "files.h"
 #include "worker_protocol.h"
 #include "error_registry.h"
+#include "selection_request.h"
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
@@ -45,7 +46,7 @@ void error_check(const Json& value) {
     static const auto codes=[] {std::set<std::string> result;auto registry=Json::parse(error_registry_json);for(const auto& item:registry["errors"])result.insert(item["code"].get<std::string>());return result;}();
     check(codes.count(value["code"].get<std::string>())!=0,"unregistered worker error code");
     if(value.contains("retryable"))check(value["retryable"].is_boolean(),"invalid worker retryability");
-    if(value.contains("stage"))check(value["stage"]=="open" || value["stage"]=="selection" || value["stage"]=="colour" || value["stage"]=="decode","invalid worker error stage");
+    if(value.contains("stage"))check(value["stage"]=="open" || value["stage"]=="selection" || value["stage"]=="colour" || value["stage"]=="decode" || value["stage"]=="visualization","invalid worker error stage");
 }
 std::uint64_t number(const Json& value,std::uint64_t maximum=std::numeric_limits<std::uint64_t>::max()) {
     check(value.is_number_integer() && value.get<long double>()>=0 && value.get<long double>()<=maximum,"invalid worker payload integer");
@@ -96,13 +97,21 @@ Json task_base(const Job& job) {
     return value;
 }
 void base_check(const Json& value,const Job& job) {
-    allowed(value,{"schema_version","type","id","input","ok","status","outputs","warnings","error","selection","source","selected_channels","colour","decoded_mib","preset","filter","timings_ms","sequence_id","source_check"});
+    allowed(value,{"schema_version","type","id","input","ok","status","outputs","warnings","error","selection","source","selected_channels","colour","decoded_mib","preset","filter","timings_ms","sequence_id","source_check","visualization"});
     check(value.is_object() && value.value("type",std::string{})=="result" && value.value("id",std::string{})==job.id &&
         value.value("input",std::string{})==job.input && value.value("schema_version",0)==1,"worker result identity mismatch");
     check(value.value("sequence_id",std::string{})==job.sequence_id,"worker sequence identity mismatch");
     check(value.contains("warnings") && value["warnings"].is_array() && value.contains("timings_ms") && value["timings_ms"].is_object(),"invalid worker result metadata");
     for(const auto& warning:value["warnings"])check(warning.is_string(),"invalid worker warning");
     if(value.contains("error"))error_check(value["error"]);
+    if(value.contains("visualization")) {
+        const auto& data=value["visualization"];fields(data,{"mode","policy","range","invalid_values","invalid_pixels","clipped_components"});
+        check(job.options.visualization!="colour" && data["mode"]==job.options.visualization && data["policy"]=="v1" && data["invalid_values"]==job.options.invalid_values &&
+            data["range"]==selection_request(job)["data"]["range"],"worker visualization settings mismatch");
+        number(data["invalid_pixels"],std::numeric_limits<std::uint64_t>::max());number(data["clipped_components"],std::numeric_limits<std::uint64_t>::max());
+    }
+    if(job.options.visualization!="colour" && (value.value("status",std::string{})=="success" || value.value("status",std::string{})=="partial"))
+        check(value.contains("visualization"),"missing worker visualization result");
 }
 void output_check(const Json& value,const Output& output) {
     check(value.is_object() && value.value("path",std::string{})==output.path && value.value("existing_policy",std::string{})==output.existing,"worker output identity mismatch");
@@ -287,7 +296,7 @@ bool run_isolated(const std::vector<Job>& jobs,const std::string& executable,con
                 if(cancelled())throw FileFailure("task_cancelled","controller accepted interruption");
                 if(!task.initialized) {
                     if(!job.sequence_id.empty()) {
-                        Json request{{"part",job.options.part},{"part_name",job.options.part_name},{"channels",job.options.channels},{"strategy",job.options.selection_policy}};
+                        Json request=selection_request(job);
                         auto previous=requests.find(job.sequence_id);
                         if(previous!=requests.end() && previous->second!=request)throw FileFailure("sequence_selection_conflict","selection options differ within sequence_id");
                         requests.emplace(job.sequence_id,std::move(request));
@@ -318,12 +327,13 @@ bool run_isolated(const std::vector<Job>& jobs,const std::string& executable,con
                         try {source=source_stamp(fs::u8path(job.input));}
                         catch(const FileFailure&){throw FileFailure("source_changed","source could not be verified after metadata preparation",true);}
                         if(stamp_json(*source)!=payload["source_stamp"])throw FileFailure("source_changed","source changed during metadata preparation",true);
-                        const auto& f=payload["footprint"];fields(f,{"data_width","data_height","display_width","display_height","channel_span","selected_channels","output_width","output_height","threads"});
+                        const auto& f=payload["footprint"];fields(f,{"data_width","data_height","display_width","display_height","channel_span","selected_channels","output_width","output_height","threads","source_sample_bytes"});
                         check(number(f["threads"],256)==unsigned(job.options.threads),"plan thread quota mismatch");
                         ImageFootprint shape{number(f["data_width"],2147483647),number(f["data_height"],2147483647),number(f["display_width"],2147483647),number(f["display_height"],2147483647),
-                            number(f["channel_span"],2147483647),number(f["selected_channels"],4),number(f["output_width"],32768),number(f["output_height"],32768),unsigned(job.options.threads)};
+                            number(f["channel_span"],2147483647),number(f["selected_channels"],4),number(f["output_width"],32768),number(f["output_height"],32768),unsigned(job.options.threads),unsigned(number(f["source_sample_bytes"],8))};
                         check(shape.data_width && shape.data_height && shape.display_width && shape.display_height && shape.channel_span &&
-                            (shape.selected_channels==3 || shape.selected_channels==4) && shape.output_width && shape.output_height,"invalid worker footprint");
+                            (shape.selected_channels==3 || shape.selected_channels==4) && shape.output_width && shape.output_height && shape.source_sample_bytes &&
+                            (job.options.visualization!="colour" || shape.source_sample_bytes==4),"invalid worker footprint");
                         std::uint64_t cost=1;
                         try {auto estimate=estimate_memory(shape);estimate_mib=double(estimate.total)/1048576;task.admission_mib=double(estimate.incremental)/1048576;if(options.memory_mib)cost=estimate.incremental;}
                         catch(const std::exception&){if(options.memory_mib)throw FileFailure("task_memory_exceeds_budget","task memory estimate is invalid or overflows");}

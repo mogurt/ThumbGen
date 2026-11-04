@@ -11,18 +11,19 @@ DataMapping data_mapping(const std::string& mode,const std::vector<double>& rang
     else if(mode=="normal")result.mode=DataMode::normal;
     else if(mode=="vector")result.mode=DataMode::vector;
     else if(mode=="id")result.mode=DataMode::id;
+    else if(mode=="id_rgb")result.mode=DataMode::id_rgb;
     else throw std::invalid_argument("unknown visualization mode");
     if(invalid=="black")result.invalid=InvalidData::black;
     else if(invalid=="magenta")result.invalid=InvalidData::magenta;
     else if(invalid=="error")result.invalid=InvalidData::error;
     else throw std::invalid_argument("invalid data value policy");
     if(result.mode==DataMode::colour || result.mode==DataMode::id) {
-        if(!range.empty())throw std::invalid_argument("data range is only valid for depth, normal or vector");
+        if(!range.empty())throw std::invalid_argument("data range is only valid for depth, normal, vector or id_rgb");
         if(result.mode==DataMode::colour && invalid!="magenta")throw std::invalid_argument("invalid value policy requires a data visualization mode");
         return result;
     }
     if(range.empty()) {
-        if(result.mode!=DataMode::normal)throw std::invalid_argument("depth and vector visualization require a fixed data range");
+        if(result.mode!=DataMode::normal)throw std::invalid_argument("depth, vector and id_rgb visualization require a fixed data range");
         result.minimum=-1;result.maximum=1;
     } else {
         if(range.size()!=2)throw std::invalid_argument("data range must contain two numbers");
@@ -58,13 +59,13 @@ template<class T> void ids(const T* source,float* rgba,std::size_t pixels,std::s
     for(std::size_t p=0;p<pixels;++p)palette(static_cast<std::uint32_t>(source[p*stride+component]),rgba+4*p);
 }
 }
-DataStats map_data_float(const float* source,float* rgba,std::size_t pixels,std::size_t stride,
+template<class Sample> static DataStats map_samples(const Sample* source,float* rgba,std::size_t pixels,std::size_t stride,
                         const std::vector<int>& components,const DataMapping& mapping) {
     const auto size=components.size();
     bool shape=false;
     switch(mapping.mode) {
         case DataMode::depth:case DataMode::id:shape=size==1;break;
-        case DataMode::normal:shape=size==3;break;
+        case DataMode::normal:case DataMode::id_rgb:shape=size==3;break;
         case DataMode::vector:shape=size==2 || size==3;break;
         default:break;
     }
@@ -97,6 +98,13 @@ DataStats map_data_float(const float* source,float* rgba,std::size_t pixels,std:
     }
     if(mapping.invalid==InvalidData::error && stats.invalid_pixels)throw InvalidDataValues(stats);
     return stats;
+}
+DataStats map_data_float(const float* source,float* rgba,std::size_t pixels,std::size_t stride,const std::vector<int>& components,const DataMapping& mapping) {
+    return map_samples(source,rgba,pixels,stride,components,mapping);
+}
+DataStats map_data_double(const double* source,float* rgba,std::size_t pixels,std::size_t stride,const std::vector<int>& components,const DataMapping& mapping) {
+    if(stride && pixels>std::numeric_limits<std::size_t>::max()/sizeof(double)/stride)throw std::invalid_argument("data buffer overflow");
+    return map_samples(source,rgba,pixels,stride,components,mapping);
 }
 void map_ids_u32(const std::uint32_t* source,float* rgba,std::size_t pixels,std::size_t stride,std::size_t component) {ids(source,rgba,pixels,stride,component);}
 void map_ids_i32(const std::int32_t* source,float* rgba,std::size_t pixels,std::size_t stride,std::size_t component) {ids(source,rgba,pixels,stride,component);}

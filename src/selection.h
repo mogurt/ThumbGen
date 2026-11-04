@@ -1,6 +1,8 @@
 #pragma once
 #include <thumbgen/core.h>
 #include <OpenImageIO/imageio.h>
+#include "data_preview.h"
+#include "selection_request.h"
 
 namespace thumbgen::detail {
 struct Candidate {
@@ -10,4 +12,5 @@ struct Candidate {
 std::vector<Candidate> classify(const OIIO::ImageSpec& spec);
 bool is_primary(const OIIO::ImageSpec& spec, const Candidate& candidate);
 Json candidate_json(const OIIO::ImageSpec& spec, const Candidate& candidate, int part);
+Candidate data_candidate(const OIIO::ImageSpec& spec,const Candidate& candidate,const std::string& requested,const DataMapping& mapping);
 }

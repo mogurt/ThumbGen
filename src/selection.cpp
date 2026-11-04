@@ -1,4 +1,5 @@
 #include "selection.h"
+#include "files.h"
 #include <algorithm>
 #include <cctype>
 #include <map>
@@ -85,5 +86,61 @@ bool is_primary(const OIIO::ImageSpec& spec,const Candidate& candidate) {
         name=lower(name);return name=="beauty" || name=="combined" || name=="rgba";
     };
     return main_name(candidate.group) || (candidate.group=="RGB" && main_name(std::string(spec.get_string_attribute("oiio:subimagename"))));
+}
+Json selection_request(const Job& job) {
+    const auto& o=job.options;
+    Json request{{"part",o.part},{"part_name",o.part_name},{"channels",o.channels},{"strategy",o.selection_policy}};
+    if(o.visualization!="colour") {
+        auto mapping=data_mapping(o.visualization,o.data_range,o.invalid_values);
+        request["data"]={{"mode",o.visualization},{"range",mapping.mode==DataMode::id?Json::array():Json::array({mapping.minimum,mapping.maximum})},
+            {"invalid_values",o.invalid_values},{"policy","v1"}};
+    }
+    return request;
+}
+Candidate data_candidate(const OIIO::ImageSpec& spec,const Candidate& original,const std::string& requested,const DataMapping& mapping) {
+    auto group=original;
+    const auto semantic=lower(group.group+" "+std::string(spec.get_string_attribute("oiio:subimagename")));
+    bool crypto=semantic.find("crypto")!=std::string::npos;
+    for(const auto& attribute:spec.extra_attribs) {
+        const std::string name=attribute.name().string();
+        if(name.rfind("cryptomatte/",0)!=0 || name.size()<5 || name.substr(name.size()-5)!="/name")continue;
+        const std::string prefix=spec.get_string_attribute(name);
+        if(!prefix.empty() && group.group.rfind(prefix,0)==0 && std::all_of(group.group.begin()+prefix.size(),group.group.end(),[](unsigned char c){return c>='0' && c<='9';}))crypto=true;
+    }
+    if(crypto)throw FileFailure("cryptomatte_requires_visualization","Cryptomatte IDs/coverage require their dedicated preview");
+    if(requested!=group.group) {
+        auto match=std::find_if(group.channels.begin(),group.channels.end(),[&](int c){return spec.channelnames[c]==requested;});
+        if(match==group.channels.end())throw FileFailure("channels_not_found","requested data channel does not exist");
+        group.channels={*match};group.group=requested;
+    }
+    if(mapping.mode==DataMode::depth || mapping.mode==DataMode::id) {
+        if(requested==original.group) {
+            std::vector<int> unique;
+            for(int c:group.channels) {
+                auto name=spec.channelnames[c];name=lower(name.substr(name.rfind('.')==std::string::npos?0:name.rfind('.')+1));
+                if(name!="a" && std::find(unique.begin(),unique.end(),c)==unique.end())unique.push_back(c);
+            }
+            group.channels=std::move(unique);
+        }
+        if(group.channels.size()!=1)throw FileFailure("visualization_layout_unsupported","depth/ID requires one explicit channel");
+    } else {
+        auto find=[&](const char* component) {
+            int result=-1;
+            for(int c:group.channels) {
+                auto name=spec.channelnames[c];name=lower(name.substr(name.rfind('.')==std::string::npos?0:name.rfind('.')+1));
+                if(name==component){if(result!=-1)return -1;result=c;}
+            }
+            return result;
+        };
+        std::vector<int> components;
+        for(const auto& labels:std::vector<std::vector<const char*>>{{"x","y","z"},{"r","g","b"},{"u","v"}}) {
+            if(mapping.mode==DataMode::id_rgb && std::string(labels[0])!="r")continue;
+            std::vector<int> found;for(auto label:labels){auto c=find(label);if(c<0)break;found.push_back(c);}
+            if(found.size()==3 || (mapping.mode==DataMode::vector && found.size()==2)) {components=std::move(found);break;}
+        }
+        if(components.empty())throw FileFailure("visualization_layout_unsupported",mapping.mode==DataMode::id_rgb?"RGB labels require a complete RGB group":"normal requires XYZ/RGB; vector requires XY/XYZ, RG/RGB or UV");
+        group.channels=std::move(components);
+    }
+    group.kind="data";group.reason="explicit data visualization";return group;
 }
 }

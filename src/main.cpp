@@ -1,6 +1,7 @@
 #include <thumbgen/core.h>
 #include "files.h"
 #include "isolated.h"
+#include "data_preview.h"
 #include <algorithm>
 #include <atomic>
 #include <csignal>
@@ -75,6 +76,7 @@ static void usage() {
         "  --input-space SPACE, --ocio-config FILE, --display NAME --view NAME\n"
         "  --channels RGB|GRAY|GROUP, --part N or --part-name NAME\n"
         "  --selection-policy primary|root_rgb, --threads N, --max-decode-mib N\n"
+        "  --visualize colour|depth|normal|vector|id|id_rgb, --data-range MIN,MAX, --invalid-values black|magenta|error\n"
         "  --existing error|skip|replace (default: error)\n"
         "  --workers N, --thread-budget N, --memory-budget-mib N, --startup-timeout-ms N, --task-timeout-ms N\n"
         "Defaults: balanced, JPEG Q90, fit 1024x1024 without upscaling, black background.\n"
@@ -120,10 +122,15 @@ static void validate_options(const Options& o) {
     if(o.selection_policy!="primary" && o.selection_policy!="root_rgb")throw std::invalid_argument("invalid selection_policy");
     if(o.input_space.empty())throw std::invalid_argument("input_space cannot be empty");
     if(o.display.empty()!=o.view.empty())throw std::invalid_argument("display and view must be specified together");
+    auto mapping=thumbgen::detail::data_mapping(o.visualization,o.data_range,o.invalid_values);
+    if(mapping.mode!=thumbgen::detail::DataMode::colour) {
+        if(o.channels.empty())throw std::invalid_argument("data visualization requires explicit channels");
+        if(o.input_space!="auto" || !o.ocio_config.empty() || !o.display.empty())throw std::invalid_argument("data visualization does not accept colour transform options");
+    }
 }
 static Options options(const Json& values,bool partial=false) {
     keys(values,{"preset","input_space","background","ocio_config","display","view","channels","part_name","selection_policy",
-        "part","threads","max_decode_mib","quality","format","size","existing"});
+        "part","threads","max_decode_mib","quality","format","size","existing","visualization","data_range","invalid_values"});
     if(values.contains("existing")) {
         auto policy=values["existing"].get<std::string>();
         if(policy!="error" && policy!="skip" && policy!="replace")throw std::invalid_argument("invalid existing policy");
@@ -138,6 +145,12 @@ static Options options(const Json& values,bool partial=false) {
         if(n<minimum||n>bound.second)throw std::invalid_argument(std::string(bound.first)+" out of range");
     }
     Options o;
+    o.visualization=values.value("visualization",o.visualization);o.invalid_values=values.value("invalid_values",o.invalid_values);
+    if(values.contains("data_range")) {
+        const auto& range=values["data_range"];
+        if(!range.is_array() || (!range.empty() && (range.size()!=2 || !range[0].is_number() || !range[1].is_number())))throw std::invalid_argument("data_range must be empty or contain two numbers");
+        o.data_range=range.get<std::vector<double>>();
+    }
     o.preset=values.value("preset",o.preset);o.input_space=values.value("input_space",o.input_space);
     o.background=values.value("background",o.background);o.ocio_config=values.value("ocio_config",o.ocio_config);
     o.display=values.value("display",o.display);o.view=values.value("view",o.view);o.channels=values.value("channels",o.channels);
@@ -310,6 +323,14 @@ static int execute(const std::vector<std::string>& args) {
             else if(flag=="--part")values["part"]=number(value());
             else if(flag=="--part-name")values["part_name"]=value();
             else if(flag=="--selection-policy")values["selection_policy"]=value();
+            else if(flag=="--visualize")values["visualization"]=value();
+            else if(flag=="--invalid-values")values["invalid_values"]=value();
+            else if(flag=="--data-range") {
+                auto text=value();auto comma=text.find(',');
+                if(comma==std::string::npos || text.find(',',comma+1)!=std::string::npos)throw std::invalid_argument("data range must be MIN,MAX");
+                auto numeric=[](const std::string& text){size_t used=0;auto n=std::stod(text,&used);if(used!=text.size())throw std::invalid_argument("invalid range number");return n;};
+                values["data_range"]=Json::array({numeric(text.substr(0,comma)),numeric(text.substr(comma+1))});
+            }
             else if(flag=="--existing")values["existing"]=value();
             else if(flag=="--max-decode-mib")values["max_decode_mib"]=number(value());
             else if(flag=="--preset")values["preset"]=value();

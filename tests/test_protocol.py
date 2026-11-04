@@ -106,7 +106,7 @@ class Protocol(unittest.TestCase):
         self.assertEqual(len(records),count)
         for record in records:validator.validate(record)
     def test_control_records(self):self.native_records(args.control_exe,14)
-    def test_isolated_records(self):self.native_records(args.isolated_exe,75)
+    def test_isolated_records(self):self.native_records(args.isolated_exe,77)
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory(prefix='thumbgen-protocol-')
         self.root=Path(self.temp.name);self.input=self.root/'source.png';png(self.input)

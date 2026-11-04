@@ -10,6 +10,8 @@ using Json = nlohmann::json;
 struct Options {
     std::string preset = "balanced", input_space = "auto", background = "black";
     std::string ocio_config, display, view, channels, part_name, selection_policy = "primary";
+    std::string visualization="colour",invalid_values="magenta";
+    std::vector<double> data_range;
     int part = -1, threads = 4;
     size_t max_decode_mib = 512;
 };

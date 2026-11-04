@@ -1,5 +1,6 @@
 #include "worker_protocol.h"
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <limits>
 #include <set>
@@ -62,12 +63,13 @@ Json job_to_wire(const Job& job) {
     return {{"id",job.id},{"input",job.input},{"sequence_id",job.sequence_id},{"outputs",outputs},
         {"options",{{"preset",o.preset},{"input_space",o.input_space},{"background",o.background},{"ocio_config",o.ocio_config},
             {"display",o.display},{"view",o.view},{"channels",o.channels},{"part_name",o.part_name},{"selection_policy",o.selection_policy},
-            {"part",o.part},{"threads",o.threads},{"max_decode_mib",o.max_decode_mib}}}};
+            {"part",o.part},{"threads",o.threads},{"max_decode_mib",o.max_decode_mib},
+            {"visualization",o.visualization},{"data_range",o.data_range},{"invalid_values",o.invalid_values}}}};
 }
 Job job_from_wire(const Json& value) {
     fields(value,{"id","input","sequence_id","options","outputs"});Job job;
     job.id=text(value["id"]);require(!job.id.empty(),"empty worker job id");job.input=text(value["input"]);path(job.input);job.sequence_id=text(value["sequence_id"]);
-    const auto& options=value["options"];fields(options,{"preset","input_space","background","ocio_config","display","view","channels","part_name","selection_policy","part","threads","max_decode_mib"});
+    const auto& options=value["options"];fields(options,{"preset","input_space","background","ocio_config","display","view","channels","part_name","selection_policy","part","threads","max_decode_mib","visualization","data_range","invalid_values"});
     auto& o=job.options;
     o.preset=text(options["preset"]);member(o.preset,{"fast","balanced","quality"});o.input_space=text(options["input_space"]);require(!o.input_space.empty(),"empty input space");
     o.background=text(options["background"]);member(o.background,{"black","white","transparent"});o.ocio_config=text(options["ocio_config"]);
@@ -75,6 +77,15 @@ Job job_from_wire(const Json& value) {
     o.channels=text(options["channels"]);o.part_name=text(options["part_name"]);o.selection_policy=text(options["selection_policy"]);member(o.selection_policy,{"primary","root_rgb"});
     o.part=integer(options["part"],-1,std::numeric_limits<int>::max());require(o.part<0 || o.part_name.empty(),"conflicting part selectors");
     o.threads=integer(options["threads"],1,256);o.max_decode_mib=size_t(integer(options["max_decode_mib"],1,16384));
+    o.visualization=text(options["visualization"]);member(o.visualization,{"colour","depth","normal","vector","id","id_rgb"});
+    o.invalid_values=text(options["invalid_values"]);member(o.invalid_values,{"black","magenta","error"});
+    require(options["data_range"].is_array() && (options["data_range"].empty() || options["data_range"].size()==2),"invalid worker data range");
+    for(const auto& endpoint:options["data_range"]) {require(endpoint.is_number() && std::isfinite(endpoint.get<double>()),"invalid worker range number");o.data_range.push_back(endpoint.get<double>());}
+    if(!o.data_range.empty())require(o.data_range[1]>o.data_range[0] && std::isfinite(o.data_range[1]-o.data_range[0]),"invalid worker range extent");
+    if(o.visualization=="colour" || o.visualization=="id")require(o.data_range.empty(),"range not supported by visualization");
+    if(o.visualization=="depth" || o.visualization=="vector" || o.visualization=="id_rgb")require(o.data_range.size()==2,"missing fixed data range");
+    if(o.visualization=="colour")require(o.invalid_values=="magenta","data value policy without data mode");
+    else require(!o.channels.empty() && o.input_space=="auto" && o.ocio_config.empty() && o.display.empty() && o.view.empty(),"invalid data selection/colour options");
     require(value["outputs"].is_array() && !value["outputs"].empty(),"empty worker output list");std::set<std::string> paths;
     for(const auto& output:value["outputs"]) {
         fields(output,{"path","format","width","height","quality","existing"});Output out;out.path=text(output["path"]);path(out.path);

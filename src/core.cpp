@@ -3,6 +3,7 @@
 #include "build_info.h"
 #include "files.h"
 #include "quantize.h"
+#include "data_image.h"
 #include <OpenImageIO/color.h>
 #include <OpenImageIO/imagebuf.h>
 #include <OpenImageIO/imagebufalgo.h>
@@ -144,12 +145,22 @@ void Engine::restore_sequence_lock(const std::string& id,const Json& lock) {
     const auto& key=lock["key"];const auto& request=lock["request"];
     valid(key.is_object() && key.size()==(named?4u:5u));
     for(const char* field:{"part_name","group","kind"})valid(key.contains(field) && key[field].is_string());
-    valid(!key["group"].get<std::string>().empty() && (key["kind"]=="colour" || key["kind"]=="grey"));
+    const bool data=request.is_object() && request.contains("data");
+    valid(!key["group"].get<std::string>().empty() && (data?key["kind"]=="data":(key["kind"]=="colour" || key["kind"]=="grey")));
     valid(named?!key["part_name"].get<std::string>().empty():key["part_name"]=="");
     if(named)valid(!key.contains("part"));else valid(key.contains("part") && key["part"].is_number_integer() && key["part"]==0);
-    valid(key.contains("channels") && key["channels"].is_array() && (key["channels"].size()==3 || key["channels"].size()==4));
+    valid(key.contains("channels") && key["channels"].is_array() && (data?(key["channels"].size()>=1 && key["channels"].size()<=3):(key["channels"].size()==3 || key["channels"].size()==4)));
     for(const auto& channel:key["channels"])valid(channel.is_string() && !channel.get<std::string>().empty());
-    valid(request.is_object() && request.size()==4);
+    valid(request.is_object() && request.size()==(data?5u:4u));
+    if(data) {
+        const auto& options=request["data"];
+        valid(options.is_object() && options.size()==4 && options.contains("mode") && options["mode"].is_string() && options.contains("range") && options["range"].is_array() &&
+            options.contains("invalid_values") && options["invalid_values"].is_string() && options.contains("policy") && options["policy"]=="v1");
+        for(const auto& number:options["range"])valid(number.is_number());
+        auto mapping=detail::data_mapping(options["mode"].get<std::string>(),options["range"].get<std::vector<double>>(),options["invalid_values"].get<std::string>());
+        valid(mapping.mode!=detail::DataMode::colour);
+        auto count=key["channels"].size();valid(mapping.mode==detail::DataMode::normal || mapping.mode==detail::DataMode::id_rgb?count==3:mapping.mode==detail::DataMode::vector?(count==2 || count==3):count==1);
+    }
     for(const char* field:{"part_name","channels","strategy"})valid(request.contains(field) && request[field].is_string());
     valid(request["strategy"]=="primary" || request["strategy"]=="root_rgb");
     valid(request.contains("part") && request["part"].is_number_integer());
@@ -157,6 +168,7 @@ void Engine::restore_sequence_lock(const std::string& id,const Json& lock) {
     valid(part<0 || request["part_name"]=="");
     valid(request["part_name"]=="" || request["part_name"]==key["part_name"]);
     valid(request["channels"]=="" || request["channels"]==key["group"]);
+    if(data)valid(request["channels"]!="");
     valid(named || part<=0);
     auto previous=sequence_lock(id);
     if(!previous.is_null()) {valid(previous==lock);return;}
@@ -175,6 +187,7 @@ Json Engine::capabilities() {
         {"cpu",{{"runtime_simd",OIIO::get_string_attribute("hw:simd")},{"oiio_simd",OIIO::get_string_attribute("build:simd")}}},
         {"selection_policy","v2"},
         {"quantization","unorm8-half-up-v1"},
+        {"visualization_modes",{"colour","depth","normal","vector","id","id_rgb"}},
         {"libraries",OIIO::get_string_attribute("library_list")},
         {"output_formats",output_formats},{"presets",{"fast","balanced","quality"}},
         {"defaults",{{"format","jpeg"},{"quality",90},{"size",{1024,1024}},
@@ -211,6 +224,12 @@ Json Engine::convert(const Job& job) {
     if(!job.sequence_id.empty())r["sequence_id"]=job.sequence_id;
     std::string stage="open";
     try {
+        detail::DataMapping mapping;
+        try {mapping=detail::data_mapping(job.options.visualization,job.options.data_range,job.options.invalid_values);}
+        catch(const std::invalid_argument& error){throw Failure("visualization_options_invalid",error.what());}
+        const bool data=mapping.mode!=detail::DataMode::colour;
+        if(data && (job.options.channels.empty() || job.options.input_space!="auto" || !job.options.ocio_config.empty() || !job.options.display.empty() || !job.options.view.empty()))
+            throw Failure("visualization_options_invalid","data visualization needs explicit channels and does not accept colour transform options");
         OIIO::attribute("threads",job.options.threads);
         OIIO::attribute("exr_threads",job.options.threads);
         auto tick=Clock::now();
@@ -260,9 +279,13 @@ Json Engine::convert(const Job& job) {
             part_exists=true;has_deep=has_deep || candidate.deep;
             std::vector<detail::Candidate> eligible;
             for(const auto& group:groups) {
-                if(!job.options.channels.empty() && group.group!=job.options.channels)continue;
+                bool literal=data && std::any_of(group.channels.begin(),group.channels.end(),[&](int c){return candidate.channelnames[c]==job.options.channels;});
+                if(!job.options.channels.empty() && group.group!=job.options.channels && !literal)continue;
                 matched_group=true;has_data=has_data || group.kind=="data";
-                if(group.kind=="colour" || group.kind=="grey") {
+                if(data && group.kind!="deep") {
+                    auto chosen=detail::data_candidate(candidate,group,job.options.channels,mapping);
+                    eligible.push_back(chosen);all_choices.push_back({p,candidate,std::move(chosen)});
+                } else if(!data && (group.kind=="colour" || group.kind=="grey")) {
                     eligible.push_back(group);all_choices.push_back({p,candidate,group});
                 }
             }
@@ -281,8 +304,7 @@ Json Engine::convert(const Job& job) {
         if(job.options.channels.empty() && job.options.selection_policy=="primary" &&
            std::any_of(choices.begin(),choices.end(),[](const auto& c){return detail::is_primary(c.spec,c.candidate);}))
             choices.erase(std::remove_if(choices.begin(),choices.end(),[](const auto& c){return !detail::is_primary(c.spec,c.candidate);}),choices.end());
-        Json request={{"part",job.options.part},{"part_name",job.options.part_name},
-            {"channels",job.options.channels},{"strategy",job.options.selection_policy}};
+        Json request=detail::selection_request(job);
         auto pin=impl_->sequences.find(job.sequence_id);
         auto key=[](const Choice& choice) {
             auto value=detail::candidate_json(choice.spec,choice.candidate,choice.part);
@@ -352,86 +374,118 @@ Json Engine::convert(const Job& job) {
                 {"modified_seconds",stamp.modified_seconds},{"modified_fraction",stamp.modified_fraction}}},
                 {"footprint",{{"data_width",spec.width},{"data_height",spec.height},
                     {"display_width",display_width},{"display_height",display_height},
-                    {"channel_span",*span.second-*span.first+1},{"selected_channels",channels.size()},
+                    {"channel_span",*span.second-*span.first+1},{"selected_channels",data?4:channels.size()},
+                    {"source_sample_bytes",data?detail::data_sample_bytes(spec,channels):sizeof(float)},
                     {"output_width",largest_w},{"output_height",largest_h},{"threads",job.options.threads}}},
                 {"sequence_pin",sequence_lock(job.sequence_id)}};
             impl_->control.planned(job,plan);
             verify_source();
         }
-        stage="colour";
-        std::string config_name=job.options.ocio_config,config_basis="explicit";
-        if(config_name.empty()) {
-            const char* environment=std::getenv("OCIO");
-            config_name=environment?environment:"";config_basis="environment";
-            if(config_name.empty()){config_name="ocio://default";config_basis="builtin";}
-        }
-        r["colour"]={{"ocio_config",config_name},{"config_basis",config_basis},
-            {"input_requested",job.options.input_space},{"display",job.options.display},{"view",job.options.view}};
-        auto* config=impl_->config(config_name);
-        auto space=[&](const std::string& name) {
-            if(config->getColorSpaceIndex(name)<0)
-                throw Failure("colour_space_not_found","colour space or role not found: "+name);
-            return std::string(config->resolve(name));
-        };
-        const auto roles=config->getRoles();
-        if(std::find(roles.begin(),roles.end(),"scene_linear")==roles.end())
-            throw Failure("colour_working_space_missing","OCIO config must define the scene_linear role");
-        const std::string working_space=space("scene_linear");
-        if(!config->isColorSpaceLinear(working_space))
-            throw Failure("colour_working_space_invalid","scene_linear role must use a linear colour space");
-        std::string from=job.options.input_space,basis="explicit";
-        if(from=="auto") {
-            from=spec.get_string_attribute("oiio:ColorSpace");basis="metadata";
-            if(from.empty()) {
-                auto ext=fs::u8path(job.input).extension().u8string();
-                std::transform(ext.begin(),ext.end(),ext.begin(),[](unsigned char c){return char(std::tolower(c));});
-                from=ext==".exr"||ext==".hdr"?"linear":"sRGB";basis="format_assumption";
-                r["warnings"].push_back("input colour space assumed from format; override with input_space");
+        OIIO::ColorConfig* config=nullptr;
+        std::string working_space,input_space,output_space;
+        if(!data) {
+            stage="colour";
+            std::string config_name=job.options.ocio_config,config_basis="explicit";
+            if(config_name.empty()) {
+                const char* environment=std::getenv("OCIO");
+                config_name=environment?environment:"";config_basis="environment";
+                if(config_name.empty()){config_name="ocio://default";config_basis="builtin";}
             }
+            r["colour"]={{"ocio_config",config_name},{"config_basis",config_basis},
+                {"input_requested",job.options.input_space},{"display",job.options.display},{"view",job.options.view}};
+            config=impl_->config(config_name);
+            auto space=[&](const std::string& name) {
+                if(config->getColorSpaceIndex(name)<0)
+                    throw Failure("colour_space_not_found","colour space or role not found: "+name);
+                return std::string(config->resolve(name));
+            };
+            const auto roles=config->getRoles();
+            if(std::find(roles.begin(),roles.end(),"scene_linear")==roles.end())
+                throw Failure("colour_working_space_missing","OCIO config must define the scene_linear role");
+            working_space=space("scene_linear");
+            if(!config->isColorSpaceLinear(working_space))
+                throw Failure("colour_working_space_invalid","scene_linear role must use a linear colour space");
+            std::string from=job.options.input_space,basis="explicit";
+            if(from=="auto") {
+                from=spec.get_string_attribute("oiio:ColorSpace");basis="metadata";
+                if(from.empty()) {
+                    auto ext=fs::u8path(job.input).extension().u8string();
+                    std::transform(ext.begin(),ext.end(),ext.begin(),[](unsigned char c){return char(std::tolower(c));});
+                    from=ext==".exr"||ext==".hdr"?"linear":"sRGB";basis="format_assumption";
+                    r["warnings"].push_back("input colour space assumed from format; override with input_space");
+                }
+            }
+            input_space=space(from);
+            if(job.options.display.empty())output_space=space("sRGB");
+            else {
+                const auto displays=config->getDisplayNames();
+                if(std::find(displays.begin(),displays.end(),job.options.display)==displays.end())
+                    throw Failure("colour_display_not_found","display not found: "+job.options.display);
+                const auto views=config->getViewNames(job.options.display);
+                if(std::find(views.begin(),views.end(),job.options.view)==views.end())
+                    throw Failure("colour_view_not_found","view not found: "+job.options.view);
+            }
+            r["colour"]={{"input_space",input_space},{"input_requested",from},{"basis",basis},
+                {"working_space",working_space},{"output_space",output_space},{"ocio_config",config->configname()},
+                {"config_basis",config_basis},{"display",job.options.display},{"view",job.options.view}};
+        } else {
+            r["colour"]={{"input_space","data"},{"input_requested",job.options.visualization},{"basis","data_visualization"},
+                {"working_space","display-referred"},{"output_space","sRGB"},{"ocio_config",""},{"config_basis","none"},{"display",""},{"view",""}};
+            r["visualization"]={{"mode",job.options.visualization},{"policy","v1"},{"range",mapping.mode==detail::DataMode::id?Json::array():Json::array({mapping.minimum,mapping.maximum})},
+                {"invalid_values",job.options.invalid_values},{"invalid_pixels",0},{"clipped_components",0}};
         }
-        const std::string input_space=space(from);
-        std::string output_space;
-        if(job.options.display.empty())output_space=space("sRGB");
-        else {
-            const auto displays=config->getDisplayNames();
-            if(std::find(displays.begin(),displays.end(),job.options.display)==displays.end())
-                throw Failure("colour_display_not_found","display not found: "+job.options.display);
-            const auto views=config->getViewNames(job.options.display);
-            if(std::find(views.begin(),views.end(),job.options.view)==views.end())
-                throw Failure("colour_view_not_found","view not found: "+job.options.view);
+        OIIO::ImageBuf working;
+        std::vector<int> order;
+        // ImageBuf may wrap caller-owned storage. Keep the colour source alive
+        // throughout all outputs, as in the original colour conversion path.
+        std::vector<float> pixels;
+        if(data) {
+            stage="visualization";
+            try {
+                auto image=detail::read_data_image(*in,spec,part,channels,mapping,job.options.max_decode_mib*1024ULL*1024ULL,job.options.threads);
+                working=std::move(image.image);order={0,1,2,3};
+                r["decoded_mib"]=double(image.decoded_bytes)/1048576;
+                r["timings_ms"]["decode"]=image.decode_ms;r["timings_ms"]["visualization"]=image.mapping_ms;
+                r["visualization"]["invalid_pixels"]=image.statistics.invalid_pixels;r["visualization"]["clipped_components"]=image.statistics.clipped_components;
+                if(image.statistics.invalid_pixels)r["warnings"].push_back("data visualization replaced "+std::to_string(image.statistics.invalid_pixels)+" invalid pixels using "+job.options.invalid_values);
+            }catch(const detail::InvalidDataValues& error) {
+                in->close();verify_source();r["visualization"]["invalid_pixels"]=error.statistics.invalid_pixels;
+                r["visualization"]["clipped_components"]=error.statistics.clipped_components;
+                throw Failure("data_invalid_value",error.what());
+            }catch(...){in->close();verify_source();throw;}
+            in->close();if(impl_->observer)impl_->observer("decoded",job);verify_source();
+        } else {
+            auto bounds=std::minmax_element(channels.begin(),channels.end());
+            int first=*bounds.first,end=*bounds.second+1;
+            const size_t limit=job.options.max_decode_mib*1024ULL*1024ULL/sizeof(float);
+            size_t count=size_t(spec.width);
+            for(size_t factor:{size_t(spec.height),size_t(end-first)}) {
+                if(factor==0 || count>limit/factor)throw Failure("decode_limit_exceeded","decoded source buffer exceeds limit");
+                count*=factor;
+            }
+            stage="decode";tick=Clock::now();
+            pixels.resize(count);
+            bool read_ok=in->read_image(part,0,first,end,OIIO::TypeDesc::FLOAT,pixels.data());
+            const std::string read_error=read_ok?std::string{}:in->geterror();
+            in->close();
+            if(impl_->observer)impl_->observer("decoded",job);
+            verify_source();
+            if(!read_ok)throw Failure("decode_failed",read_error);
+            r["timings_ms"]["decode"]=ms(tick);
+            r["decoded_mib"]=double(count*sizeof(float))/1048576;
+            OIIO::ImageSpec subset=spec;
+            subset.nchannels=end-first;subset.format=OIIO::TypeDesc::FLOAT;subset.channelformats.clear();
+            subset.channelnames.assign(spec.channelnames.begin()+first,spec.channelnames.begin()+end);
+            subset.alpha_channel=spec.alpha_channel>=first && spec.alpha_channel<end ? spec.alpha_channel-first:-1;
+            OIIO::ImageBuf buffer(subset,pixels.data());
+            for(int c:channels)order.push_back(c-first);
+            std::vector<std::string> names{"R","G","B"};if(order.size()==4)names.push_back("A");
+            check(iba::channels(working,buffer,int(order.size()),order,{},names),working,"channels_failed");
+            if(spec.get_int_attribute("oiio:UnassociatedAlpha",0) && order.size()==4)
+                check(iba::premult(working,working),working,"alpha_failed");
+            working.specmod().attribute("oiio:UnassociatedAlpha",0);
         }
-        r["colour"]={{"input_space",input_space},{"input_requested",from},{"basis",basis},
-            {"working_space",working_space},{"output_space",output_space},{"ocio_config",config->configname()},
-            {"config_basis",config_basis},{"display",job.options.display},{"view",job.options.view}};
-        auto bounds=std::minmax_element(channels.begin(),channels.end());
-        int first=*bounds.first,end=*bounds.second+1;
         const size_t limit=job.options.max_decode_mib*1024ULL*1024ULL/sizeof(float);
-        size_t count=size_t(spec.width);
-        for(size_t factor:{size_t(spec.height),size_t(end-first)}) {
-            if(factor==0 || count>limit/factor)throw Failure("decode_limit_exceeded","decoded source buffer exceeds limit");
-            count*=factor;
-        }
-        stage="decode";tick=Clock::now();
-        std::vector<float> pixels(count);
-        bool read_ok=in->read_image(part,0,first,end,OIIO::TypeDesc::FLOAT,pixels.data());
-        const std::string read_error=read_ok?std::string{}:in->geterror();
-        in->close();
-        if(impl_->observer)impl_->observer("decoded",job);
-        verify_source();
-        if(!read_ok)throw Failure("decode_failed",read_error);
-        r["timings_ms"]["decode"]=ms(tick);
-        r["decoded_mib"]=double(count*sizeof(float))/1048576;
-        OIIO::ImageSpec subset=spec;
-        subset.nchannels=end-first;subset.format=OIIO::TypeDesc::FLOAT;subset.channelformats.clear();
-        subset.channelnames.assign(spec.channelnames.begin()+first,spec.channelnames.begin()+end);
-        subset.alpha_channel=spec.alpha_channel>=first && spec.alpha_channel<end ? spec.alpha_channel-first:-1;
-        OIIO::ImageBuf buffer(subset,pixels.data()),working;
-        std::vector<int> order;for(int c:channels)order.push_back(c-first);
-        std::vector<std::string> names{"R","G","B"};if(order.size()==4)names.push_back("A");
-        check(iba::channels(working,buffer,int(order.size()),order,{},names),working,"channels_failed");
-        if(spec.get_int_attribute("oiio:UnassociatedAlpha",0) && order.size()==4)
-            check(iba::premult(working,working),working,"alpha_failed");
-        working.specmod().attribute("oiio:UnassociatedAlpha",0);
         // resize() clamps outside the data window. Pad a cropped display window
         // with zero pixels first, rather than stretching edge pixels into it.
         const auto& window=working.spec();
@@ -459,11 +513,12 @@ Json Engine::convert(const Job& job) {
             check(iba::reorient(oriented,working),oriented,"orientation_failed");working=std::move(oriented);
         }
         stage="colour";tick=Clock::now();
-        if(spec.find_attribute("ICCProfile"))r["warnings"].push_back("embedded ICC profile is not independently transformed; verify input_space against its profile");
-        if(input_space!=working_space)
+        if(!data && spec.find_attribute("ICCProfile"))r["warnings"].push_back("embedded ICC profile is not independently transformed; verify input_space against its profile");
+        if(!data && input_space!=working_space)
             check(iba::colorconvert(working,working,input_space,working_space,true,"","",config),working,"colour_failed");
         r["timings_ms"]["working_colour"]=ms(tick);
-        const std::string filter=job.options.preset=="fast"?"box":job.options.preset=="quality"?"lanczos3":"triangle";
+        const bool categorical=mapping.mode==detail::DataMode::id || mapping.mode==detail::DataMode::id_rgb;
+        const std::string filter=categorical?"nearest":job.options.preset=="fast"?"box":job.options.preset=="quality"?"lanczos3":"triangle";
         r["preset"]=job.options.preset;r["filter"]=filter;
         for(size_t output_index=0;output_index<job.outputs.size();++output_index) {
             const auto& out=job.outputs[output_index];
@@ -484,7 +539,9 @@ Json Engine::convert(const Job& job) {
                 int w=std::max(1,int(std::lround(s.full_width*scale))),h=std::max(1,int(std::lround(s.full_height*scale)));
                 OIIO::ImageBuf preview;
                 tick=Clock::now();
-                check(iba::resize(preview,working,{{"filtername",filter}},OIIO::ROI(0,w,0,h,0,1,0,int(order.size())),job.options.threads),preview,"resize_failed");
+                if(categorical)
+                    check(iba::resample(preview,working,false,OIIO::ROI(0,w,0,h,0,1,0,int(order.size())),job.options.threads),preview,"resize_failed");
+                else check(iba::resize(preview,working,{{"filtername",filter}},OIIO::ROI(0,w,0,h,0,1,0,int(order.size())),job.options.threads),preview,"resize_failed");
                 result["resize_ms"]=ms(tick);tick=Clock::now();
                 if(job.options.background!="transparent" && preview.nchannels()==4) {
                     OIIO::ImageSpec bs(w,h,4,OIIO::TypeDesc::FLOAT);bs.alpha_channel=3;
@@ -494,10 +551,12 @@ Json Engine::convert(const Job& job) {
                     check(iba::fill(background,colour),background,"alpha_failed");
                     check(iba::over(composite,preview,background),composite,"alpha_failed");preview=std::move(composite);
                 }
-                if(job.options.display.empty())
-                    check(iba::colorconvert(preview,preview,working_space,output_space,true,"","",config),preview,"colour_failed");
-                else
-                    check(iba::ociodisplay(preview,preview,job.options.display,job.options.view,working_space,"",true,false,"","",config),preview,"colour_failed");
+                if(!data) {
+                    if(job.options.display.empty())
+                        check(iba::colorconvert(preview,preview,working_space,output_space,true,"","",config),preview,"colour_failed");
+                    else
+                        check(iba::ociodisplay(preview,preview,job.options.display,job.options.view,working_space,"",true,false,"","",config),preview,"colour_failed");
+                }
                 if(job.options.background=="transparent" && preview.nchannels()==4) {
                     // Supply straight display RGB explicitly. PNG and WebP plugins
                     // otherwise deassociate in different spaces (WebP uses gamma 2.2).

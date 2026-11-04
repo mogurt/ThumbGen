@@ -120,7 +120,12 @@
             "worker_protocol_error",
             "worker_timeout",
             "task_memory_exceeds_budget",
-            "task_cancelled"
+            "task_cancelled",
+            "visualization_options_invalid",
+            "visualization_layout_unsupported",
+            "cryptomatte_requires_visualization",
+            "data_type_unsupported",
+            "data_invalid_value"
           ]
         },
         "message": {
@@ -131,7 +136,8 @@
             "open",
             "selection",
             "colour",
-            "decode"
+            "decode",
+            "visualization"
           ]
         },
         "retryable": {
@@ -513,7 +519,8 @@
               "enum": [
                 "explicit",
                 "metadata",
-                "format_assumption"
+                "format_assumption",
+                "data_visualization"
               ]
             },
             "working_space": {
@@ -529,7 +536,8 @@
               "enum": [
                 "explicit",
                 "environment",
-                "builtin"
+                "builtin",
+                "none"
               ]
             },
             "display": {
@@ -563,7 +571,8 @@
           "enum": [
             "box",
             "triangle",
-            "lanczos3"
+            "lanczos3",
+            "nearest"
           ]
         },
         "timings_ms": {
@@ -603,6 +612,62 @@
         },
         "execution": {
           "$ref": "#/$defs/task_execution"
+        },
+        "visualization": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "enum": [
+                "depth",
+                "normal",
+                "vector",
+                "id",
+                "id_rgb"
+              ]
+            },
+            "policy": {
+              "const": "v1"
+            },
+            "range": {
+              "type": "array",
+              "items": {
+                "type": "number"
+              },
+              "maxItems": 2,
+              "anyOf": [
+                {
+                  "maxItems": 0
+                },
+                {
+                  "minItems": 2
+                }
+              ]
+            },
+            "invalid_values": {
+              "enum": [
+                "black",
+                "magenta",
+                "error"
+              ]
+            },
+            "invalid_pixels": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "clipped_components": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "mode",
+            "policy",
+            "range",
+            "invalid_values",
+            "invalid_pixels",
+            "clipped_components"
+          ]
         }
       },
       "required": [
@@ -1220,6 +1285,20 @@
           "items": {
             "type": "string"
           }
+        },
+        "visualization_modes": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "colour",
+              "depth",
+              "normal",
+              "vector",
+              "id",
+              "id_rgb"
+            ]
+          },
+          "uniqueItems": true
         }
       },
       "required": [
@@ -1277,7 +1356,8 @@
         "kind": {
           "enum": [
             "colour",
-            "grey"
+            "grey",
+            "data"
           ]
         },
         "channels": {

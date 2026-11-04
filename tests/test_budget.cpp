@@ -22,6 +22,11 @@ int main() {
         require(small.total>small.source+small.working+small.output+small.codec,"worker/margin omitted");
         require(small.total==small.incremental+small.worker && small.incremental==small.source+small.working+small.output+small.codec+small.margin,"incremental buffers or fixed worker allowance counted incorrectly");
         require(small.codec>0,"JPEG encoded destination omitted");
+        auto doubles=ImageFootprint{8,8,8,8,3,4,8,8,4,8};
+        auto floats=doubles;floats.source_sample_bytes=4;
+        require(estimate_memory(doubles).source==2*estimate_memory(floats).source,"native DOUBLE source bytes missing");
+        rejects<std::invalid_argument>([&]{auto invalid=doubles;invalid.source_sample_bytes=0;estimate_memory(invalid);});
+        rejects<std::invalid_argument>([&]{auto invalid=doubles;invalid.source_sample_bytes=9;estimate_memory(invalid);});
         rejects<std::invalid_argument>([]{estimate_memory({8,8,8,8,3,3,16,16,4});});
         rejects<std::invalid_argument>([]{estimate_memory({0,8,8,8,3,3,8,8,4});});
         rejects<std::overflow_error>([]{estimate_memory({std::numeric_limits<std::uint64_t>::max(),2,8,8,3,3,8,8,4});});

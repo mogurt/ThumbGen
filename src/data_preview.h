@@ -7,7 +7,7 @@
 #include <vector>
 
 namespace thumbgen::detail {
-enum class DataMode { colour,depth,normal,vector,id };
+enum class DataMode { colour,depth,normal,vector,id,id_rgb };
 enum class InvalidData { black,magenta,error };
 struct DataMapping {
     DataMode mode=DataMode::colour;
@@ -29,6 +29,8 @@ public:
 // FLOAT ID values must be integral and in [-2^31,2^32-1]. Native integer
 // overloads preserve all 32 bits instead of passing IDs through FLOAT.
 DataStats map_data_float(const float* source,float* rgba,std::size_t pixels,std::size_t stride,
+    const std::vector<int>& components,const DataMapping& mapping);
+DataStats map_data_double(const double* source,float* rgba,std::size_t pixels,std::size_t stride,
     const std::vector<int>& components,const DataMapping& mapping);
 void map_ids_u32(const std::uint32_t* source,float* rgba,std::size_t pixels,std::size_t stride,std::size_t component);
 void map_ids_i32(const std::int32_t* source,float* rgba,std::size_t pixels,std::size_t stride,std::size_t component);

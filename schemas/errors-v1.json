@@ -240,6 +240,31 @@
       "code": "task_cancelled",
       "category": "runtime",
       "description": "controller accepted interruption; uncommitted outputs were cancelled"
+    },
+    {
+      "code": "visualization_options_invalid",
+      "category": "request",
+      "description": "数据预览选项无效或混用颜色选项"
+    },
+    {
+      "code": "visualization_layout_unsupported",
+      "category": "selection",
+      "description": "所选数据通道布局不适用于指定模式"
+    },
+    {
+      "code": "cryptomatte_requires_visualization",
+      "category": "selection",
+      "description": "Cryptomatte必须使用专用ID与coverage预览"
+    },
+    {
+      "code": "data_type_unsupported",
+      "category": "input",
+      "description": "不支持的数据通道原生类型"
+    },
+    {
+      "code": "data_invalid_value",
+      "category": "input",
+      "description": "数据预览error策略遇到无效样本"
     }
   ]
 }
