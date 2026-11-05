@@ -13,21 +13,45 @@ import re
 import subprocess
 
 
-def trusted_recipes(policy, kind):
+def recipe_paths(kind):
     paths = ['scripts/dependencies/build_verified_overlay.py',
              'scripts/dependencies/overlay_provenance.py',
              'scripts/dependencies/windows_overlays.py']
     paths += (['dependencies/color-sdk.json', 'scripts/build-color-sdk.py'] if kind == 'color' else
               ['scripts/dependencies/build_bounded_openexr.py', 'dependencies/patches/openexr-bounded-zstd-v1.patch'])
+    return paths
+
+
+def trusted_recipes(policy, kind):
+    paths = recipe_paths(kind)
     result = []
     for relative in paths:
         data = policy.safe(policy.REPO, relative).read_bytes()
         committed = policy.git(policy.REPO, 'show', 'HEAD:' + relative)
         if data.replace(b'\r\n', b'\n') != committed.replace(b'\r\n', b'\n'):
             raise ValueError('Uncommitted provenance recipe: ' + relative)
-        result.append(dict(file=relative, lf_sha256=hashlib.sha256(committed.replace(b'\r\n', b'\n')).hexdigest(),
-                           raw_sha256=hashlib.sha256(data).hexdigest()))
+        if relative not in paths[:3]:
+            result.append(dict(file=relative, lf_sha256=hashlib.sha256(committed.replace(b'\r\n', b'\n')).hexdigest(),
+                               raw_sha256=hashlib.sha256(data).hexdigest()))
     return result
+
+
+def producer(policy, kind):
+    return dict(revision=policy.git(policy.REPO, 'rev-parse', 'HEAD').decode().strip(),
+                files_lf_sha256={p: hashlib.sha256((policy.REPO / p).read_bytes().replace(b'\r\n', b'\n')).hexdigest()
+                                 for p in recipe_paths(kind)})
+
+
+def verify_producer(policy, kind, recorded):
+    if set(recorded['files_lf_sha256']) != set(recipe_paths(kind)) or not re.fullmatch('[0-9a-f]{40}', recorded['revision']):
+        raise ValueError('Unknown overlay producer identity')
+    for relative, expected in recorded['files_lf_sha256'].items():
+        original = policy.git(policy.REPO, 'show', recorded['revision'] + ':' + relative)
+        if hashlib.sha256(original.replace(b'\r\n', b'\n')).hexdigest() != expected:
+            raise ValueError('Overlay producer script differs from recorded Git object')
+    # This is an archival identity, not execution authentication. Current clean
+    # policy/helpers plus a fresh reconstruction of native evidence are authority.
+    return recorded
 
 
 def helper_constants(policy):
@@ -78,15 +102,16 @@ def source_tree(policy, source, commit, patch=None):
     if policy.git(source, 'ls-files', '--others', '-z'):
         raise ValueError('Untracked or ignored source injection: ' + str(source))
     entries = policy.git(source, 'ls-tree', '-rz', '--full-tree', commit).split(b'\0')
-    paths, objects = [], []
+    paths, objects, modes = [], [], {}
     for entry in entries:
         if not entry:
             continue
         header, relative = entry.split(b'\t', 1)
         mode, kind, object_id = header.split()
-        if mode not in (b'100644', b'100755') or kind != b'blob':
+        if mode not in (b'100644', b'100755', b'120000') or kind != b'blob':
             raise ValueError('Unsupported source tree entry')
-        paths.append(relative.decode('utf-8')); objects.append(object_id)
+        name = relative.decode('utf-8')
+        paths.append(name); objects.append(object_id); modes[name] = mode
     raw = subprocess.check_output(['git', '-C', str(source), 'cat-file', '--batch'], input=b'\n'.join(objects) + b'\n')
     blobs, offset = {}, 0
     for relative in paths:
@@ -97,6 +122,13 @@ def source_tree(policy, source, commit, patch=None):
         blobs = patched_blobs(blobs, patch)
     result = {}
     for relative, expected in blobs.items():
+        path = source / relative
+        if modes[relative] == b'120000' and path.is_symlink():
+            actual = os.readlink(path).replace('\\', '/').encode('utf-8')
+            if Path(actual.decode()).is_absolute() or not path.resolve().is_relative_to(source.resolve()) or actual != expected:
+                raise ValueError('Locked source symlink differs or escapes tree: ' + relative)
+            result[relative] = hashlib.sha256(actual).hexdigest()
+            continue
         actual = policy.safe(source, relative).read_bytes()
         normalize = lambda b: b if b'\0' in b else b.replace(b'\r\n', b'\n')
         if normalize(actual) != normalize(expected):
@@ -341,6 +373,7 @@ def observe(policy, kind, prefix):
         dependencies = dependency_sdk(policy, sdk)
     result = dict(kind='thumbgen-overlay-build-v2', overlay=kind, recipes=recipes,
                   helper_receipt_sha256=policy.sha(root / 'receipt.json'), sources={}, builds={}, installed={})
+    result['producer'] = verify_producer(policy, kind, policy.load(root / 'build-producer.json'))
     if dependencies:
         result['base_sdk'] = dependencies
     for name in components:

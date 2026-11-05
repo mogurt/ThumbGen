@@ -26,6 +26,7 @@ def build(kind, root, lcms_cache=None, jpeg_cache=None, source_cache=None, sdk=N
         if path and (path.resolve() == root or root in path.resolve().parents):
             raise ValueError('Output must not contain a read-only input')
     provenance.trusted_recipes(policy, kind)
+    producer = provenance.producer(policy, kind)
     helper = policy.REPO / ('scripts/build-color-sdk.py' if kind == 'color' else 'scripts/dependencies/build_bounded_openexr.py')
     prefix = root / ('sdk' if kind == 'color' else 'prefix')
     arguments = [sys.executable, str(helper)]
@@ -67,6 +68,7 @@ def build(kind, root, lcms_cache=None, jpeg_cache=None, source_cache=None, sdk=N
         if result.returncode:
             raise RuntimeError(name + ' failed; original exit/logs retained in ' + str(root))
     run('helper', arguments)
+    (root / 'build-producer.json').write_text(json.dumps(producer, indent=2) + '\n', encoding='utf-8')
     names = list(policy.load(policy.REPO / 'dependencies/color-sdk.json')) if kind == 'color' else ['bounded']
     for name in names:
         build_dir = root / (name + '-build') if kind == 'color' else root / 'build'
