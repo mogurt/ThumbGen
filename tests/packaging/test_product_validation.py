@@ -34,7 +34,16 @@ class ExecutionEvidence(unittest.TestCase):
             case = dict(name=name, exit=0, command=[str(self.exe), 'capabilities' if layout is None else 'convert'])
             row = dict(type='capabilities', deep_compressions=['zstd'])
             if layout:
-                target = self.root / (name + '.output.png'); Image.new('RGB', layout[:2]).save(target)
+                target = self.root / (name + '.output.png')
+                golden = {'ordinary-rgb': (64, 128, 192), 'rgb.png': (137, 188, 225),
+                          'gray.png': (137, 137, 137), 'cmyk.tif': (229, 229, 229),
+                          'cmyk.jpg': (225, 225, 225), 'ycck.jpg': (207, 207, 207)}
+                image = Image.new('RGB', layout[:2])
+                for y in range(layout[1]):
+                    pixel = ((0, 225, 188) if y % 4 == 1 else (188, 233, 188) if y % 4 == 2 else (0, 0, 0)) if name.startswith('deep-') else golden[name]
+                    for x in range(layout[0]):
+                        image.putpixel((x, y), pixel)
+                image.save(target)
                 case.update(output=self.entry(target), pixels=layout[0] * layout[1], max_lsb=0)
                 case['command'] += ['input', '--output', str(target), '--json']
                 row = dict(type='result', ok=True, outputs=[dict(path=str(target), status='success')])
@@ -128,3 +137,94 @@ class ExecutionEvidence(unittest.TestCase):
     def test_overlay_candidate_cannot_downgrade_to_ctest_count(self):
         with self.assertRaisesRegex(ValueError, 'validation mode'):
             validation.check_frozen(dict(validation_mode='full-ctest', ctest=dict(passed=116, names=list(map(str, range(116))))), self.closure)
+
+    def ordinary(self):
+        return next(c for c in self.report['cases'] if c['name'] == 'ordinary-rgb')
+
+    def test_rehashed_black_ordinary_rgb_is_192_lsb_not_declared_zero(self):
+        from PIL import Image
+        case = self.ordinary(); target = Path(case['output']['path'])
+        Image.new('RGB', (8, 8), (0, 0, 0)).save(target)
+        case['output'] = self.entry(target); self.seal()
+        self.assertEqual(validation.pixel_metrics(target, 'ordinary-rgb'), dict(pixels=64, max_lsb=192))
+        with self.assertRaisesRegex(ValueError, 'metrics contradict actual output'):
+            self.check()
+
+    def test_rehashed_black_outputs_rejected_for_every_formula_case(self):
+        from PIL import Image
+        for case in self.report['cases']:
+            if case['name'] == 'capabilities':
+                continue
+            with self.subTest(name=case['name']):
+                target = Path(case['output']['path']); original = target.read_bytes()
+                Image.new('RGB', validation.CASES[case['name']][:2]).save(target)
+                case['output'] = self.entry(target); self.seal()
+                with self.assertRaisesRegex(ValueError, 'metrics contradict actual output'):
+                    self.check()
+                target.write_bytes(original); case['output'] = self.entry(target); self.seal()
+
+    def test_correctly_declared_large_error_still_fails_limit(self):
+        from PIL import Image
+        case = self.ordinary(); target = Path(case['output']['path'])
+        Image.new('RGB', (8, 8)).save(target)
+        case['output'] = self.entry(target); case['max_lsb'] = 192; self.seal()
+        with self.assertRaisesRegex(ValueError, 'error exceeds calibration limit'):
+            self.check()
+
+    def test_in_range_but_false_declared_error_rejected(self):
+        self.ordinary()['max_lsb'] = 1; self.seal()
+        with self.assertRaisesRegex(ValueError, 'metrics contradict actual output'):
+            self.check()
+
+    def test_underclaimed_nonzero_error_rejected(self):
+        from PIL import Image
+        case = self.ordinary(); target = Path(case['output']['path'])
+        with Image.open(target) as image:
+            image.putpixel((0, 0), (65, 128, 192)); image.save(target)
+        case['output'] = self.entry(target); self.seal()
+        with self.assertRaisesRegex(ValueError, 'metrics contradict actual output'):
+            self.check()
+
+    def test_correctly_declared_one_lsb_error_within_limit_passes(self):
+        from PIL import Image
+        case = self.ordinary(); target = Path(case['output']['path'])
+        with Image.open(target) as image:
+            image.putpixel((0, 0), (65, 128, 192)); image.save(target)
+        case['output'] = self.entry(target); case['max_lsb'] = 1; self.seal()
+        self.assertEqual(self.check()['pixels'], 2706)
+
+    def test_false_declared_pixel_count_rejected(self):
+        self.ordinary()['pixels'] = 63; self.seal()
+        with self.assertRaisesRegex(ValueError, 'metrics contradict actual output'):
+            self.check()
+
+    def frozen(self):
+        submitted, executed = self.root / 'submitted.json', self.root / 'executed.json'
+        for path in (submitted, executed):
+            path.write_text(json.dumps(self.report))
+        return dict(validation_mode='independent-v2', ctest=dict(validation_sha256=validation.sha(executed)),
+                    submitted_validation=self.entry(submitted), product_validation=self.entry(executed))
+
+    def test_frozen_consistent_report_references_pass(self):
+        self.assertEqual(validation.check_frozen(self.frozen(), self.closure)['pixels'], 2706)
+
+    def test_duplicate_frozen_validation_digest_must_agree(self):
+        frozen = self.frozen(); frozen['ctest']['validation_sha256'] = '0' * 64
+        with self.assertRaisesRegex(ValueError, 'references disagree'):
+            validation.check_frozen(frozen, self.closure)
+
+    def test_submitted_validation_digest_is_checked(self):
+        frozen = self.frozen(); frozen['submitted_validation']['sha256'] = '0' * 64
+        with self.assertRaisesRegex(ValueError, 'submitted validation report changed'):
+            validation.check_frozen(frozen, self.closure)
+
+    def test_submitted_validation_content_is_checked(self):
+        frozen = self.frozen(); path = Path(frozen['submitted_validation']['path']); path.write_text('{}')
+        frozen['submitted_validation'] = self.entry(path)
+        with self.assertRaisesRegex(ValueError, 'complete independent'):
+            validation.check_frozen(frozen, self.closure)
+
+    def test_executed_validation_digest_is_checked(self):
+        frozen = self.frozen(); frozen['product_validation']['sha256'] = frozen['ctest']['validation_sha256'] = '0' * 64
+        with self.assertRaisesRegex(ValueError, 'independent validation report changed'):
+            validation.check_frozen(frozen, self.closure)
