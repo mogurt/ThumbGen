@@ -71,7 +71,7 @@ FlatDeepPixel DeepFlattener::flatten(const DeepSample* source,std::size_t count)
     if(workspace_bound(count)>limits_.workspace_bytes)throw DeepFailure("deep_workspace_limit_exceeded","Deep workspace limit exceeded");
     for(std::size_t i=0;i<count;++i)validate(source[i]); // Validate even samples hidden by an opaque foreground.
     FlatDeepPixel result;
-    if(count<=1){if(count)for(int c=0;c<3;++c){result.colour[c]=source[0].colour[c];result.alpha[c]=source[0].alpha[c];}return result;}
+    if(count<=1){if(count)for(int c=0;c<3;++c){result.colour[c]=source[0].colour[c];result.alpha[c]=source[0].alpha[c];result.transmission[c]=1.0-source[0].alpha[c];}return result;}
     auto leaf_count=leaves(count);
     samples_.reserve(count);events_.reserve(count*2);tree_.reserve(leaf_count*2);
     if(retained_workspace_bytes()>limits_.workspace_bytes)throw DeepFailure("deep_workspace_limit_exceeded","Deep allocator capacity exceeds workspace limit");
@@ -91,7 +91,7 @@ FlatDeepPixel DeepFlattener::flatten(const DeepSample* source,std::size_t count)
     }
     std::sort(events_.begin(),events_.end(),[](const auto& a,const auto& b){return std::tie(a.depth,a.kind,a.sample)<std::tie(b.depth,b.kind,b.sample);});
     float previous=events_.front().depth;
-    std::array<double,3> transmission{1,1,1};
+    auto& transmission=result.transmission;
     for(std::size_t i=0;i<events_.size();) {
         float depth=events_[i].depth;
         if(depth>previous)composite(result,transmission,tree_[1],double(depth)-previous);

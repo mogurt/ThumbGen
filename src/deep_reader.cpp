@@ -162,8 +162,12 @@ Plan make_plan(exr_const_context_t context,int part,const DeepChannels& wanted,c
     return plan;
 }
 }
-DeepImage read_deep_image(const std::filesystem::path& path,int part,const DeepChannels& channels,DeepReadLimits limits,DeepCheckpoint checkpoint){
+DeepImage read_deep_image(const std::filesystem::path& path,int part,const DeepChannels& channels,DeepReadLimits limits,DeepCheckpoint checkpoint,DeepReadOutput output){
     if(part<0 || !limits.bytes || limits.samples_per_pixel>std::numeric_limits<std::uint32_t>::max())throw std::invalid_argument("Invalid Deep read limits or part");
+    if(output.mode!=DeepOutputMode::components && output.mode!=DeepOutputMode::associated_rgba && output.mode!=DeepOutputMode::opaque_rgba)
+        throw std::invalid_argument("Invalid Deep output mode");
+    for(double value:output.background)if(!std::isfinite(value) || (output.mode!=DeepOutputMode::opaque_rgba && value!=0))
+        throw std::invalid_argument("Deep background requires finite opaque output");
     const auto stamp=source_stamp(path);
     auto verify=[&]{if(!source_matches(path,stamp))throw FileFailure("source_changed","Deep source identity, size or mtime changed",true);};
     auto progress=[&](const char* phase){if(checkpoint)checkpoint(phase);verify();};
@@ -186,7 +190,10 @@ DeepImage read_deep_image(const std::filesystem::path& path,int part,const DeepC
             if(width<=0 || height<=0 || width>(1<<20) || height>(1<<20))throw DeepFailure("deep_decode_limit_exceeded","Deep dimensions exceed reader limits");
             image.x=window.min.x;image.y=window.min.y;image.width=int(width);image.height=int(height);
             const auto plan=make_plan(context.value,part,channels,ledger);
-            image.bytes=multiply(multiply(std::size_t(width),std::size_t(height)),6*sizeof(float));
+            if(output.mode==DeepOutputMode::associated_rgba && (plan.mapping[3]!=plan.mapping[4] || plan.mapping[3]!=plan.mapping[5]))
+                throw DeepFailure("deep_transparency_unsupported","Ordinary RGBA requires one shared alpha mapping; use an opaque background for coloured transparency");
+            image.components=output.mode==DeepOutputMode::components?6:4;
+            image.bytes=multiply(multiply(std::size_t(width),std::size_t(height)),std::size_t(image.components)*sizeof(float));
             Reservation output_memory(ledger),kernel_memory(ledger);output_memory.grow(image.bytes);
             image.pixels.reset(new float[image.bytes/sizeof(float)]{});
             DeepFlattener kernel({limits.samples_per_pixel,limits.bytes});
@@ -246,8 +253,16 @@ DeepImage read_deep_image(const std::filesystem::path& path,int part,const DeepC
                         for(int c=0;c<3;++c){sample.colour[c]=value(c,s,0);sample.alpha[c]=value(c+3,s,1);}
                     }
                     auto flat=kernel.flatten(pixel_samples.get(),count);
-                    auto destination=(std::size_t(origin_y+y-window.min.y)*image.width+std::size_t(origin_x+x-window.min.x))*6;
-                    for(int c=0;c<3;++c){auto colour=float(flat.colour[c]);if(!std::isfinite(colour))throw DeepFailure("deep_value_invalid","Flattened Deep colour exceeds FLOAT range");image.pixels[destination+c]=colour;image.pixels[destination+3+c]=float(flat.alpha[c]);}
+                    auto destination=(std::size_t(origin_y+y-window.min.y)*image.width+std::size_t(origin_x+x-window.min.x))*image.components;
+                    for(int c=0;c<3;++c){
+                        double composed=flat.colour[c];
+                        if(output.mode==DeepOutputMode::opaque_rgba)composed+=flat.transmission[c]*output.background[c];
+                        auto colour=float(composed);
+                        if(!std::isfinite(colour))throw DeepFailure("deep_value_invalid","Flattened Deep colour exceeds FLOAT range");
+                        image.pixels[destination+c]=colour;
+                        if(image.components==6)image.pixels[destination+3+c]=float(flat.alpha[c]);
+                    }
+                    if(image.components==4)image.pixels[destination+3]=output.mode==DeepOutputMode::opaque_rgba?1.0f:float(flat.alpha[0]);
                     offset+=count;
                 }
                 if(offset!=samples)throw DeepFailure("deep_decode_failed","Deep sample total changed during decode");

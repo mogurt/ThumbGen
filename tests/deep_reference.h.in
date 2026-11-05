@@ -1,4 +1,4 @@
 #pragma once
-inline constexpr const char* deep_reference_json_parts[]={
+inline constexpr const char* @THUMBGEN_DEEP_REFERENCE_SYMBOL@[]={
 @THUMBGEN_DEEP_REFERENCE_CHUNKS@
 };

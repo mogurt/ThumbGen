@@ -21,15 +21,23 @@ struct DeepReadLimits {
     std::size_t samples_per_pixel=4096;
     std::uint64_t samples_per_chunk=16*1024*1024,samples_per_image=64*1024*1024;
 };
+enum class DeepOutputMode {components,associated_rgba,opaque_rgba};
+struct DeepReadOutput {
+    DeepOutputMode mode=DeepOutputMode::components;
+    // In the same linear space as the source. Used only by opaque_rgba.
+    std::array<double,3> background{};
+};
 struct DeepImage {
     int x=0,y=0,width=0,height=0;
-    // Interleaved linear R/G/B and three independent alpha components. The
-    // caller must choose a background/ordinary-alpha policy before encoding.
+    int components=6;
+    // Default: interleaved R/G/B/alphaR/alphaG/alphaB. Explicit RGBA modes use
+    // four components. Associated RGBA requires one structural alpha mapping;
+    // additive RGB at zero alpha remains associated data, not straight PNG.
     std::unique_ptr<float[]> pixels;
     std::size_t bytes=0,peak_accounted_bytes=0;
     std::uint64_t samples=0,chunks=0;
 };
 using DeepCheckpoint=std::function<void(const char* phase)>;
 DeepImage read_deep_image(const std::filesystem::path& path,int part,const DeepChannels& channels,
-                         DeepReadLimits limits={},DeepCheckpoint checkpoint={});
+                         DeepReadLimits limits={},DeepCheckpoint checkpoint={},DeepReadOutput output={});
 }

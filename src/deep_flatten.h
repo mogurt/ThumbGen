@@ -11,6 +11,8 @@ struct DeepSample {
 };
 struct FlatDeepPixel {
     std::array<double,3> colour{},alpha{};
+    // Keep extinction independent of rounded accumulated alpha for HDR backgrounds.
+    std::array<double,3> transmission{1,1,1};
 };
 struct DeepLimits {
     std::size_t samples_per_pixel=4096;

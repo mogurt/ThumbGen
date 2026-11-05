@@ -13,7 +13,7 @@ def sample(z,back,colour,alpha):
     return dict(z=f32(z),zback=f32(back),colour=list(map(f32,colour)),alpha=list(map(f32,alpha)))
 
 
-def reference(samples):
+def reference(samples,background=None):
     D=Decimal.from_float;zero=Decimal(0);one=Decimal(1)
     with localcontext() as context:
         context.prec=100
@@ -46,6 +46,9 @@ def reference(samples):
                     rgb=[c*(part/a if a else fraction) for c,part,a in zip(s['colour'],alpha,s['alpha'])]
                     pieces.append((rgb,alpha))
             over(pieces)
+        if background is not None:
+            if len(background)!=3:raise ValueError('background must have three components')
+            colour=[c+t*D(b) for c,t,b in zip(colour,through,background)]
         return dict(colour=list(map(float,colour)),alpha=[float(one-t) for t in through])
 
 
