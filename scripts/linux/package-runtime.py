@@ -28,6 +28,7 @@ parser.add_argument('--work', type=Path)
 parser.add_argument('--color-root', required=True, type=Path)
 parser.add_argument('--core-root', required=True, type=Path)
 parser.add_argument('--product-build', required=True, type=Path)
+parser.add_argument('--dwa-root', type=Path, help='Optional verified portable-DWA build root')
 args = parser.parse_args()
 repo = (args.source or Path(__file__).resolve().parents[2]).resolve()
 stage, cache = args.validation.resolve(), args.cache.resolve()
@@ -37,9 +38,9 @@ git_command = '/opt/rh/rh-git227/root/usr/bin/git' if Path('/opt/rh/rh-git227/ro
 evidence = json.loads((stage / 'build-evidence.json').read_text())
 lock = json.loads((repo / 'scripts/linux/sources-lock.json').read_text())
 require(evidence['source_dependencies'] == lock['dependencies'], 'Stage dependency inventory differs from source lock')
-overlays = audit_overlays(repo, args.color_root, args.core_root, args.product_build)
-require(overlays == evidence['overlays'], 'Overlay provenance changed since product freeze')
 base = audit_base(repo, cache)
+overlays = audit_overlays(repo, args.color_root, args.core_root, args.product_build, args.dwa_root, base)
+require(overlays == evidence['overlays'], 'Overlay provenance changed since product freeze')
 require(base == evidence['original_sdk'], 'Original SDK evidence changed since freeze')
 audit_stage(stage, args.product_build, cache, overlays, (args.tools_cache or cache) / 'tools/cmake-3.31.8-linux-x86_64/bin/cmake', base)
 for item in evidence['copied']:
@@ -199,6 +200,8 @@ with tempfile.TemporaryDirectory(prefix='candidate-', dir=work) as temporary:
     oiio_source = cache / 'oiio-source' if (cache / 'oiio-source').is_dir() else repo / '.deps/oiio-src'
     if run(git_command, '-c', 'safe.directory=' + str(oiio_source), '-C', str(oiio_source), 'rev-parse', 'HEAD').strip() != lock['oiio_commit']:
         raise SystemExit('OIIO license source identity mismatch')
+    if args.dwa_root:
+        oiio_source = args.dwa_root / 'OpenImageIO-source'
     notices('OpenImageIO', oiio_source, dict(version='3.2.1.2', commit=lock['oiio_commit'],
             repository='https://github.com/AcademySoftwareFoundation/OpenImageIO', license='Apache-2.0 plus BSD and embedded third-party notices', linkage='shared; embedded notices retained'))
     for dependency in lock['dependencies']:
@@ -206,7 +209,7 @@ with tempfile.TemporaryDirectory(prefix='candidate-', dir=work) as temporary:
         if run(git_command, '-C', str(source), 'rev-parse', 'HEAD').strip() != dependency['commit']:
             raise SystemExit('Dependency license source mismatch: ' + dependency['package'])
         notices(dependency['package'], source, dict(version=dependency['version'], commit=dependency['commit'],
-                repository=dependency['repository'], license=families[dependency['package']], linkage='static/header embedded or shared ZLIB; conservative nested notices'))
+                repository=dependency['repository'], license=families[dependency['package']], linkage=('original SDK provenance retained; flat codec replaced by OpenEXR-portable-DWA' if args.dwa_root and dependency['package'] == 'OpenEXR' else 'static/header embedded or shared ZLIB; conservative nested notices')))
     json_source = cache / 'src/json'
     if run(git_command, '-C', str(json_source), 'rev-parse', 'HEAD').strip() != lock['nlohmann_json']['commit']:
         raise SystemExit('JSON license source mismatch')
@@ -220,7 +223,7 @@ with tempfile.TemporaryDirectory(prefix='candidate-', dir=work) as temporary:
             target = root / 'licenses' / component / Path(patch).name
             shutil.copyfile(patch, target)
             components[-1]['notices'].append(dict(file=target.relative_to(root).as_posix(), sha256=digest(target)))
-            components[-1]['modification_notice'] = 'Request-owned bounded ZSTD decoding; public patch retained verbatim alongside upstream notices'
+            components[-1]['modification_notice'] = ('Portable SSE2 DWA IDCT in flat OIIO; independent of bounded Deep Core' if component == 'OpenEXR-portable-DWA' else 'Request-owned bounded ZSTD decoding') + '; public patch retained verbatim alongside upstream notices'
     for component, rpm_name in (('GCC-runtime', 'libgcc'), ('GCC-C++-runtime', 'libstdc++'), ('GCC-build-headers-nonshared', 'devtoolset-11-libstdc++-devel')):
         metadata = run('rpm', '-q', '--qf', '%{NAME}|%{VERSION}-%{RELEASE}|%{SOURCERPM}|%{LICENSE}', rpm_name).strip().split('|')
         notice_source = notice_materials / 'usr/share/doc/libgcc-4.8.5'

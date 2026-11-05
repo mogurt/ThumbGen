@@ -432,6 +432,40 @@
           "sha256": "a853c2ffec17057872340eee242ae4d96cbf2b520ae27d903e1b2fef1a5f9d1c"
         }
       ]
+    },
+    "OpenEXR-portable-DWA": {
+      "commit": "5d838e01770cadb8f2a36c0d17018452fa7a3c0c",
+      "version": "3.5.0",
+      "notices": [
+        {
+          "file": "licenses/OpenEXR-portable-DWA/Contrib/DtexToExr/AUTHORS",
+          "sha256": "001ea4855801e70deef7213ca2f3c5fa8b709b31b36873d19a69e2f4a334a89b"
+        },
+        {
+          "file": "licenses/OpenEXR-portable-DWA/LICENSE.md",
+          "sha256": "84853c91d4c2e0310741d4773469d98bb93e61029608e0ba0882a3fffdf330bd"
+        },
+        {
+          "file": "licenses/OpenEXR-portable-DWA/PATENTS",
+          "sha256": "7f5dee333a82cab38b3567b85ec52a74487a5b2a8f4097eb8b4071c892c47b12"
+        },
+        {
+          "file": "licenses/OpenEXR-portable-DWA/external/OpenJPH/LICENSE",
+          "sha256": "5ddf5177863dfc9ab65fa129d587db651241f00e21ed2427b218bea997591f98"
+        },
+        {
+          "file": "licenses/OpenEXR-portable-DWA/external/deflate/COPYING",
+          "sha256": "4ad69099cb4374836fd27583d9991e2838cd86b6e4666ab26b2d32582c91e73a"
+        },
+        {
+          "file": "licenses/OpenEXR-portable-DWA/external/zstd/LICENSE",
+          "sha256": "7055266497633c9025b777c78eb7235af13922117480ed5c674677adc381c9d8"
+        },
+        {
+          "file": "licenses/OpenEXR-portable-DWA/openexr-portable-dwa-v1.patch",
+          "sha256": "8309f1fc9c13cea53001dd6a77baec3632ca061ca85fc988a450b4fdfd5f9c7a"
+        }
+      ]
     }
   }
 }

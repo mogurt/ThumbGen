@@ -57,7 +57,10 @@ def validate_component_inventory(manifest, repo):
     inventory = json.loads(Path(__file__).with_name('runtime-notice-inventory.json').read_text())['components']
     expected = {x['package'] for x in lock['dependencies']} | {'OpenImageIO', 'nlohmann_json',
         'GCC-runtime', 'GCC-C++-runtime', 'GCC-build-headers-nonshared', 'LittleCMS2-shared', 'JPEG-shared', 'OpenEXRCore-patched'}
-    require(set(inventory) == expected, 'Verifier notice catalog does not cover source lock')
+    optional = {'OpenEXR-portable-DWA'}
+    require(set(inventory) == expected | optional, 'Verifier notice catalog does not cover source lock')
+    if 'portable_dwa' in manifest.get('linux_overlay_provenance', {}):
+        expected |= optional
     locked = {x['package']: x for x in lock['dependencies']}
     locked.update(OpenImageIO=dict(commit=lock['oiio_commit']), nlohmann_json=lock['nlohmann_json'])
     for name, identity in locked.items():
@@ -283,7 +286,7 @@ def audit_stage(stage, build, cache, overlay, cmake, verified_base=None):
         require(normalized_elf_sha(path, '$ORIGIN', cmake) == sha(stage / 'lib' / path.name), 'Staged library differs from linked dependency: ' + path.name)
 
 
-def audit(repo, color, core, product_build):
+def audit(repo, color, core, product_build, dwa_root=None, verified_base=None):
     repo, color, core, product_build = map(Path, (repo, color, core, product_build))
     lock = json.loads((repo / 'dependencies/color-sdk.json').read_text())
     receipt = json.loads((color / 'receipt.json').read_text())
@@ -348,10 +351,94 @@ def audit(repo, color, core, product_build):
         repository='https://github.com/AcademySoftwareFoundation/openexr', license='BSD-3-Clause plus bundled notices',
         linkage='static direct product dependency; original unpatched OpenEXR remains embedded in OIIO',
         source=str(core / 'source'), patch=str(patch), patch_sha256=sha(patch)))
-    return dict(components=components, evidence=evidence, shared=shared,
+    result = dict(components=components, evidence=evidence, shared=shared,
                 installations=dict(color=color_install, core=core_install),
                 verified_files={**color_install['verified_files'], **core_install['verified_files']},
                 trust='Corroborated local source/build/install evidence; not signed supply-chain proof')
+    if dwa_root is not None:
+        require(verified_base is not None, 'DWA requires independently verified base dependencies')
+        dwa = audit_dwa(repo, dwa_root, verified_base, product_build)
+        result['portable_dwa'] = dwa
+        result['components'].append(dwa['component'])
+        result['components'][2]['linkage'] = 'static direct Deep dependency; flat OIIO independently embeds portable-DWA patched OpenEXR'
+        result['verified_files'].update(dwa['installation']['verified_files'])
+    return result
+
+
+def audit_dwa(repo, root, base, product_build):
+    """Verify a separate flat-codec prefix without trusting its binding summary."""
+    require(isinstance(base, dict) and all(k in base for k in ('products', 'tools', 'verified_files')),
+            'DWA requires independently verified base dependencies')
+    repo, root, product_build = map(lambda p: Path(p).resolve(), (repo, root, product_build))
+    lock = json.loads((repo / 'scripts/linux/sources-lock.json').read_text())
+    exr = next(x for x in lock['dependencies'] if x['package'] == 'OpenEXR')
+    patch = repo / 'dependencies/patches/openexr-portable-dwa-v1.patch'
+    receipt = json.loads((root / 'receipt.json').read_text())
+    helper = repo / 'scripts/dependencies/build_portable_dwa_sdk.py'
+    helper_lf = helper.read_bytes().replace(b'\r\n', b'\n')
+    helper_variants = {hashlib.sha256(data).hexdigest() for data in
+        (helper_lf, helper_lf.replace(b'\n', b'\r\n'))}
+    require(receipt.get('helper_sha256') in helper_variants and
+            receipt.get('patch_sha256') == sha(patch) and receipt.get('inputs', {}).get('lock') == lock,
+            'DWA public builder/patch/source lock differs')
+    prefix = root / 'prefix'
+    trees, builds = {}, {}
+    options = {
+        'OpenEXR': dict(BUILD_SHARED_LIBS='OFF', BUILD_TESTING='OFF', OPENEXR_BUILD_TOOLS='OFF',
+            OPENEXR_BUILD_PYTHON='OFF', OPENEXR_FORCE_INTERNAL_DEFLATE='ON',
+            OPENEXR_LIB_SUFFIX='_v_3_5_0_OpenImageIO_v3_2',
+            OPENEXR_INTERNAL_IMF_NAMESPACE='OpenImageIO_v3_2_Imf__3_5_0', OPENEXR_NAMESPACE_CUSTOM='1',
+            ILMTHREAD_INTERNAL_NAMESPACE='OpenImageIO_v3_2_IlmThread__3_5_0', ILMTHREAD_NAMESPACE_CUSTOM='1'),
+        'OpenImageIO': dict(BUILD_SHARED_LIBS='ON', EMBEDPLUGINS='ON', USE_SIMD='sse2',
+            OIIO_BUILD_TESTS='OFF', OIIO_BUILD_TOOLS='OFF', OIIO_USE_EXR_C_API='ON', OIIO_USE_HWY='OFF',
+            OpenImageIO_BUILD_MISSING_DEPS='none', USE_PYTHON='OFF')}
+    for name, commit in [('OpenEXR', exr['commit']), ('OpenImageIO', lock['oiio_commit'])]:
+        source, build = root / (name + '-source'), root / (name + '-build')
+        trees[name] = locked_tree(source, commit, patch if name == 'OpenEXR' else None)
+        builds[name] = build_evidence(build, source, prefix, options[name])
+    require(Path(cache_values(root / 'OpenImageIO-build')['OpenEXR_DIR']).resolve() ==
+            prefix / 'lib/cmake/OpenEXR', 'Flat OIIO selected another OpenEXR')
+    installation = audit_installations(prefix,
+        [(root / (name + '-build'), prefix) for name in options], receipt['installed_sha256'])
+    for relative, expected in receipt['installed_sha256'].items():
+        path = prefix / relative
+        require(not Path(relative).is_absolute() and '..' not in Path(relative).parts and
+                path.resolve().is_relative_to(prefix), 'Unsafe DWA receipt path')
+        require(path.is_file() and sha(path) == expected, 'DWA installation changed: ' + relative)
+    # All external native link inputs must come from verified installs; SDK tools
+    # never enter this collection. Static archives retain object-byte proofs.
+    combined = dict(products={**base['products'], **installation['products']},
+        tools={**base['tools'], **installation['tools']},
+        verified_files={**base['verified_files'], **installation['verified_files']})
+    check_native_link_inputs(combined)
+    exr_outputs = {p['path'] for p in installation['products'].values()
+        if p['native']['install_rule']['kind'] == 'STATIC_LIBRARY'}
+    oiio = installation['products'].get('lib/libOpenImageIO.so.3.2.1')
+    util = installation['products'].get('lib/libOpenImageIO_Util.so.3.2.1')
+    require(oiio and util and exr_outputs, 'Missing configured portable-DWA libraries')
+    embedded = exr_outputs & set(oiio['native']['link_inputs'])
+    expected_embedded = {str(prefix / 'lib' / ('lib' + name + '_v_3_5_0_OpenImageIO_v3_2.a'))
+        for name in ('OpenEXR', 'OpenEXRCore', 'Iex', 'IlmThread')}
+    require(embedded == expected_embedded, 'Flat OIIO does not embed selected static OpenEXR')
+    values = cache_values(product_build)
+    require(Path(values['OpenImageIO_DIR']).resolve() == prefix / 'lib/cmake/OpenImageIO',
+            'Product selected another OpenImageIO')
+    _, inputs, _ = _native.query(product_build, 'thumbgen')
+    linked = {str((Path(p) if Path(p).is_absolute() else product_build / p).resolve()) for p in inputs}
+    require({oiio['path'], util['path']}.issubset(linked), 'Product does not link verified portable-DWA OIIO/Util')
+    loader = subprocess.check_output(['ldd', str(product_build / 'thumbgen')],
+        env={'PATH': '/usr/bin:/bin', 'LC_ALL': 'C'}, text=True)
+    loaded = {str(Path(p).resolve()) for p in re.findall(r'(?:=>\s*)?(/[^\s()]+)', loader)}
+    require('not found' not in loader and {oiio['path'], util['path']}.issubset(loaded),
+            'Product loader does not select verified portable-DWA OIIO/Util')
+    return dict(source_trees=trees, builds=builds, static_embedding=sorted(embedded),
+        installed_static_not_embedded=sorted(exr_outputs - embedded), installation=installation, loader=re.sub(r"0x[0-9a-f]+", "ADDRESS", loader),
+        patch_sha256=sha(patch), helper_sha256=sha(helper), builder_executed_sha256=receipt['helper_sha256'],
+        receipt_sha256=sha(root / 'receipt.json'), raw={str(p): sha(p) for p in sorted(root.glob('*.std*'))},
+        component=dict(name='OpenEXR-portable-DWA', version=exr['version'], commit=exr['commit'],
+            repository=exr['repository'], license='BSD-3-Clause plus bundled notices',
+            linkage='patched static OpenEXR including flat Core embedded in shared OIIO; independent of bounded Deep Core',
+            source=str(root / 'OpenEXR-source'), patch=str(patch), patch_sha256=sha(patch)))
 
 
 def audit_base(repo, cache):
