@@ -4,10 +4,31 @@ import sys
 import unittest
 import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]/'benchmarks'))
-from production_data_reference import mapping, canvas
+from production_data_reference import mapping, canvas, reduced_reference
 
 
 class DataReference(unittest.TestCase):
+    def test_integer_triangle_impulse_and_transparent_edges(self):
+        impulse = np.zeros((8,8,3))
+        impulse[2:4,2:4] = 1
+        reduced = reduced_reference(impulse, 'depth', 2)
+        np.testing.assert_array_equal(reduced[1,1], [.5625]*3)
+        rgba = np.zeros((8,8,4))
+        rgba[2:4,2:4] = [.25,.125,.5,.5]
+        reduced = reduced_reference(rgba, 'depth', 2)
+        np.testing.assert_array_equal(reduced[1,1], [.5,.25,1,.28125])
+        self.assertTrue(np.all(reduced[reduced[...,3] == 0] == 0))
+
+    def test_label_reduction_does_not_mix_classes(self):
+        rgb = np.zeros((8,8,3))
+        rgb[1::2,1::2] = [1,0,1]
+        np.testing.assert_array_equal(reduced_reference(rgb, 'id_rgb', 2), np.tile([1,0,1], (4,4,1)))
+        for bad in (True, 0, 17):
+            with self.assertRaises(ValueError):
+                reduced_reference(rgb, 'depth', bad)
+        with self.assertRaisesRegex(ValueError, 'divisible'):
+            reduced_reference(rgb, 'depth', 3)
+
     def test_depth_endpoints_and_invalid_pixel_statistics(self):
         source = np.array([[[-1.], [0.], [5.], [10.], [11.], [np.inf], [np.nan]]])
         rgb, stats = mapping(source, 'depth', [0, 10], 'magenta')
