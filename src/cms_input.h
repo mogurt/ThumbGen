@@ -7,6 +7,7 @@
 namespace thumbgen::detail {
 inline constexpr std::size_t icc_profile_limit=4*1024*1024;
 inline constexpr std::size_t cms_memory_limit=32*1024*1024;
+inline constexpr std::size_t cms_bootstrap_bytes=64*1024;
 inline constexpr std::size_t cms_jpeg_limit=8*1024*1024;
 inline constexpr std::size_t cms_reservation=4*icc_profile_limit+cms_memory_limit+cms_jpeg_limit+128*1024;
 enum class CmsModel {rgb,grey,cmyk};

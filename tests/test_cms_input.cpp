@@ -25,6 +25,16 @@ int main(){try{
         catch(const CmsFailure&){failed=true;}
         require(failed && stats.live==0,"invalid normalized sample accepted or leaked");
     }
+    for(std::size_t limit=cms_bootstrap_bytes;limit<cms_bootstrap_bytes+32768;limit+=256) {
+        CmsStats stats;
+        try{CmsInput input(data.data(),data.size(),CmsModel::rgb,stats,limit);}
+        catch(const CmsFailure&){}
+        require(stats.live==0 && stats.peak<=limit,"post-bootstrap allocation denial leaked or exceeded limit");
+    }
+    {CmsStats stats;{CmsInput input(data.data(),data.size(),CmsModel::rgb,stats);bool rejected=false;
+        std::thread foreign([&](){float p[]={.2f,.4f,.6f};try{input.apply(p,1,3,false);}catch(const CmsFailure&){rejected=true;}});foreign.join();
+        require(rejected,"foreign-thread processing was accepted");
+    }require(stats.live==0,"thread ownership rejection leaked");}
     {CmsStats stats;{CmsInput input(data.data(),data.size(),CmsModel::rgb,stats);
         std::vector<float> pixels(8193*4);for(std::size_t i=0;i<pixels.size();i+=4){pixels[i]=.2f;pixels[i+1]=.4f;pixels[i+2]=.6f;pixels[i+3]=.5f;}
         const auto allocations=stats.allocations;input.apply(pixels.data(),8193,4,false);
@@ -34,6 +44,7 @@ int main(){try{
     auto run=[&](){for(int i=0;i<32;++i){CmsStats stats;{CmsInput input(data.data(),data.size(),CmsModel::rgb,stats);float p[]={.2f,.4f,.6f,.5f};input.apply(p,1,4,false);require(p[3]==.5f,"alpha changed");}require(stats.live==0,"request leak");require(stats.allocations>0,"ledger inactive");}};
     std::exception_ptr failures[2];std::thread a([&](){try{run();}catch(...){failures[0]=std::current_exception();}}),b([&](){try{run();}catch(...){failures[1]=std::current_exception();}});a.join();b.join();
     for(auto failure:failures)if(failure)std::rethrow_exception(failure);
+    profile=cmsCreate_sRGBProfile();require(profile!=nullptr,"request plugins corrupted global CMS context");cmsCloseProfile(profile);
     std::cout<<"CMS limit/failure cleanup and 64 concurrent independent requests passed\n"<<std::flush;
     return 0;
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}
