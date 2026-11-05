@@ -1389,6 +1389,11 @@
           },
           "uniqueItems": true
         },
+        "deep_compressions": {
+          "type": "array",
+          "items": { "enum": ["none", "rle", "zips", "zstd"] },
+          "uniqueItems": true
+        },
         "deep_modes": {
           "type": "array",
           "items": {

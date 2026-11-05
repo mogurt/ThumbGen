@@ -20,10 +20,11 @@ static double native_number(const unsigned char* p,OIIO::TypeDesc type) {
     if(type==OIIO::TypeDesc::FLOAT)return number<float>(p);
     require(type==OIIO::TypeDesc::UINT32,"unexpected fixture type");return number<std::uint32_t>(p);
 }
-static void fixture(const fs::path& path,int width,int height,int count,int tile,const std::string& compression) {
+static void fixture(const fs::path& path,int width,int height,int count,int tile,const std::string& compression,bool exceptional=false) {
     require(width>0 && height>0 && count>=8 && count<=256,"invalid fixture dimensions");
     OIIO::ImageSpec spec(width,height,count,OIIO::TypeDesc::FLOAT);spec.channelnames.clear();spec.channelformats.clear();
     spec.attribute("compression",compression);spec.attribute("DateTime","2000:01:01 00:00:00");spec.attribute("oiio:ColorSpace","linear");
+    spec.x=spec.full_x=-7;spec.y=spec.full_y=-13;
     for(int c=0;c<count;++c) {
         spec.channelnames.push_back(c==0?"A":c>=count-3?std::string("beauty.")+"RGB"[c-count+3]:"aaa"+std::to_string(1000+c)+".X");
         spec.channelformats.push_back(c==count-3?OIIO::TypeDesc::HALF:c==count-1?OIIO::TypeDesc::UINT32:OIIO::TypeDesc::FLOAT);
@@ -39,7 +40,15 @@ static void fixture(const fs::path& path,int width,int height,int count,int tile
             auto type=spec.channelformat(c);
             if(type==OIIO::TypeDesc::HALF)store(target,half(float(p%9)/8));
             else if(type==OIIO::TypeDesc::UINT32)store(target,ids[p%6]);
-            else store(target,c==0?(p%3?0.5f:1.0f):float((p*17+std::size_t(c)*13)%251)/250);
+            else {
+                float value=c==0?(p%3?0.5f:1.0f):float((p*17+std::size_t(c)*13)%251)/250;
+                if(exceptional && c==0 && p%std::size_t(width)==0) {
+                    auto y=p/std::size_t(width);
+                    if(y==31 || y==32 || y==64 || y==136)value=std::numeric_limits<float>::quiet_NaN();
+                    else value=2;
+                }
+                store(target,value);
+            }
             target+=type.size();
         }
     }
@@ -51,7 +60,7 @@ static int channel(const OIIO::ImageSpec& spec,const char* name) {
     auto found=std::find(spec.channelnames.begin(),spec.channelnames.end(),name);require(found!=spec.channelnames.end(),"missing fixture channel");
     return int(found-spec.channelnames.begin());
 }
-static void compare(const fs::path& path) {
+static void compare(const fs::path& path,bool exceptional=false) {
     auto input=OIIO::ImageInput::open(path.u8string());require(bool(input),OIIO::geterror());auto spec=input->spec();
     auto pixels=std::size_t(spec.width)*spec.height;
     std::vector<float> complete(pixels*spec.nchannels);
@@ -74,15 +83,31 @@ static void compare(const fs::path& path) {
         }
     }
     // Exercise native plane addressing through the actual data mapper, not just the reader.
-    auto mapping=data_mapping("vector",{0,4294967295.0},"error");std::vector<int> selected{b,a};
+    auto mapping=data_mapping("vector",{0,1},exceptional?"magenta":"error");
+    for(const auto& selected:std::vector<std::vector<int>>{{b,a},{r,g,b},{g,g,a}}) {
     auto image=read_data_image(*input,spec,0,selected,mapping,1024*1024,3);
-    std::vector<double> values(pixels*2);
-    for(std::size_t p=0;p<pixels;++p)for(int c=0;c<2;++c)
-        values[p*2+c]=native_number(original.data()+p*stride+offsets[selected[c]],spec.channelformat(selected[c]));
-    std::vector<float> expected(pixels*4),actual(pixels*4);map_data_double(values.data(),expected.data(),pixels,2,{0,1},mapping);
+    std::vector<double> values(pixels*selected.size());std::vector<int> ordered;
+    std::size_t selected_bytes=0;
+    for(std::size_t c=0;c<selected.size();++c) {
+        ordered.push_back(int(c));
+        if(std::find(selected.begin(),selected.begin()+c,selected[c])==selected.begin()+c)selected_bytes+=spec.channelformat(selected[c]).size();
+        for(std::size_t p=0;p<pixels;++p)values[p*selected.size()+c]=native_number(original.data()+p*stride+offsets[selected[c]],spec.channelformat(selected[c]));
+    }
+    std::vector<float> expected(pixels*4),actual(pixels*4);
+    auto stats=map_data_double(values.data(),expected.data(),pixels,selected.size(),ordered,mapping);
     require(image.image.get_pixels(image.image.roi(),OIIO::TypeDesc::FLOAT,actual.data()),image.image.geterror());
     require(expected==actual,"data mapper lost native plane order/precision");
-    require(image.decoded_bytes==pixels*(sizeof(std::uint32_t)+sizeof(float)),"native source includes unrelated channels");
+    require(image.statistics.invalid_pixels==stats.invalid_pixels && image.statistics.clipped_components==stats.clipped_components,"block statistics differ from full-image reference");
+    require(image.decoded_bytes==pixels*selected_bytes,"native source includes unrelated channels");
+    const auto rows=std::min(spec.height,std::max(32,spec.tile_height));
+    require(image.native_buffer_bytes<=std::size_t(rows)*spec.width*selected_bytes,"data mapper retains a whole native image instead of a bounded row block");
+    if(stats.invalid_pixels) {
+        mapping.invalid=InvalidData::error;bool refused=false;
+        try{read_data_image(*input,spec,0,selected,mapping,1024*1024,3);}
+        catch(const InvalidDataValues& error){refused=true;require(error.statistics.invalid_pixels==stats.invalid_pixels && error.statistics.clipped_components==stats.clipped_components,"error policy lost statistics across blocks");}
+        require(refused,"invalid samples accepted by error policy");mapping.invalid=InvalidData::magenta;
+    }
+    }
     require(input->close(),"close input");
 }
 static int run(const std::vector<fs::path>& args) {
@@ -96,6 +121,14 @@ static int run(const std::vector<fs::path>& args) {
         struct Cleanup{fs::path path;~Cleanup(){std::error_code ec;if(path.parent_path()==fs::temp_directory_path())fs::remove_all(path,ec);}}cleanup{root};
         for(const auto& compression:{"zip","piz","none"})for(int tile:{0,8}) {
             auto path=root/(std::string(compression)+std::to_string(tile)+".exr");fixture(path,17,11,32,tile,compression);compare(path);
+        }
+        for(const auto& compression:{"zip","piz","none"})for(int tile:{0,8,64}) {
+            auto path=root/(std::string(compression)+"-blocks-"+std::to_string(tile)+".exr");
+            fixture(path,129,137,32,tile,compression);compare(path);
+        }
+        for(int tile:{0,64}) {
+            auto path=root/("invalid-"+std::to_string(tile)+".exr");
+            fixture(path,129,137,32,tile,"zip",true);compare(path,true);
         }
         auto path=root/"bounded.exr";fixture(path,256,256,64,0,"zip");
         thumbgen::Job job;job.id="compact-colour";job.input=path.u8string();job.options.max_decode_mib=1;

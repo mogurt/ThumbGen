@@ -228,11 +228,12 @@ Json Engine::capabilities() {
         {"quantization","unorm8-half-up-v1"},
         {"visualization_modes",{"colour","depth","normal","vector","id","id_rgb","cryptomatte"}},
         {"deep_modes",{"reject","flatten"}},
+        {"deep_compressions",detail::bounded_deep_zstd_available()?Json::array({"none","rle","zips","zstd"}):Json::array({"none","rle","zips"})},
         {"libraries",OIIO::get_string_attribute("library_list")},
         {"output_formats",output_formats},{"presets",{"fast","balanced","quality"}},
         {"defaults",{{"format","jpeg"},{"quality",90},{"size",{1024,1024}},
                      {"background","black"},{"preset","balanced"}}},
-        {"limitations",{"Deep flattening is opt-in for associated linear HALF/FLOAT colour with matching alpha and base-layer Z; NONE/RLE/ZIPS only",
+        {"limitations",{"Deep flattening is opt-in for associated linear HALF/FLOAT colour with matching alpha and base-layer Z; compression support depends on the runtime Core capability",
             "Deep positive-infinity points are supported; finite-front infinite-back volumes are refused",
             "batch defaults to one worker; explicit execution budgets enable a bounded process pool",
             "max_decode_mib limits decoded source buffer, not process RSS"}}};

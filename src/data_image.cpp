@@ -11,6 +11,7 @@
 #include <exception>
 #include <mutex>
 #include <numeric>
+#include <limits>
 
 namespace thumbgen::detail {
 namespace {
@@ -43,6 +44,19 @@ bool valid_integer_ids(OIIO::TypeDesc type) noexcept {
         default:return false;
     }
 }
+bool read_native_rows(OIIO::ImageInput& input,const OIIO::ImageSpec& spec,int part,
+    const ChannelPlan& plan,int first,int rows,unsigned char* target) {
+    const auto pixels=std::size_t(spec.width)*rows;
+    for(const auto& run:plan.runs) {
+        auto* plane=target+run.byte_offset*pixels;
+        if(spec.tile_width) {
+            if(!input.read_tiles(part,0,spec.x,spec.x+spec.width,spec.y+first,spec.y+first+rows,
+                spec.z,spec.z+1,run.first,run.end,OIIO::TypeDesc::UNKNOWN,plane))return false;
+        }else if(!input.read_scanlines(part,0,spec.y+first,spec.y+first+rows,spec.z,
+            run.first,run.end,OIIO::TypeDesc::UNKNOWN,plane))return false;
+    }
+    return true;
+}
 }
 DataImage read_data_image(OIIO::ImageInput& input,const OIIO::ImageSpec& spec,int part,
     const std::vector<int>& channels,const DataMapping& mapping,std::size_t limit,int threads) {
@@ -53,9 +67,7 @@ DataImage read_data_image(OIIO::ImageInput& input,const OIIO::ImageSpec& spec,in
     const bool categorical=mapping.mode==DataMode::id || mapping.mode==DataMode::id_rgb;
     if(!categorical && pixels>limit/(4*sizeof(float)))throw FileFailure("canvas_limit_exceeded","mapped RGBA data buffer exceeds limit");
     DataImage result;result.decoded_bytes=pixels*stride;
-    auto tick=Clock::now();std::vector<unsigned char> native(result.decoded_bytes);
-    if(!read_selected(input,spec,part,plan,true,native.data()))throw FileFailure("decode_failed",input.geterror());
-    result.decode_ms=elapsed(tick);tick=Clock::now();
+    auto tick=Clock::now();std::vector<unsigned char> native;
     float* target=nullptr;
     if(!categorical) {
         auto mapped=spec;mapped.nchannels=4;mapped.set_format(OIIO::TypeDesc::FLOAT);mapped.channelnames={"R","G","B","A"};mapped.alpha_channel=3;mapped.z_channel=-1;
@@ -64,30 +76,62 @@ DataImage read_data_image(OIIO::ImageInput& input,const OIIO::ImageSpec& spec,in
         if(!target || !result.image.contiguous())throw FileFailure("conversion_failed","cannot allocate mapped data image");
     }
     // Cache component metadata outside the per-pixel loop (mixed native types).
+    std::vector<std::size_t> planes,within_plane;
     for(int c:channels) {
         auto index=std::size_t(std::lower_bound(plan.channels.begin(),plan.channels.end(),c)-plan.channels.begin());
         result.offsets.push_back(plan.offsets[index]);result.strides.push_back(plan.strides[index]);result.types.push_back(spec.channelformat(c));
+        const auto run=std::find_if(plan.runs.begin(),plan.runs.end(),[&](const auto& run){return c>=run.first && c<run.end;});
+        planes.push_back(run->byte_offset);within_plane.push_back(plan.offsets[index]-run->byte_offset*pixels);
     }
     std::vector<int> ordered(channels.size());std::iota(ordered.begin(),ordered.end(),0);
     map_data_double(nullptr,nullptr,0,ordered.size(),ordered,mapping); // Validate before parallel execution.
     std::atomic<std::uint64_t> invalid{0},clipped{0};std::exception_ptr failure;std::mutex mutex;
     auto nonthrowing=mapping;if(nonthrowing.invalid==InvalidData::error)nonthrowing.invalid=InvalidData::black;
     const bool typed_ids=mapping.mode==DataMode::id && result.types.size()==1 && valid_integer_ids(result.types[0]);
-    if(!typed_ids)OIIO::parallel_for_chunked(0,spec.height,0,[&](int64_t begin,int64_t finish) {
+    result.mapping_ms=elapsed(tick);
+    auto map_rows=[&](int first,int rows,const std::vector<std::size_t>& offsets) {
+        tick=Clock::now();
+        if(!typed_ids)OIIO::parallel_for_chunked(0,rows,0,[&](int64_t begin,int64_t finish) {
         try {
             std::vector<double> row(std::size_t(spec.width)*channels.size());DataStats stats;
             for(auto y=begin;y<finish;++y) {
                 for(int x=0;x<spec.width;++x)for(std::size_t c=0;c<channels.size();++c)
-                    row[std::size_t(x)*channels.size()+c]=sample(native.data()+(std::size_t(y)*spec.width+x)*result.strides[c]+result.offsets[c],result.types[c]);
+                    row[std::size_t(x)*channels.size()+c]=sample(native.data()+(std::size_t(y)*spec.width+x)*result.strides[c]+offsets[c],result.types[c]);
                 auto one=categorical?data_stats_double(row.data(),spec.width,channels.size(),ordered,nonthrowing):
-                    map_data_double(row.data(),target+std::size_t(y)*spec.width*4,spec.width,channels.size(),ordered,nonthrowing);
+                    map_data_double(row.data(),target+(std::size_t(first)+y)*spec.width*4,spec.width,channels.size(),ordered,nonthrowing);
                 stats.invalid_pixels+=one.invalid_pixels;stats.clipped_components+=one.clipped_components;
             }
             invalid.fetch_add(stats.invalid_pixels);clipped.fetch_add(stats.clipped_components);
         }catch(...){std::lock_guard<std::mutex> guard(mutex);if(!failure)failure=std::current_exception();}
-    },OIIO::paropt(threads,OIIO::paropt::SplitDir::Y,1));
-    if(failure)std::rethrow_exception(failure);
-    result.statistics={invalid.load(),clipped.load()};result.mapping_ms=elapsed(tick);
+        },OIIO::paropt(threads,OIIO::paropt::SplitDir::Y,1));
+        if(failure)std::rethrow_exception(failure);
+        result.mapping_ms+=elapsed(tick);
+    };
+    // EXR permits revisiting sparse channel runs without restarting a sequential
+    // decoder. Other formats keep the original path until separately profiled.
+    const bool bounded_rows=!categorical && std::strcmp(input.format_name(),"openexr")==0 &&
+        std::int64_t(spec.x)+spec.width<=std::numeric_limits<int>::max() &&
+        std::int64_t(spec.y)+spec.height<=std::numeric_limits<int>::max() && spec.z<std::numeric_limits<int>::max() &&
+        (!spec.tile_width || spec.tile_height>0);
+    if(bounded_rows) {
+        int rows_per_block=32;
+        if(spec.tile_width)rows_per_block=std::max(1,32/spec.tile_height)*spec.tile_height;
+        std::vector<std::size_t> offsets(channels.size());
+        for(int first=0;first<spec.height;) {
+            const int rows=std::min(rows_per_block,spec.height-first);
+            const auto count=std::size_t(spec.width)*rows;
+            tick=Clock::now();native.resize(count*stride);
+            result.native_buffer_bytes=std::max(result.native_buffer_bytes,native.capacity());
+            for(std::size_t c=0;c<channels.size();++c)offsets[c]=within_plane[c]+planes[c]*count;
+            if(!read_native_rows(input,spec,part,plan,first,rows,native.data()))throw FileFailure("decode_failed",input.geterror());
+            result.decode_ms+=elapsed(tick);map_rows(first,rows,offsets);first+=rows;
+        }
+    }else {
+        tick=Clock::now();native.resize(result.decoded_bytes);result.native_buffer_bytes=native.capacity();
+        if(!read_selected(input,spec,part,plan,true,native.data()))throw FileFailure("decode_failed",input.geterror());
+        result.decode_ms=elapsed(tick);map_rows(0,spec.height,result.offsets);
+    }
+    result.statistics={invalid.load(),clipped.load()};
     if(mapping.invalid==InvalidData::error && result.statistics.invalid_pixels)throw InvalidDataValues(result.statistics);
     if(categorical){result.native=std::move(native);result.source_spec=spec;result.mapping=mapping;}
     return result;

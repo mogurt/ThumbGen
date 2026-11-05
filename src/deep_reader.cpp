@@ -26,6 +26,7 @@ std::size_t multiply(std::size_t a,std::size_t b){
 }
 struct Ledger {
     const std::size_t limit;
+    const std::size_t fail_allocation;
     std::size_t allocation_requests=0;
     std::atomic<std::size_t> used{0},peak{0};std::atomic<bool> denied{false};
     bool take(std::size_t bytes) noexcept {
@@ -43,6 +44,7 @@ struct alignas(std::max_align_t) Allocation {Ledger* ledger;std::size_t bytes;};
 void* core_allocate(std::size_t bytes) noexcept {
     auto* ledger=current_ledger;if(!ledger || bytes>std::numeric_limits<std::size_t>::max()-sizeof(Allocation))return nullptr;
     ++ledger->allocation_requests;
+    if(ledger->fail_allocation==ledger->allocation_requests){ledger->denied=true;return nullptr;}
     const auto total=bytes+sizeof(Allocation);if(!ledger->take(total))return nullptr;
     void* raw=std::malloc(total);if(!raw){ledger->put(total);return nullptr;}
     auto* allocation=new(raw) Allocation{ledger,total};return allocation+1;
@@ -118,12 +120,12 @@ void checked(exr_result_t status,const Ledger& ledger){
 struct Context {exr_context_t value=nullptr;~Context(){if(value)exr_finish(&value);}};
 struct Pipeline {
     exr_const_context_t context;exr_decode_pipeline_t value=EXR_DECODE_PIPELINE_INITIALIZER;
-    explicit Pipeline(exr_const_context_t c):context(c){
+    explicit Pipeline(exr_const_context_t c,bool bounded_zstd):context(c){
         // Select Core's supported legacy pipeline ABI. In the locked 3.5
         // runtimes the new cached ZIP-context path dereferences a failed
         // allocation; the legacy exr_uncompress_buffer path checks it.
         // Keep the full object allocated, including the newer bookkeeping.
-        value.pipe_size=offsetof(exr_decode_pipeline_t,sample_count_valid);
+        if(!bounded_zstd)value.pipe_size=offsetof(exr_decode_pipeline_t,sample_count_valid);
     }
     ~Pipeline(){exr_decoding_destroy(context,&value);}
 };
@@ -164,6 +166,12 @@ Plan make_plan(exr_const_context_t context,int part,const DeepChannels& wanted,c
     return plan;
 }
 }
+bool bounded_deep_zstd_available() noexcept {
+    int major=0,minor=0,patch=0;const char* extra=nullptr;
+    exr_get_library_version(&major,&minor,&patch,&extra);
+    return major==3 && minor==5 && patch==0 && extra &&
+        std::strcmp(extra,"-dev-thumbgen-bounded-zstd-v1")==0;
+}
 DeepImage read_deep_image(const std::filesystem::path& path,int part,const DeepChannels& channels,DeepReadLimits limits,DeepCheckpoint checkpoint,DeepReadOutput output){
     if(part<0 || !limits.bytes || limits.samples_per_pixel>std::numeric_limits<std::uint32_t>::max())throw std::invalid_argument("Invalid Deep read limits or part");
     if(output.mode!=DeepOutputMode::components && output.mode!=DeepOutputMode::associated_rgba && output.mode!=DeepOutputMode::opaque_rgba)
@@ -173,7 +181,7 @@ DeepImage read_deep_image(const std::filesystem::path& path,int part,const DeepC
     const auto stamp=source_stamp(path);
     auto verify=[&]{if(!source_matches(path,stamp))throw FileFailure("source_changed","Deep source identity, size or mtime changed",true);};
     auto progress=[&](const char* phase){if(checkpoint)checkpoint(phase);verify();};
-    Ledger ledger{limits.bytes};DeepImage image;
+    Ledger ledger{limits.bytes,limits.fail_core_allocation};DeepImage image;
     try {
         {
             AllocationScope allocation_scope(ledger);Input input(path);Context context;
@@ -185,7 +193,8 @@ DeepImage read_deep_image(const std::filesystem::path& path,int part,const DeepC
             exr_storage_t storage;checked(exr_get_storage(context.value,part,&storage),ledger);
             if(storage!=EXR_STORAGE_DEEP_SCANLINE && storage!=EXR_STORAGE_DEEP_TILED)throw DeepFailure("deep_layout_unsupported","Selected part is not Deep");
             exr_compression_t compression;checked(exr_get_compression(context.value,part,&compression),ledger);
-            if(compression!=EXR_COMPRESSION_NONE && compression!=EXR_COMPRESSION_RLE && compression!=EXR_COMPRESSION_ZIPS)
+            const bool bounded_zstd=compression==EXR_COMPRESSION_ZSTD && bounded_deep_zstd_available();
+            if(compression!=EXR_COMPRESSION_NONE && compression!=EXR_COMPRESSION_RLE && compression!=EXR_COMPRESSION_ZIPS && !bounded_zstd)
                 throw DeepFailure("deep_layout_unsupported","Deep compression needs a separately bounded decoder");
             exr_attr_box2i_t window;checked(exr_get_data_window(context.value,part,&window),ledger);
             const auto width=std::int64_t(window.max.x)-window.min.x+1,height=std::int64_t(window.max.y)-window.min.y+1;
@@ -199,7 +208,7 @@ DeepImage read_deep_image(const std::filesystem::path& path,int part,const DeepC
             Reservation output_memory(ledger),kernel_memory(ledger);output_memory.grow(image.bytes);
             image.pixels.reset(new float[image.bytes/sizeof(float)]{});
             DeepFlattener kernel({limits.samples_per_pixel,limits.bytes});
-            Pipeline pipeline(context.value);bool initialized=false;
+            Pipeline pipeline(context.value,bounded_zstd);bool initialized=false;
             auto block=[&](const exr_chunk_info_t& chunk,std::int64_t origin_x,std::int64_t origin_y){
                 progress("chunk");
                 if(chunk.width<=0 || chunk.height<=0 || origin_x<window.min.x || origin_y<window.min.y ||

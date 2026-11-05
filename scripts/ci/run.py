@@ -16,7 +16,7 @@ import xml.etree.ElementTree as ET
 def audit_tests(inventory, junit):
     names = [test['name'] for test in inventory['tests']]
     required = {'public_cli', 'public_protocol', 'public_interrupt', 'public_aov', 'public_color_input',
-                'public_cryptomatte', 'public_sampled_id', 'public_deep', 'core_deep_flatten', 'core_deep_reader', 'core_deep_output', 'core_deep_selection', 'core_deep_runtime', 'core_deep_infinite'}
+                'public_cryptomatte', 'public_sampled_id', 'public_deep', 'core_deep_flatten', 'core_deep_reader', 'core_deep_output', 'core_deep_selection', 'core_deep_runtime', 'core_deep_infinite', 'core_deep_zstd', 'core_selected_input'}
     if not required.issubset(names) or len(set(names)) != len(names):
         raise RuntimeError('Incomplete or duplicate CTest registration')
     disabled = [test['name'] for test in inventory['tests']
@@ -161,6 +161,7 @@ def execute(args, repo, logs, env, run):
     run('ctest-version', ['ctest', '--version'])
     run('python-version', [python, '--version'])
     run('ci-audits', [python, '-m', 'unittest', 'discover', '-s', 'tests/ci', '-v'])
+    run('benchmark-tool-checks', [python, '-m', 'unittest', 'discover', '-s', 'tests/benchmarks', '-v'])
     run('test-python', [python, '-c', 'import jsonschema; print(jsonschema.__file__)'])
     run('public-examples', [python, 'scripts/public/validate_examples.py'])
     run('public-example-checks', [python, '-m', 'unittest', 'discover', '-s', 'tests/public', '-v'])
@@ -201,6 +202,7 @@ def execute(args, repo, logs, env, run):
         failure='Protocol tests require tests/requirements.txt')
     result = dict(platform=args.platform, registered_tests=count, executed_tests=count,
                   public_examples_checked=True,
+                  benchmark_tools_checked=True,
                   packaging_checks_checked=True,
                   public_example_runtime_checked=True,
                   release_targets=targets, release_test_python=False,
