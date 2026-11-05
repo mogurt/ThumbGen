@@ -6,6 +6,7 @@ PNG fixture writing and output decoding use the Python standard library.
 """
 import argparse
 from decimal import Decimal as D, ROUND_FLOOR, getcontext
+from functools import lru_cache
 import hashlib
 import json
 import os
@@ -146,7 +147,7 @@ def write_exr(path, pixels, data, display):
     return [tuple(D.from_float(float(v)) for v in p) for p in array.reshape(-1, 4)]
 
 
-def make_fixtures(root):
+def make_fixtures(root, hdr=False):
     result = []
     for name, variant, zero in [('straight', False, False), ('hidden_variant', True, False), ('zero_hidden', False, True)]:
         raw = pattern(hidden_variant=variant, all_zero=zero)
@@ -164,6 +165,16 @@ def make_fixtures(root):
         pixels = write_exr(path, [associated(p) for p in pattern(data[2], data[3])], data, display)
         result.append(dict(name=name, path=path, pixels=pixels, data=data, display=display,
                            input_space='linear', association='associated'))
+    if hdr:
+        for name, data, display in [('hdr', (0, 0, 16, 12), (0, 0, 16, 12)),
+                                    ('hdr_negative_crop', (-5, -3, 11, 9), (-7, -5, 16, 12))]:
+            values = (D('-.125'), D('.03125'), D('.25'), D('1'), D('4'), D('16'))
+            pixels = [(values[(x+2*y)%6]/2, values[(3*x+y+1)%6]/2, values[(x+y+3)%6]/2, D('.5'))
+                      for y in range(data[3]) for x in range(data[2])]
+            path = root / (name + '.exr')
+            stored = write_exr(path, pixels, data, display)
+            result.append(dict(name=name, path=path, pixels=stored, data=data, display=display,
+                               input_space='linear', association='associated'))
     return result
 
 
@@ -175,6 +186,33 @@ def canvas(fixture):
             for y in range(fy, fy+fh) for x in range(fx, fx+fw)]
 
 
+PI = D('3.1415926535897932384626433832795028841971693993751')
+
+
+def sin_decimal(x):
+    """Independent Taylor series, range-reduced; never calls OIIO's kernel."""
+    x = x % (2*PI)
+    if x > PI:
+        x -= 2*PI
+    term = total = x
+    for n in range(1, 100):
+        term *= -x*x / ((2*n)*(2*n+1))
+        total += term
+        if abs(term) < D('1e-55'):
+            return total
+    raise ArithmeticError('Decimal sine did not converge')
+
+
+def lanczos3(x):
+    x = abs(x)
+    if not x:
+        return ONE
+    if x >= 3 or x == x.to_integral_value():
+        return ZERO
+    return 3*sin_decimal(PI*x)*sin_decimal(PI*x/3)/(PI*PI*x*x)
+
+
+@lru_cache(maxsize=256)
 def weights(out_index, scale, size, preset):
     """Pixel-centred separable box/triangle, widened by integer reduction.
 
@@ -182,11 +220,13 @@ def weights(out_index, scale, size, preset):
     that canvas is already zero. This is not a call into the product or OIIO.
     """
     centre = (D(out_index) + D('.5')) * scale - D('.5')
-    radius = D(scale) / 2 if preset == 'fast' else D(scale)
+    if preset not in ('fast', 'balanced', 'quality'):
+        raise ValueError('unknown reference filter')
+    radius = D(scale) / 2 if preset == 'fast' else D(scale)*(3 if preset == 'quality' else 1)
     pairs = []
     for i in range(int(centre-radius)-1, int(centre+radius)+2):
         d = abs(D(i)-centre)
-        weight = ONE if preset == 'fast' and d < radius else max(ZERO, ONE-d/radius) if preset == 'balanced' else ZERO
+        weight = (ONE if d < radius else ZERO) if preset == 'fast' else max(ZERO, ONE-d/radius) if preset == 'balanced' else lanczos3(d/scale)
         if weight:
             pairs.append((max(0, min(size-1, i)), weight))
     total = sum(w for _, w in pairs)
@@ -203,7 +243,8 @@ def reference(fixture, scale, preset, background):
             wx = weights(x, scale, fw, preset)
             p = [sum(source[j*fw+i][c]*a*b for i, a in wx for j, b in wy) for c in range(4)]
             alpha = p[3]
-            rgb = [v / alpha if alpha else ZERO for v in p[:3]] if background == 'transparent' else [v + (ONE-alpha if background == 'white' else ZERO) for v in p[:3]]
+            coverage = max(ZERO, min(ONE, alpha))
+            rgb = [v / alpha if alpha > 0 else ZERO for v in p[:3]] if background == 'transparent' else [v + (ONE-coverage if background == 'white' else ZERO) for v in p[:3]]
             result.append(tuple(encode_srgb(v) for v in rgb) + ((alpha,) if background == 'transparent' else ()))
     return w, h, result
 
@@ -213,8 +254,11 @@ def storage_reference(target):
 
     Decide from the independent expected Alpha, never the product Alpha byte.
     """
-    if len(target) == 4 and int(max(ZERO, min(ONE, target[3]))*255 + D('.5')) == 0:
-        return (ZERO, ZERO, ZERO, target[3])
+    if len(target) == 4:
+        alpha = max(ZERO, min(ONE, target[3]))
+        if int(alpha*255 + D('.5')) == 0:
+            return (ZERO, ZERO, ZERO, alpha)
+        return (*target[:3], alpha)
     return target
 
 
@@ -258,6 +302,13 @@ def self_test():
     assert weights(1, 2, 8, 'fast') == [(2, D('.5')), (3, D('.5'))]
     assert weights(1, 2, 8, 'balanced') == [(1, D('.125')), (2, D('.375')), (3, D('.375')), (4, D('.125'))]
     assert sum(w for _, w in weights(0, 2, 8, 'balanced')) == 1
+    assert lanczos3(ZERO) == 1 and all(lanczos3(D(i)) == 0 for i in (1, 2, 3, 4))
+    assert abs(sin_decimal(PI/2)-1) < D('1e-45')
+    assert abs(lanczos3(D('.5'))-D(6)/(PI*PI)) < D('1e-45')
+    assert lanczos3(D('1.5')) < 0 and lanczos3(D('2.5')) > 0
+    assert abs(sum(w for _, w in weights(0, 4, 16, 'quality'))-1) < D('1e-45')
+    assert storage_reference((ONE, ONE, ONE, D('-.1'))) == (ZERO,)*4
+    assert storage_reference((ONE, ONE, ONE, D('1.1'))) == (ONE,)*4
     fixture = dict(data=(-2, -1, 1, 1), display=(-3, -2, 2, 2),
                    pixels=[(D('.05'), D('.1'), D('.2'), D('.25'))])
     assert canvas(fixture) == [(ZERO,)*4]*3 + fixture['pixels']
@@ -310,6 +361,8 @@ def main():
     parser.add_argument('--runtime-dir', action='append', type=Path, help='explicit DLL/library search directories, repeatable')
     parser.add_argument('--env', action='append', default=[], metavar='KEY=VALUE', help='explicit child environment override; values recorded')
     parser.add_argument('--case', action='append', help='run only this exact case name, repeatable (see docs/alpha-reference.md)')
+    parser.add_argument('--preset', action='append', choices=('fast', 'balanced', 'quality'), help='reference presets; default fast and balanced')
+    parser.add_argument('--hdr-fixtures', action='store_true', help='add associated linear HDR/negative-value EXR fixtures')
     parser.add_argument('--output', type=Path, default=ROOT/'.deps/alpha-reference/run', help='new directory under this worktree .deps only')
     args = parser.parse_args()
     if args.self_test:
@@ -330,6 +383,7 @@ def main():
     if any(not p.is_dir() for p in runtime_dirs):
         parser.error('runtime directory does not exist')
     overrides = dict(item.split('=', 1) for item in args.env)
+    presets = list(dict.fromkeys(args.preset or ('fast', 'balanced')))
     # Do not inherit an accidental project OCIO/plug-in search configuration.
     env = {k: v for k, v in os.environ.items() if not k.upper().startswith(('OCIO', 'OIIO_', 'OPENIMAGEIO_'))}
     env.update(overrides)
@@ -354,7 +408,8 @@ def main():
                   runtime_dirs=list(map(str, runtime_dirs)), runtime_sha256=runtime_files, environment_overrides=overrides,
                   effective_library_path=env[library_key], decimal_precision=getcontext().prec,
                   tolerance=dict(rgb=float(RGB_TOL), alpha=float(ALPHA_TOL), units='normalized stored 8-bit PNG'),
-                  limits='Flat RGB(A), sRGB/linear Rec.709 only; no ICC/CMYK/Deep, no quality/lanczos, no real assets or release QA claim.',
+                  presets=presets, hdr_fixtures=args.hdr_fixtures,
+                  limits='Flat RGB(A), sRGB/linear Rec.709 only; no ICC/CMYK/Deep, no real assets or release QA claim.',
                   cases=[], fixtures=[], failures=[])
     # Snapshot our committed product source; do not read a dirty main worktree.
     report['source_sha256'] = {str(p.relative_to(ROOT)).replace('\\', '/'): sha(p)
@@ -363,7 +418,7 @@ def main():
     try:
         _, report['identity'] = run_cli(exe, ['--version'], env, output, 'version')
         _, report['capabilities'] = run_cli(exe, ['capabilities'], env, output, 'capabilities')
-        fixtures = make_fixtures(output)
+        fixtures = make_fixtures(output, args.hdr_fixtures)
         import OpenImageIO as oiio
         import numpy as np
         report['fixture_io'] = dict(oiio=oiio.VERSION_STRING, numpy=np.__version__, oiio_module=str(oiio.__file__),
@@ -373,7 +428,7 @@ def main():
             initial = sha(f['path'])
             report['fixtures'].append(dict(name=f['name'], path=str(f['path']), sha256=initial,
                                             data_window=f['data'], display_window=f['display'], association=f['association'], input_space=f['input_space']))
-            for preset in ('fast', 'balanced'):
+            for preset in presets:
                 for scale in (1, 2, 4):
                     for background in ('black', 'white', 'transparent'):
                         label = f"{f['name']}-{preset}-{scale}-{background}"
@@ -399,7 +454,7 @@ def main():
                 raise RuntimeError('source fixture modified by CLI')
             report['fixtures'][-1]['source_unchanged'] = True
         pairs = [(outputs[('straight', p, s, b)], outputs[('hidden_variant', p, s, b)])
-                 for p in ('fast', 'balanced') for s in (1, 2, 4) for b in ('black', 'white', 'transparent')
+                 for p in presets for s in (1, 2, 4) for b in ('black', 'white', 'transparent')
                  if ('straight', p, s, b) in outputs and ('hidden_variant', p, s, b) in outputs]
         report['hidden_rgb_pairs_compared'] = len(pairs)
         report['hidden_rgb_invariance'] = all(a == b for a, b in pairs) if pairs else None

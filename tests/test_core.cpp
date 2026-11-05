@@ -159,6 +159,33 @@ colorspaces:
         }
     }
 }
+static void opaque_lanczos_background(const fs::path& root,thumbgen::Engine& engine) {
+    OIIO::ImageSpec spec(8,2,4,OIIO::TypeDesc::FLOAT);spec.channelnames={"R","G","B","A"};spec.alpha_channel=3;
+    spec.attribute("oiio:ColorSpace","linear");
+    std::vector<float> pixels(8*2*4,0);
+    for(int y=0;y<2;++y)pixels[(y*8+3)*4+3]=1;
+    auto source=(root/"lanczos-alpha.exr").u8string();
+    auto writer=OIIO::ImageOutput::create(source);require(bool(writer),OIIO::geterror());
+    require(writer->open(source,spec),writer->geterror());require(writer->write_image(OIIO::TypeDesc::FLOAT,pixels.data()),writer->geterror());
+    require(writer->close(),writer->geterror());
+    for(const std::string background:{"white","black","transparent"}) {
+        thumbgen::Job job;job.id="opaque-lanczos";job.input=source;job.options.preset="quality";
+        job.options.input_space="linear";job.options.ocio_config="ocio://default";job.options.background=background;
+        auto path=root/("lanczos-"+background+".png");job.outputs.push_back({path.u8string(),"png",4,1,90});
+        auto result=engine.convert(job);require(result["ok"].get<bool>(),result.dump());
+        auto input=OIIO::ImageInput::open(path.u8string());require(bool(input),OIIO::geterror());
+        const int bands=background=="transparent"?4:3;
+        require(input->spec().width==4 && input->spec().height==1 && input->spec().nchannels==bands,"Lanczos background dimensions");
+        std::vector<unsigned char> actual(4*bands);
+        require(input->read_image(0,0,0,bands,OIIO::TypeDesc::UINT8,actual.data()),input->geterror());require(input->close(),"close Lanczos output");
+        // The alpha impulse has negative Lanczos lobes at both outside pixels.
+        // A fully opaque white background must remain white there, regardless
+        // of a nonphysical filtered alpha. Black RGB remains black otherwise.
+        for(int x:{0,3})for(int c=0;c<3;++c)
+            require(actual[x*bands+c]==(background=="white"?255:0),"opaque background darkened by negative Lanczos alpha");
+        if(bands==4)require(actual[3]==0 && actual[3*bands+3]==0,"negative alpha did not clamp at storage");
+    }
+}
 int main() {
     auto root=fs::temp_directory_path()/fs::path("thumbgen-core-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     fs::create_directory(root);
@@ -166,6 +193,7 @@ int main() {
     try {
         thumbgen::Engine engine;
         output_compression(root,engine);
+        opaque_lanczos_background(root,engine);
         quantization_roundtrip(root,engine);
         OIIO::ImageSpec cropped(1,1,3,OIIO::TypeDesc::FLOAT);
         cropped.x=2;cropped.y=1;cropped.full_x=0;cropped.full_y=0;cropped.full_width=4;cropped.full_height=3;
