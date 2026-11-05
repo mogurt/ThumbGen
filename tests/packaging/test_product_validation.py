@@ -21,8 +21,10 @@ class ExecutionEvidence(unittest.TestCase):
         self.exe = binary / 'thumbgen.exe'
         self.closure = dict(exe_sha256=validation.sha(self.exe), overlays=[{'kind': 'bounded'}], files=[dict(name=p.name, sha256=validation.sha(p)) for p in binary.iterdir()])
         recipe = self.root / 'trusted-validator.py'; recipe.write_bytes(b'trusted validator fixture\n')
+        reference = self.root / 'color/report.json'; reference.parent.mkdir(); reference.write_text('{}')
         self.identity = {'fixture': dict(path=str(recipe), sha256=validation.sha(recipe), lf_sha256=validation.sha(recipe))}
         self.report = dict(schema_version=2, kind='independent-windows-product-validation', passed=True,
+            fixtures=dict(color_evidence=str(reference.parent), deep_evidence=str(self.root)),
             exe_sha256=validation.sha(self.exe), tested_exe=str(self.exe), validator=self.identity,
             tested_runtime={p.name: dict(path=str(p), sha256=validation.sha(p)) for p in binary.iterdir()},
             loaded_modules={str(p): validation.sha(p) for p in binary.iterdir()}, cases=[])
