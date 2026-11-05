@@ -26,6 +26,7 @@ std::size_t multiply(std::size_t a,std::size_t b){
 }
 struct Ledger {
     const std::size_t limit;
+    std::size_t allocation_requests=0;
     std::atomic<std::size_t> used{0},peak{0};std::atomic<bool> denied{false};
     bool take(std::size_t bytes) noexcept {
         auto previous=used.load();
@@ -41,6 +42,7 @@ struct AllocationScope {Ledger* previous;explicit AllocationScope(Ledger& ledger
 struct alignas(std::max_align_t) Allocation {Ledger* ledger;std::size_t bytes;};
 void* core_allocate(std::size_t bytes) noexcept {
     auto* ledger=current_ledger;if(!ledger || bytes>std::numeric_limits<std::size_t>::max()-sizeof(Allocation))return nullptr;
+    ++ledger->allocation_requests;
     const auto total=bytes+sizeof(Allocation);if(!ledger->take(total))return nullptr;
     void* raw=std::malloc(total);if(!raw){ledger->put(total);return nullptr;}
     auto* allocation=new(raw) Allocation{ledger,total};return allocation+1;
@@ -197,6 +199,7 @@ DeepImage read_deep_image(const std::filesystem::path& path,int part,const DeepC
             Reservation output_memory(ledger),kernel_memory(ledger);output_memory.grow(image.bytes);
             image.pixels.reset(new float[image.bytes/sizeof(float)]{});
             DeepFlattener kernel({limits.samples_per_pixel,limits.bytes});
+            Pipeline pipeline(context.value);bool initialized=false;
             auto block=[&](const exr_chunk_info_t& chunk,std::int64_t origin_x,std::int64_t origin_y){
                 progress("chunk");
                 if(chunk.width<=0 || chunk.height<=0 || origin_x<window.min.x || origin_y<window.min.y ||
@@ -207,7 +210,14 @@ DeepImage read_deep_image(const std::filesystem::path& path,int part,const DeepC
                 if(chunk.data_offset>input.size || chunk.packed_size>input.size-chunk.data_offset ||
                    chunk.sample_count_data_offset>input.size || chunk.sample_count_table_size>input.size-chunk.sample_count_data_offset)
                     throw DeepFailure("deep_decode_failed","Deep chunk exceeds source file");
-                Pipeline pipeline(context.value);auto& pipe=pipeline.value;checked(exr_decoding_initialize(context.value,part,&chunk,&pipe),ledger);
+                auto& pipe=pipeline.value;
+                if(initialized)checked(exr_decoding_update(context.value,part,&chunk,&pipe),ledger);
+                else {checked(exr_decoding_initialize(context.value,part,&chunk,&pipe),ledger);initialized=true;}
+                // Only Core's owned buffers survive a chunk. User planes and
+                // the count snapshot below have block lifetime; never let the
+                // next count-only pass retain their pointers or callback.
+                pipe.decoding_user_data=nullptr;pipe.realloc_nonimage_data_fn=nullptr;
+                for(int c=0;c<pipe.channel_count;++c)pipe.channels[c].decode_to_ptr=nullptr;
                 pipe.decode_flags=EXR_DECODE_SAMPLE_COUNTS_AS_INDIVIDUAL|EXR_DECODE_SAMPLE_DATA_ONLY;
                 checked(exr_decoding_choose_default_routines(context.value,part,&pipe),ledger);checked(exr_decoding_run(context.value,part,&pipe),ledger);
                 const auto pixels=multiply(std::size_t(chunk.width),std::size_t(chunk.height));std::size_t samples=0,maximum=0;
@@ -279,7 +289,7 @@ DeepImage read_deep_image(const std::filesystem::path& path,int part,const DeepC
             progress("complete");
         }
         if(ledger.used!=0)throw DeepFailure("deep_decode_failed","Deep allocator did not release all reservations");
-        image.peak_accounted_bytes=ledger.peak;verify();return image;
+        image.peak_accounted_bytes=ledger.peak;image.core_allocation_requests=ledger.allocation_requests;verify();return image;
     }catch(...){
         image.pixels.reset();
         if(ledger.used!=0)throw DeepFailure("deep_decode_failed","Deep allocator retained buffers after rejection");

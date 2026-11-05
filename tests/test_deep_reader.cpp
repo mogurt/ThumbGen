@@ -24,14 +24,14 @@ namespace fs=std::filesystem;
 static void require(bool value,const std::string& why){if(!value)throw std::runtime_error(why);}
 static DeepChannels mapping(){return {{"Beauty.R","Beauty.G","Beauty.B"},{"Alpha.R","Alpha.G","Alpha.B"},"Depth.Z","Depth.Zback"};}
 static std::string bytes(const fs::path& path){std::ifstream input(path,std::ios::binary);return {std::istreambuf_iterator<char>(input),{}};}
-static void fixture(const fs::path& path,const std::vector<DeepSample>& samples,bool tiled=false,bool mixed=false,bool empty_first=false,const std::string& compression="zips",int rows=1){
+static void fixture(const fs::path& path,const std::vector<DeepSample>& samples,bool tiled=false,bool mixed=false,bool empty_first=false,const std::string& compression="zips",int rows=1,bool vary_rows=false){
     OIIO::ImageSpec spec(empty_first?2:1,rows,9,OIIO::TypeDesc::FLOAT);spec.deep=true;spec.x=-5;spec.y=7;spec.full_x=-5;spec.full_y=7;
     spec.channelnames={"Beauty.R","Beauty.G","Beauty.B","Alpha.R","Alpha.G","Alpha.B","Depth.Z","Depth.Zback","unused_id"};
     spec.z_channel=6;spec.alpha_channel=-1;spec.attribute("compression",compression);
     if(mixed){spec.channelformats.assign(9,OIIO::TypeDesc::HALF);spec.channelformats[6]=spec.channelformats[7]=OIIO::TypeDesc::FLOAT;spec.channelformats[8]=OIIO::TypeDesc::UINT32;}
     OIIO::ImageBuf image(spec);if(tiled)image.set_write_tiles(2,2,1);
     for(int y=0;y<spec.height;++y)for(int x=0;x<spec.width;++x){
-        const int count=empty_first && x==0?0:int(samples.size());image.set_deep_samples(spec.x+x,spec.y+y,0,count);
+        const int count=empty_first && x==0?0:vary_rows?(y%4==1?1:y%4==2?int(samples.size()):0):int(samples.size());image.set_deep_samples(spec.x+x,spec.y+y,0,count);
         for(int s=0;s<count;++s){for(int c=0;c<3;++c){image.set_deep_value(spec.x+x,spec.y+y,0,c,s,samples[s].colour[c]);image.set_deep_value(spec.x+x,spec.y+y,0,c+3,s,samples[s].alpha[c]);}
             image.set_deep_value(spec.x+x,spec.y+y,0,6,s,samples[s].z);image.set_deep_value(spec.x+x,spec.y+y,0,7,s,samples[s].zback);image.set_deep_value(spec.x+x,spec.y+y,0,8,s,std::uint32_t(17));}
     }
@@ -76,6 +76,35 @@ int main(){
             for(int y=0;y<3;++y)for(int c=0;c<6;++c){require(image.pixels[y*12+c]==0,"empty Deep pixel is not black/transparent");require(image.pixels[y*12+6+c]==expected[c],"associated per-component alpha/half/UINT skip differs");}
             DeepReadLimits limits;limits.bytes=image.peak_accounted_bytes;auto exact=read_deep_image(path,0,mapping(),limits);require(exact.peak_accounted_bytes==limits.bytes,"exact combined budget differs");
             --limits.bytes;rejected("deep_decode_limit_exceeded",[&]{read_deep_image(path,0,mapping(),limits);});
+        }
+        for(bool tiled:{false,true})for(bool mixed:{false,true})for(const std::string compression:{"none","zips"}){
+            fixture(path,points,tiled,mixed,true,compression,9,true);auto original=bytes(path);auto varied=read_deep_image(path,0,mapping());
+            require(varied.chunks==(tiled?5:9) && varied.samples==6,"changing chunk sample count differs");
+            const float pair[]={.5f,.8125f,.5f,.5f,.8125f,.5f};
+            const float single[]={0,.75f,.5f,0,.75f,.5f};
+            for(int y=0;y<9;++y)for(int c=0;c<6;++c){
+                require(varied.pixels[y*12+c]==0,"empty column retained prior chunk data");
+                const float expected=y%4==1?single[c]:y%4==2?pair[c]:0;
+                require(varied.pixels[y*12+6+c]==expected,"changing chunk retained stale counts or channel pointers");
+            }
+            require(bytes(path)==original,"changing-chunk reader changed source");
+            DeepReadLimits exact;exact.bytes=varied.peak_accounted_bytes;require(read_deep_image(path,0,mapping(),exact).peak_accounted_bytes==exact.bytes,"changing-chunk budget differs");
+            --exact.bytes;rejected("deep_decode_limit_exceeded",[&]{read_deep_image(path,0,mapping(),exact);});
+            int observed=0;try {
+                read_deep_image(path,0,mapping(),{},[&](const char* phase){if(std::string(phase)=="counts" && ++observed==3)throw std::runtime_error("later chunk cancellation");});
+                throw std::runtime_error("later cancellation ignored");
+            }catch(const std::runtime_error& failure){require(std::string(failure.what())=="later chunk cancellation","later cancellation changed");}
+            require(bytes(path)==original,"later cancellation changed source");
+        }
+        for(const std::string compression:{"none","zips"}){
+            fixture(path,points,false,false,false,compression,1);auto single=read_deep_image(path,0,mapping());
+            fixture(path,points,false,false,false,compression,32);auto many=read_deep_image(path,0,mapping());
+            std::cout<<compression<<" allocator requests: one chunk="<<single.core_allocation_requests<<", 32 chunks="<<many.core_allocation_requests<<'\n';
+            // The failure-safe legacy ZIP path still creates one codec
+            // context per compressed chunk. Require reuse of the other Core
+            // buffers without requiring that upstream codec cache to work.
+            const auto codec_requests=compression=="zips"?many.chunks-single.chunks:0;
+            require(many.core_allocation_requests<=single.core_allocation_requests+codec_requests+8,"Core buffer allocations scale with identical chunks");
         }
         fixture(path,points,false,false,true,"none",3);DeepReadLimits accumulated;accumulated.samples_per_image=4;int decoded_chunks=0;
         rejected("deep_sample_limit_exceeded",[&]{read_deep_image(path,0,mapping(),accumulated,[&](const char* phase){if(std::string(phase)=="decoded_chunk")++decoded_chunks;});});

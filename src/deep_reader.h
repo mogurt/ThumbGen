@@ -35,6 +35,9 @@ struct DeepImage {
     // additive RGB at zero alpha remains associated data, not straight PNG.
     std::unique_ptr<float[]> pixels;
     std::size_t bytes=0,peak_accounted_bytes=0;
+    // Internal diagnostic: calls to the request-scoped Core allocator.
+    // Excludes our reserved output/plane/kernel arrays and process memory.
+    std::size_t core_allocation_requests=0;
     std::uint64_t samples=0,chunks=0;
 };
 using DeepCheckpoint=std::function<void(const char* phase)>;
