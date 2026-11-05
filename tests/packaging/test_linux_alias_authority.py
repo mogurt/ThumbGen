@@ -8,6 +8,9 @@ import subprocess
 import sys
 import unittest
 
+if __name__ != '__main__':
+    raise unittest.SkipTest('Explicit Linux native fixture run required: --work NEW_DIRECTORY')
+
 parser = argparse.ArgumentParser()
 parser.add_argument('--work', required=True, type=Path)
 args, remaining = parser.parse_known_args()

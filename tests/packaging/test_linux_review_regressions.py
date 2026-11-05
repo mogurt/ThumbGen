@@ -9,6 +9,9 @@ import sys
 import tarfile
 import unittest
 
+if __name__ != '__main__':
+    raise unittest.SkipTest('Explicit Linux integration run required: --work, --reference and --archive')
+
 parser = argparse.ArgumentParser()
 parser.add_argument('--work', required=True, type=Path)
 parser.add_argument('--reference', required=True, type=Path)
