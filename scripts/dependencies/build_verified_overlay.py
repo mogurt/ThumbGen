@@ -73,6 +73,19 @@ def build(kind, root, lcms_cache=None, jpeg_cache=None, source_cache=None, sdk=N
         run(name + '-install', ['cmake', '-DCMAKE_INSTALL_CONFIG_NAME=Release', '--trace-expand',
             '--trace-format=json-v1', '--trace-redirect=' + str(root / (name + '-install-trace.jsonl')),
             '-P', str(build_dir / 'cmake_install.cmake')])
+    return capture(kind, root)
+
+
+def capture(kind, root):
+    """Finish an interrupted post-build audit, retaining the original failed log.
+
+    Requires the wrapper's original successful command records and complete
+    native tree; cannot import an arbitrary installed prefix or generic map.
+    """
+    root = root.resolve(strict=True)
+    prefix = root / ('sdk' if kind == 'color' else 'prefix')
+    if (root / 'overlay-provenance.json').exists():
+        raise ValueError('Existing native provenance is immutable; verify it instead')
     observed = provenance.observe(policy, kind, prefix)
     with (root / 'overlay-provenance.json').open('x', encoding='utf-8') as stream:
         json.dump(observed, stream, indent=2); stream.write('\n')
@@ -85,7 +98,9 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--kind', choices=('color', 'bounded'), required=True)
     parser.add_argument('--root', type=Path, required=True)
+    parser.add_argument('--audit-existing', action='store_true', help='Finish a failed post-build audit without rebuilding or changing the installation')
     for name in ('lcms-cache', 'jpeg-cache', 'source-cache', 'sdk'):
         parser.add_argument('--' + name, type=Path)
     args = parser.parse_args()
-    print(json.dumps(build(args.kind, args.root, args.lcms_cache, args.jpeg_cache, args.source_cache, args.sdk)))
+    print(json.dumps(capture(args.kind, args.root) if args.audit_existing else
+                     build(args.kind, args.root, args.lcms_cache, args.jpeg_cache, args.source_cache, args.sdk)))
