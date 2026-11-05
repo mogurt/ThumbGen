@@ -9,14 +9,14 @@ import subprocess
 import tempfile
 import zipfile
 
-from runtime_closure import audit, digest
+from runtime_closure import audit, digest, overlays
 
 
 def encode(value):
     return (json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False) + '\n').encode('utf-8')
 
 
-def pack(exe, sdk, evidence_file, output, runtime_notices):
+def pack(exe, sdk, evidence_file, output, runtime_notices, color_overlay=None, bounded_overlay=None):
     repo = Path(__file__).resolve().parents[2]
     evidence = json.loads(evidence_file.read_text(encoding='utf-8'))
     sdk_receipt_file = sdk / 'sdk/thumbgen-sdk.json'
@@ -27,21 +27,21 @@ def pack(exe, sdk, evidence_file, output, runtime_notices):
     if (evidence.get('kind') != 'thumbgen-tested-windows-product' or evidence['exe_sha256'] != digest(exe)
             or evidence['sdk_receipt_sha256'] != digest(sdk_receipt_file)):
         raise ValueError('Executable/SDK differs from frozen validation evidence')
-    closure = audit(exe, sdk, Path(os.environ['SystemRoot']) / 'System32')
-    if closure['files'] != evidence['closure']['files'] or closure['sdk_profile'] != 'source':
+    closure = audit(exe, sdk, Path(os.environ['SystemRoot']) / 'System32', color_overlay, bounded_overlay)
+    if (closure['files'] != evidence['closure']['files'] or closure['sdk_profile'] != 'source'
+            or closure.get('overlays', []) != evidence['closure'].get('overlays', [])):
         raise ValueError('Runtime closure differs from frozen validation evidence')
     payload, components = {}, []
 
     def add(relative, value):
         path = PurePosixPath(relative)
-        if path.is_absolute() or '..' in path.parts or '\\' in relative or relative in payload:
+        if (path.is_absolute() or '..' in path.parts or '\\' in relative or ':' in relative
+                or relative != '/'.join(path.parts) or relative.casefold() in {x.casefold() for x in payload}):
             raise ValueError('Unsafe/duplicate archive entry: ' + relative)
         payload[relative] = value
 
     for item in closure['files']:
-        original = exe if item['name'].lower() == exe.name.lower() else next(
-            root / item['name'] for root in (sdk / 'sdk/bin', sdk / 'oiio-deps/dist/bin')
-            if (root / item['name']).is_file())
+        original = Path(item['source_path'])
         if digest(original) != item['sha256']:
             raise ValueError('Runtime file changed: ' + item['name'])
         add('bin/' + item['name'], original)
@@ -81,6 +81,33 @@ def pack(exe, sdk, evidence_file, output, runtime_notices):
             raise ValueError('SDK source patch differs from receipt: ' + component['package'])
         if patch:
             add('provenance/patches/' + component['package'] + '.patch', patch)
+    for kind, prefix in (('color', color_overlay), ('bounded', bounded_overlay)):
+        if prefix is None:
+            continue
+        report, _, materials = overlays.verify(kind, prefix)
+        for relative, data in materials.items():
+            add(relative, data)
+        components.extend(report['components'])
+        add('provenance/' + kind + '-overlay.json', encode(report))
+        add('provenance/' + kind + '-receipt.json', (prefix.resolve().parent / 'receipt.json').read_bytes())
+    if bounded_overlay and not evidence.get('build_provenance', {}).get('bounded_core_link'):
+        raise ValueError('Missing frozen static bounded Core link evidence')
+    if color_overlay or bounded_overlay:
+        provenance = evidence['build_provenance']
+        link = Path(provenance['link_command_path'])
+        if digest(link) != provenance['link_command_sha256']:
+            raise ValueError('Frozen linker command differs')
+        command = link.read_text(encoding='utf-16').lower().replace('\\', '/')
+        libraries = []
+        if color_overlay:
+            libraries += [color_overlay.resolve() / 'lib/lcms2.lib', color_overlay.resolve() / 'lib/jpeg.lib']
+        if bounded_overlay:
+            libraries.append(bounded_overlay.resolve() / 'lib/OpenEXRCore_v_3_5_0_OpenImageIO_v3_2.lib')
+        for library in libraries:
+            if (provenance['selected_libraries'].get(str(library)) != digest(library) or
+                    library.as_posix().lower() not in command):
+                raise ValueError('Frozen overlay link source differs: ' + str(library))
+        add('provenance/link.command.1.tlog', link.read_bytes())
     if not runtime_notices:
         raise ValueError('Supply the selected Visual Studio runtime notice materials')
     notices = []
@@ -92,12 +119,21 @@ def pack(exe, sdk, evidence_file, output, runtime_notices):
     components.append(dict(name='MSVC-runtime', version=Path(sdk_receipt['runtime']['source']).name,
                            source='Selected Visual Studio 2022 redistributable', notices=notices,
                            review='Original installed VS notice materials retained; runtime redistribution terms require final review.'))
+    notice_index = ['INTERNAL EVALUATION CANDIDATE - project license not selected.',
+                    'This index preserves upstream notices; redistribution review remains open.', '']
+    for component in components:
+        notice_index.append(component['name'] + ' (' + str(component.get('version', '')) + ')')
+        for notice in component['notices']:
+            notice_index.append('  ' + notice['file'] + '  sha256=' + notice['sha256'])
+    add('NOTICE.txt', ('\n'.join(notice_index) + '\n').encode('utf-8'))
     add('SOURCE-PROVENANCE.json', encode(dict(source_lock=sdk_receipt['source_lock'],
         source_lock_sha256=sdk_receipt['source_lock_sha256'], build_scripts_sha256=sdk_receipt['build_scripts_sha256'],
         nasm_sha256=sdk_receipt['nasm_sha256'], source_snapshot=evidence['source_snapshot'],
         source_commit_at_collection=evidence['source_commit_at_collection'], actual_identity=evidence['identity'],
-        tests=evidence['ctest'], sdk_receipt_sha256=evidence['sdk_receipt_sha256'])))
+        tests=evidence['ctest'], sdk_receipt_sha256=evidence['sdk_receipt_sha256'],
+        overlays=closure.get('overlays', []), build_provenance=evidence.get('build_provenance'))))
     recipes = {name: digest(Path(__file__).parent / name) for name in ('package_runtime.py', 'runtime_closure.py', 'freeze_product.py')}
+    recipes['dependencies/windows_overlays.py'] = digest(Path(overlays.__file__))
     manifest = dict(kind='internal-evaluation-candidate', redistribution_ready=False, project_license='not selected',
                     identity=evidence['identity'], executable_sha256=digest(exe), runtime_files=closure['files'],
                     system_dependencies=closure['system_dependencies'], components=components, package_recipes_sha256=recipes,
@@ -153,5 +189,7 @@ if __name__ == '__main__':
     parser.add_argument('--evidence', type=Path, required=True)
     parser.add_argument('--runtime-notice', type=Path, action='append', default=[])
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--color-overlay', type=Path)
+    parser.add_argument('--bounded-overlay', type=Path)
     args = parser.parse_args()
-    print(json.dumps(pack(args.exe.resolve(), args.sdk.resolve(), args.evidence.resolve(), args.output.resolve(), args.runtime_notice), indent=2))
+    print(json.dumps(pack(args.exe.resolve(), args.sdk.resolve(), args.evidence.resolve(), args.output.resolve(), args.runtime_notice, args.color_overlay, args.bounded_overlay), indent=2))
