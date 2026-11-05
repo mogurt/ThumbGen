@@ -42,6 +42,24 @@ def verify_cache(cache, commit):
     return git(cache, 'ls-tree', '-r', '-z', commit)
 
 
+def output_location(output, readonly, root):
+    output = Path(output).resolve()
+    root = Path(root).resolve()
+    if output.exists():
+        raise ValueError('--output must not exist')
+    for source in readonly:
+        source = Path(source).resolve(strict=True)
+        if output == source or output in source.parents or source in output.parents:
+            raise ValueError('--output must be separate from read-only inputs/source')
+    # CI intentionally keeps fresh build outputs in the checkout's .deps.
+    # Compare resolved targets to the literal private directory so a .deps
+    # symlink into tracked source cannot authorize source-tree writes.
+    if output == root or output in root.parents or (
+            root in output.parents and root / '.deps' not in output.parents):
+        raise ValueError('--output inside a checkout must be beneath .deps')
+    return output
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--openexr-cache', required=True, type=Path)
@@ -51,15 +69,13 @@ def main():
     a = p.parse_args()
     if sys.platform != 'linux':
         p.error('This portable x64/GCC recipe currently requires Linux')
-    output = a.output.resolve()
     caches = {name: path.resolve(strict=True) for name, path in
               [('OpenEXR', a.openexr_cache), ('OpenImageIO', a.oiio_cache)]}
     deps = a.deps_prefix.resolve(strict=True)
-    if output.exists():
-        p.error('--output must not exist')
-    for path in [*caches.values(), deps, ROOT]:
-        if output == path or output in path.parents or path in output.parents:
-            p.error('--output must be separate from read-only inputs/source')
+    try:
+        output = output_location(a.output, [*caches.values(), deps], ROOT)
+    except ValueError as error:
+        p.error(str(error))
     lock = json.loads(LOCK.read_text())
     exr = next(x for x in lock['dependencies'] if x['package'] == 'OpenEXR')
     if exr['version'] != '3.5.0' or lock['oiio_tag'] != 'v3.2.1.2':

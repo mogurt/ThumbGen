@@ -62,6 +62,48 @@ class SourceBoundary(unittest.TestCase):
         self.assertEqual(error.exception.code, 2)
         self.assertEqual(marker.read_bytes(), b'preserve')
 
+    def test_checkout_private_ci_output_reaches_source_verification(self):
+        checkout = self.root / 'project'
+        checkout.mkdir()
+        output = checkout / '.deps/ci-product-deps/portable-dwa'
+        args = ['builder', '--openexr-cache', str(self.cache), '--oiio-cache', str(self.cache),
+                '--deps-prefix', str(self.cache), '--output', str(output)]
+        with patch.object(builder, 'ROOT', checkout), patch.object(builder.sys, 'platform', 'linux'), \
+                patch.object(builder.sys, 'argv', args), \
+                patch.object(builder, 'verify_cache', side_effect=RuntimeError('source verification reached')):
+            with self.assertRaisesRegex(RuntimeError, 'source verification reached'):
+                builder.main()
+        self.assertFalse(output.exists())
+
+    def test_tracked_source_destination_and_nested_cache_refused(self):
+        checkout = self.root / 'project'
+        cache = checkout / '.deps/cache'
+        cache.mkdir(parents=True)
+        for output in (checkout / 'scripts/new', checkout / 'new', cache / 'nested'):
+            with self.subTest(output=output), self.assertRaises(ValueError):
+                builder.output_location(output, [cache], checkout)
+            self.assertFalse(output.exists())
+
+    def test_external_private_output_still_allowed(self):
+        checkout = self.root / 'project'
+        checkout.mkdir()
+        output = self.root / 'separate-build'
+        self.assertEqual(builder.output_location(output, [self.cache], checkout), output)
+        self.assertFalse(output.exists())
+
+    def test_private_symlink_into_source_is_not_authorized(self):
+        checkout = self.root / 'project'
+        source = checkout / 'src'
+        source.mkdir(parents=True)
+        try:
+            (checkout / '.deps').symlink_to(source, target_is_directory=True)
+        except OSError as error:
+            self.skipTest('Directory symlinks unavailable: ' + str(error))
+        output = checkout / '.deps/new'
+        with self.assertRaises(ValueError):
+            builder.output_location(output, [self.cache], checkout)
+        self.assertFalse((source / 'new').exists())
+
 
 if __name__ == '__main__':
     unittest.main()
