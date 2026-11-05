@@ -7,8 +7,37 @@ import math
 from pathlib import Path
 
 
+def require(value, message):
+    if not value:
+        raise ValueError(message)
+
+
 def sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def validate_cms_reference(reference):
+    lock = json.loads((Path(__file__).resolve().parents[2] / 'tests/packaging/linux-cms-reference-v1.json').read_text())
+    golden = json.loads((reference / 'report.json').read_text())
+    require(isinstance(golden, dict), 'CMS reference report must be an object')
+    rows = golden.get('cases')
+    require(isinstance(rows, list) and all(isinstance(row, dict) for row in rows) and len(rows) == len(lock['cases']) and
+            {row.get('name') for row in rows} == set(lock['cases']), 'CMS reference case set differs from authored coverage')
+    for row in rows:
+        identity = lock['cases'][row['name']]
+        image = reference / row['name']
+        require(image.is_file() and row.get('source_sha256') == identity['input_sha256'] and sha(image) == identity['input_sha256'],
+                'CMS reference input identity differs: ' + row['name'])
+        expected = row.get('expected')
+        require(isinstance(expected, list) and len(expected) == identity['width'] * identity['height'] and
+                all(isinstance(pixel, list) and len(pixel) == identity['bands'] and
+                    all(type(v) is int and 0 <= v <= 255 for v in pixel) for pixel in expected),
+                'CMS reference pixel dimensions differ: ' + row['name'])
+        encoded = json.dumps(expected, separators=(',', ':')).encode()
+        require(hashlib.sha256(encoded).hexdigest() == identity['expected_sha256'], 'CMS formula expectation identity differs: ' + row['name'])
+    config = reference / 'project.ocio'
+    require(config.is_file() and sha(config) == lock['project_config_sha256'], 'CMS project config identity differs')
+    return rows, lock
 
 
 def exercise(exe, output, source, fixtures, cms_reference, deep_fixtures, command, cms_native=None):
@@ -18,24 +47,28 @@ def exercise(exe, output, source, fixtures, cms_reference, deep_fixtures, comman
     report = dict(oracle_sha256=sha(source / 'tests/qa/alpha_reference.py'), cms=[], deep=[], alpha=[], batch=None)
     def save():
         (directory / 'report.json').write_text(json.dumps(report, indent=2)+'\n')
-    golden = json.loads((cms_reference / 'report.json').read_text())
+    rows, cms_lock = validate_cms_reference(cms_reference)
     report['cms_reference_sha256'] = sha(cms_reference / 'report.json')
-    for row in golden['cases']:
+    for row in rows:
         image = cms_reference / row['name']
         assert sha(image) == row['source_sha256']
         target = directory / (row['name']+'.png')
-        values = row['command'][:]; values[0] = str(exe); values[2] = str(image)
-        values[values.index('--output')+1] = str(target)
-        if row['name'] == 'project.png':
-            values[values.index('--ocio-config')+1] = str(cms_reference / 'project.ocio')
+        values = [str(exe), 'convert', str(image), '--output', str(target), '--size', '8', '--preset', 'fast',
+                  '--threads', '1', '--ocio-config', str(cms_reference / 'project.ocio') if row['name'] == 'project.png' else 'ocio://default']
+        if row['name'] in ('rgba.png', 'gray-alpha.png', 'associated.tif'):
+            values += ['--background', 'transparent']
+        if row['name'] == 'bypass.png':
+            values += ['--input-space', 'sRGB']
+        values += ['--json']
         records = [json.loads(line) for line in command(*values).splitlines() if line.strip()]
         w,h,bands,pixels = oracle.read_png(target)
         expected = row['expected']
-        assert (w,h,len(pixels)) == (8,8,64) and bands == len(expected[0])
+        identity = cms_lock['cases'][row['name']]
+        require((w,h,bands,len(pixels)) == (identity['width'], identity['height'], identity['bands'], len(expected)), 'CMS actual output dimensions differ')
         error = max(abs(a-b) for p,e in zip(pixels,expected) for a,b in zip(p,e))
-        report['cms'].append(dict(name=row['name'], source_sha256=sha(image), output_sha256=sha(target),
+        report['cms'].append(dict(name=row['name'], width=w, height=h, bands=bands, source_sha256=sha(image), output_sha256=sha(target),
             expected=expected, actual=pixels, max_lsb=error, records=records))
-        save(); assert error <= 2 and sha(image) == row['source_sha256']
+        save(); require(error <= 2 and sha(image) == row['source_sha256'], 'CMS pixel comparison or unchanged input check failed')
     def srgb(v):
         return round(255*(12.92*v if v <= .0031308 else 1.055*v**(1/2.4)-.055))
     deep_sources=[]
@@ -85,5 +118,6 @@ def exercise(exe, output, source, fixtures, cms_reference, deep_fixtures, comman
         report['native_cms']=dict(executable_sha256=sha(cms_native), stdout=command(str(cms_native)))
     report['scope']='Authored CMS formula references, authored ZSTD stripe formulas, Decimal Lanczos oracle; package-external tools only'
     save()
-    return dict(cms_cases=len(report['cms']),cms_pixels=704,deep_cases=2,deep_pixels=2322,alpha_cases=3,
-                alpha_pixels=12,batch_statuses=[r['status'] for r in results],native_cms=bool(cms_native),report=str(directory/'report.json'))
+    return dict(cms_cases=len(report['cms']),cms_pixels=sum(len(r['actual']) for r in report['cms']),
+                deep_cases=len(report['deep']),deep_pixels=sum(len(r['actual']) for r in report['deep']),alpha_cases=len(report['alpha']),
+                alpha_pixels=sum(len(r['actual']) for r in report['alpha']),batch_statuses=[r['status'] for r in results],native_cms=bool(cms_native),report=str(directory/'report.json'))

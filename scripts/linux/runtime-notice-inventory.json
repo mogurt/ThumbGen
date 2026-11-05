@@ -1,0 +1,437 @@
+{
+  "kind": "locked-upstream-notices-v1",
+  "components": {
+    "OpenImageIO": {
+      "commit": "5c4408f545f1da5f30102c5f1c7151dbd9faf522",
+      "version": "3.2.1.2",
+      "notices": [
+        {
+          "file": "licenses/OpenImageIO/LICENSE.md",
+          "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+        },
+        {
+          "file": "licenses/OpenImageIO/THIRD-PARTY.md",
+          "sha256": "1e86c485c25256a807b11c6f56014acac43bdc297944c2d6b4af16fd65188c2b"
+        }
+      ]
+    },
+    "ZLIB": {
+      "commit": "51b7f2abdade71cd9bb0e7a373ef2610ec6f9daf",
+      "version": "1.3.1",
+      "notices": [
+        {
+          "file": "licenses/ZLIB/LICENSE",
+          "sha256": "845efc77857d485d91fb3e0b884aaa929368c717ae8186b66fe1ed2495753243"
+        },
+        {
+          "file": "licenses/ZLIB/contrib/dotzlib/LICENSE_1_0.txt",
+          "sha256": "36266a8fd073568394cb81cdb2b124f7fdae2c64c1a7ed09db34b4d22efa2951"
+        }
+      ]
+    },
+    "Imath": {
+      "commit": "5f27ba266d3ea1565e912570c30b5eafc89959f1",
+      "version": "3.2.3",
+      "notices": [
+        {
+          "file": "licenses/Imath/LICENSE.md",
+          "sha256": "c20236d3b39fd20eba8e3d1fb3b892a5483df2e7d8d61bf43f165d3fac22f601"
+        }
+      ]
+    },
+    "OpenEXR": {
+      "commit": "5d838e01770cadb8f2a36c0d17018452fa7a3c0c",
+      "version": "3.5.0",
+      "notices": [
+        {
+          "file": "licenses/OpenEXR/Contrib/DtexToExr/AUTHORS",
+          "sha256": "001ea4855801e70deef7213ca2f3c5fa8b709b31b36873d19a69e2f4a334a89b"
+        },
+        {
+          "file": "licenses/OpenEXR/LICENSE.md",
+          "sha256": "84853c91d4c2e0310741d4773469d98bb93e61029608e0ba0882a3fffdf330bd"
+        },
+        {
+          "file": "licenses/OpenEXR/PATENTS",
+          "sha256": "7f5dee333a82cab38b3567b85ec52a74487a5b2a8f4097eb8b4071c892c47b12"
+        },
+        {
+          "file": "licenses/OpenEXR/external/OpenJPH/LICENSE",
+          "sha256": "5ddf5177863dfc9ab65fa129d587db651241f00e21ed2427b218bea997591f98"
+        },
+        {
+          "file": "licenses/OpenEXR/external/deflate/COPYING",
+          "sha256": "4ad69099cb4374836fd27583d9991e2838cd86b6e4666ab26b2d32582c91e73a"
+        },
+        {
+          "file": "licenses/OpenEXR/external/zstd/LICENSE",
+          "sha256": "7055266497633c9025b777c78eb7235af13922117480ed5c674677adc381c9d8"
+        }
+      ]
+    },
+    "libjpeg-turbo": {
+      "commit": "4e151a4ad91001b3aa8c2ece2205c15f487ce320",
+      "version": "3.1.2",
+      "notices": [
+        {
+          "file": "licenses/libjpeg-turbo/LICENSE.md",
+          "sha256": "2189dc45a8fe96204069f8124caa53a148dfdc193f50f584c6ca7849a6072872"
+        },
+        {
+          "file": "licenses/libjpeg-turbo/README.ijg",
+          "sha256": "75815e3bf6484201a3c3d17a1bbf10f2e8e3237f84df10a2357ea896db2a81d6"
+        },
+        {
+          "file": "licenses/libjpeg-turbo/release/License.rtf",
+          "sha256": "d26120ab237f87dea10aa4fa7fd4243cadffd26e54eb2f3903d5fb0f8ed336b2"
+        }
+      ]
+    },
+    "TIFF": {
+      "commit": "5fe20d0e9aba49a6a350ed533459d1505203838f",
+      "version": "4.7.1",
+      "notices": [
+        {
+          "file": "licenses/TIFF/LICENSE.md",
+          "sha256": "0e27c2382d7b8147972bbb746e04059a1152c8d0fda9d03ef1399d1a433c4ade"
+        }
+      ]
+    },
+    "PNG": {
+      "commit": "3061454d980de7d53608f594194cfac722721d2a",
+      "version": "1.6.58",
+      "notices": [
+        {
+          "file": "licenses/PNG/AUTHORS",
+          "sha256": "0c777e9f2a67bd4058ab91050eb7a56106c92ed038ba8fe5f54c83344f2d93ca"
+        },
+        {
+          "file": "licenses/PNG/LICENSE",
+          "sha256": "bdb0a645ea18c60507d0368379b1ac5474b92255fcc2d115e07486a7672ba526"
+        },
+        {
+          "file": "licenses/PNG/ci/LICENSE_MIT.txt",
+          "sha256": "508a77d2e7b51d98adeed32648ad124b7b30241a8e70b2e72c99f92d8e5874d1"
+        },
+        {
+          "file": "licenses/PNG/contrib/gregbook/COPYING",
+          "sha256": "d6cb0e9e560f51085556949a84af12b79a00f10ab8b66c752537faf7cd665572"
+        },
+        {
+          "file": "licenses/PNG/contrib/gregbook/LICENSE",
+          "sha256": "b6a03c1803eb58ffb1f1278d5c7d4096c4c116e66dce8a7553e8c77d163c3438"
+        },
+        {
+          "file": "licenses/PNG/contrib/pngexif/LICENSE_MIT.txt",
+          "sha256": "508a77d2e7b51d98adeed32648ad124b7b30241a8e70b2e72c99f92d8e5874d1"
+        },
+        {
+          "file": "licenses/PNG/contrib/pngminus/LICENSE.txt",
+          "sha256": "1806f1f10d393e9e377b3a8d1b968452b54f1a90378f14eeef45426946ace330"
+        },
+        {
+          "file": "licenses/PNG/scripts/cmake/AUTHORS.md",
+          "sha256": "50633b976f0133862c921aa67d56de2c0b42eb344c8ca3853686efb092a447db"
+        }
+      ]
+    },
+    "WebP": {
+      "commit": "4fa21912338357f89e4fd51cf2368325b59e9bd9",
+      "version": "1.6.0",
+      "notices": [
+        {
+          "file": "licenses/WebP/AUTHORS",
+          "sha256": "f251be89fd442bd9d701360730aea163cc8e2076ff03528f59267dc2c4f8b60a"
+        },
+        {
+          "file": "licenses/WebP/COPYING",
+          "sha256": "5aec868f669e384a22372a4e8a1a6cd7d44c64cd451f960ca69cc170d1e13acf"
+        },
+        {
+          "file": "licenses/WebP/PATENTS",
+          "sha256": "cc3273e0694ea5896145e0677699b53471b03ea43021ddc50e7923fbb9f5023c"
+        }
+      ]
+    },
+    "OpenColorIO": {
+      "commit": "004f80009653fa322c1133ba2c57b8ed526599c9",
+      "version": "2.5.1",
+      "notices": [
+        {
+          "file": "licenses/OpenColorIO/LICENSE",
+          "sha256": "82a40c52065ee968aa62015735e84378ac11425db7a233e6a2dcd2c83fc24276"
+        },
+        {
+          "file": "licenses/OpenColorIO/THIRD-PARTY.md",
+          "sha256": "2e0df1b675fcd133b78360b4d40539518ea1c2081be68e91a456fb9db51c5009"
+        },
+        {
+          "file": "licenses/OpenColorIO/vendor/openfx/Support/LICENSE",
+          "sha256": "1e52150d77eb6c335db92ea82cbd7dc8a837a1fd2f08f192b108d89251a8f147"
+        }
+      ]
+    },
+    "fmt": {
+      "commit": "407c905e45ad75fc29bf0f9bb7c5c2fd3475976f",
+      "version": "12.1.0",
+      "notices": [
+        {
+          "file": "licenses/fmt/LICENSE",
+          "sha256": "07580f2a3b35709ce703d523f447b242f6dfec7582a8c0df102c7fa2849375f8"
+        }
+      ]
+    },
+    "Robinmap": {
+      "commit": "bd14e6830a1474fed9d2d03f5c3b0683d818d540",
+      "version": "1.4.1",
+      "notices": [
+        {
+          "file": "licenses/Robinmap/LICENSE",
+          "sha256": "11f2c685ba565a31aef1219f63a7a8845602c97bff70016b9e3278dfe51a2ec5"
+        }
+      ]
+    },
+    "libdeflate": {
+      "commit": "78051988f96dc8d8916310d8b24021f01bd9e102",
+      "version": "1.23",
+      "notices": [
+        {
+          "file": "licenses/libdeflate/COPYING",
+          "sha256": "4ad69099cb4374836fd27583d9991e2838cd86b6e4666ab26b2d32582c91e73a"
+        }
+      ]
+    },
+    "zstd": {
+      "commit": "f8745da6ff1ad1e7bab384bd1f9d742439278e99",
+      "version": "1.5.7",
+      "notices": [
+        {
+          "file": "licenses/zstd/COPYING",
+          "sha256": "f9c375a1be4a41f7b70301dd83c91cb89e41567478859b77eef375a52d782505"
+        },
+        {
+          "file": "licenses/zstd/LICENSE",
+          "sha256": "7055266497633c9025b777c78eb7235af13922117480ed5c674677adc381c9d8"
+        },
+        {
+          "file": "licenses/zstd/build/LICENSE",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      ]
+    },
+    "pystring": {
+      "commit": "1922c8f2b48e3beb6831c27b4811b58995e986cf",
+      "version": "1.2.0",
+      "notices": [
+        {
+          "file": "licenses/pystring/LICENSE",
+          "sha256": "f7f060301402ea0b5c507b865b1a9de037d4d7b24f37422a93b70fe9c7a9b78a"
+        }
+      ]
+    },
+    "expat": {
+      "commit": "88b3ed553d8ad335559254863a33360d55b9f1d6",
+      "version": "2.6.3",
+      "notices": [
+        {
+          "file": "licenses/expat/COPYING",
+          "sha256": "122f2c27000472a201d337b9b31f7eb2b52d091b02857061a8880371612d9534"
+        },
+        {
+          "file": "licenses/expat/expat/AUTHORS",
+          "sha256": "59f14371c6b75912cfebb46e6247ee5146766e803a0365b124e5d3011e7d0877"
+        },
+        {
+          "file": "licenses/expat/expat/COPYING",
+          "sha256": "122f2c27000472a201d337b9b31f7eb2b52d091b02857061a8880371612d9534"
+        }
+      ]
+    },
+    "yaml-cpp": {
+      "commit": "f7320141120f720aecc4c32be25586e7da9eb978",
+      "version": "0.8.0",
+      "notices": [
+        {
+          "file": "licenses/yaml-cpp/LICENSE",
+          "sha256": "aa6fcc27be034e41e21dd832f9175bfe694a48491d9e14ff0fa278e19ad14f1b"
+        }
+      ]
+    },
+    "minizip-ng": {
+      "commit": "f3ed731e27a97e30dffe076ed5e0537daae5c1bd",
+      "version": "4.0.10",
+      "notices": [
+        {
+          "file": "licenses/minizip-ng/LICENSE",
+          "sha256": "675181c03fc1302a1c8554c00f7be9bb420c5dbc9dcc2013433cec144413de03"
+        }
+      ]
+    },
+    "nlohmann_json": {
+      "commit": "9cca280a4d0ccf0c08f47a99aa71d1b0e52f8d03",
+      "version": "3.11.3",
+      "notices": [
+        {
+          "file": "licenses/nlohmann_json/LICENSE.MIT",
+          "sha256": "86b998c792894ccb911a1cb7994f7a9652894e7a094c0b5e45be2f553f45cf14"
+        }
+      ]
+    },
+    "LittleCMS2-shared": {
+      "commit": "7717fce0d85447ef3b2df0cca2e99207c15eeecd",
+      "version": "2.20",
+      "notices": [
+        {
+          "file": "licenses/LittleCMS2-shared/AUTHORS",
+          "sha256": "4847d97cd41e980794939b1d2694bd8f67b92856ec80e95c2fcfc34066f0df93"
+        },
+        {
+          "file": "licenses/LittleCMS2-shared/LICENSE",
+          "sha256": "6dbd60437f8ef91d8de1f08ad75882547fd4931bfcc3566a0735f28db1484d31"
+        },
+        {
+          "file": "licenses/LittleCMS2-shared/plugins/fast_float/COPYING.GPL3",
+          "sha256": "c53a65c2fd561c87eaabf1072ef5dcab8653042bc15308465f52413585eb6271"
+        },
+        {
+          "file": "licenses/LittleCMS2-shared/plugins/threaded/COPYING.GPL3",
+          "sha256": "c53a65c2fd561c87eaabf1072ef5dcab8653042bc15308465f52413585eb6271"
+        },
+        {
+          "file": "licenses/LittleCMS2-shared/utils/jpgicc/LICENSE_iccjpeg",
+          "sha256": "8baac37d14eed89b82ffcb041677dd701164eb5cc0f26e165fe47eb11afa0dca"
+        }
+      ]
+    },
+    "JPEG-shared": {
+      "commit": "4e151a4ad91001b3aa8c2ece2205c15f487ce320",
+      "version": "3.1.2",
+      "notices": [
+        {
+          "file": "licenses/JPEG-shared/LICENSE.md",
+          "sha256": "2189dc45a8fe96204069f8124caa53a148dfdc193f50f584c6ca7849a6072872"
+        },
+        {
+          "file": "licenses/JPEG-shared/README.ijg",
+          "sha256": "75815e3bf6484201a3c3d17a1bbf10f2e8e3237f84df10a2357ea896db2a81d6"
+        },
+        {
+          "file": "licenses/JPEG-shared/release/License.rtf",
+          "sha256": "d26120ab237f87dea10aa4fa7fd4243cadffd26e54eb2f3903d5fb0f8ed336b2"
+        }
+      ]
+    },
+    "OpenEXRCore-patched": {
+      "commit": "5d838e01770cadb8f2a36c0d17018452fa7a3c0c",
+      "version": "-dev-thumbgen-bounded-zstd-v1",
+      "notices": [
+        {
+          "file": "licenses/OpenEXRCore-patched/Contrib/DtexToExr/AUTHORS",
+          "sha256": "001ea4855801e70deef7213ca2f3c5fa8b709b31b36873d19a69e2f4a334a89b"
+        },
+        {
+          "file": "licenses/OpenEXRCore-patched/LICENSE.md",
+          "sha256": "84853c91d4c2e0310741d4773469d98bb93e61029608e0ba0882a3fffdf330bd"
+        },
+        {
+          "file": "licenses/OpenEXRCore-patched/PATENTS",
+          "sha256": "7f5dee333a82cab38b3567b85ec52a74487a5b2a8f4097eb8b4071c892c47b12"
+        },
+        {
+          "file": "licenses/OpenEXRCore-patched/external/OpenJPH/LICENSE",
+          "sha256": "5ddf5177863dfc9ab65fa129d587db651241f00e21ed2427b218bea997591f98"
+        },
+        {
+          "file": "licenses/OpenEXRCore-patched/external/deflate/COPYING",
+          "sha256": "4ad69099cb4374836fd27583d9991e2838cd86b6e4666ab26b2d32582c91e73a"
+        },
+        {
+          "file": "licenses/OpenEXRCore-patched/external/zstd/LICENSE",
+          "sha256": "7055266497633c9025b777c78eb7235af13922117480ed5c674677adc381c9d8"
+        },
+        {
+          "file": "licenses/OpenEXRCore-patched/openexr-bounded-zstd-v1.patch",
+          "sha256": "46738fa7c6cdee48511936e847f02079a8da370dc3bcfcc95be5ea863a416a45"
+        }
+      ]
+    },
+    "GCC-runtime": {
+      "commit": null,
+      "version": "4.8.5-44.el7",
+      "notices": [
+        {
+          "file": "licenses/GCC-runtime/COPYING",
+          "sha256": "231f7edcc7352d7734a96eef0b8030f77982678c516876fcb81e25b32d68564c"
+        },
+        {
+          "file": "licenses/GCC-runtime/COPYING.LIB",
+          "sha256": "32434afcc8666ba060e111d715bfdb6c2d5dd8a35fa4d3ab8ad67d8f850d2f2b"
+        },
+        {
+          "file": "licenses/GCC-runtime/COPYING.RUNTIME",
+          "sha256": "9d6b43ce4d8de0c878bf16b54d8e7a10d9bd42b75178153e3af6a815bdc90f74"
+        },
+        {
+          "file": "licenses/GCC-runtime/COPYING3",
+          "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903"
+        },
+        {
+          "file": "licenses/GCC-runtime/COPYING3.LIB",
+          "sha256": "a853c2ffec17057872340eee242ae4d96cbf2b520ae27d903e1b2fef1a5f9d1c"
+        }
+      ]
+    },
+    "GCC-C++-runtime": {
+      "commit": null,
+      "version": "4.8.5-44.el7",
+      "notices": [
+        {
+          "file": "licenses/GCC-C++-runtime/COPYING",
+          "sha256": "231f7edcc7352d7734a96eef0b8030f77982678c516876fcb81e25b32d68564c"
+        },
+        {
+          "file": "licenses/GCC-C++-runtime/COPYING.LIB",
+          "sha256": "32434afcc8666ba060e111d715bfdb6c2d5dd8a35fa4d3ab8ad67d8f850d2f2b"
+        },
+        {
+          "file": "licenses/GCC-C++-runtime/COPYING.RUNTIME",
+          "sha256": "9d6b43ce4d8de0c878bf16b54d8e7a10d9bd42b75178153e3af6a815bdc90f74"
+        },
+        {
+          "file": "licenses/GCC-C++-runtime/COPYING3",
+          "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903"
+        },
+        {
+          "file": "licenses/GCC-C++-runtime/COPYING3.LIB",
+          "sha256": "a853c2ffec17057872340eee242ae4d96cbf2b520ae27d903e1b2fef1a5f9d1c"
+        }
+      ]
+    },
+    "GCC-build-headers-nonshared": {
+      "commit": null,
+      "version": "11.2.1-9.1.el7",
+      "notices": [
+        {
+          "file": "licenses/GCC-build-headers-nonshared/COPYING",
+          "sha256": "231f7edcc7352d7734a96eef0b8030f77982678c516876fcb81e25b32d68564c"
+        },
+        {
+          "file": "licenses/GCC-build-headers-nonshared/COPYING.LIB",
+          "sha256": "32434afcc8666ba060e111d715bfdb6c2d5dd8a35fa4d3ab8ad67d8f850d2f2b"
+        },
+        {
+          "file": "licenses/GCC-build-headers-nonshared/COPYING.RUNTIME",
+          "sha256": "9d6b43ce4d8de0c878bf16b54d8e7a10d9bd42b75178153e3af6a815bdc90f74"
+        },
+        {
+          "file": "licenses/GCC-build-headers-nonshared/COPYING3",
+          "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903"
+        },
+        {
+          "file": "licenses/GCC-build-headers-nonshared/COPYING3.LIB",
+          "sha256": "a853c2ffec17057872340eee242ae4d96cbf2b520ae27d903e1b2fef1a5f9d1c"
+        }
+      ]
+    }
+  }
+}
