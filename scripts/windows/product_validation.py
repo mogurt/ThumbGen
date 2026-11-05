@@ -11,6 +11,7 @@ from pathlib import Path
 import subprocess
 import shutil
 import sys
+import math
 
 REPO = Path(__file__).resolve().parents[2]
 VERSION = 2
@@ -19,6 +20,46 @@ FILES = ('tests/packaging/validate_overlay_product.py', 'scripts/windows/product
 CASES = {'capabilities': None, 'rgb.png': (8, 8, 2), 'gray.png': (8, 8, 2),
          'cmyk.tif': (8, 8, 2), 'cmyk.jpg': (8, 8, 2), 'ycck.jpg': (8, 8, 2),
          'ordinary-rgb': (8, 8, 1), 'deep-scan': (129, 9, 1), 'deep-tile': (129, 9, 1)}
+
+
+def expected_pixel(name, row=0):
+    """Author-defined calibration formula, independent of the report/product.
+
+    These constants describe the repository's synthetic TRC/affine-CLUT cases,
+    not arbitrary printing profiles. Never use case.expected or a claimed error
+    as the oracle for candidate acceptance.
+    """
+    if name == 'ordinary-rgb':
+        return (64, 128, 192)
+    if name.startswith('deep-'):
+        linear = ((0, .75, .5) if row % 4 == 1 else
+                  (.5, .8125, .5) if row % 4 == 2 else (0, 0, 0))
+    else:
+        linear = {'rgb.png': (64 / 255, 128 / 255, 192 / 255),
+                  'gray.png': ((128 / 255) ** 2,) * 3,
+                  'cmyk.tif': (1 - 224 / 1020,) * 3,
+                  'cmyk.jpg': (.75,) * 3,
+                  'ycck.jpg': (1 - 384 / 1020,) * 3}[name]
+    return tuple(math.floor(255 * (12.92 * value if value <= .0031308 else
+                                  1.055 * value ** (1 / 2.4) - .055) + .5) for value in linear)
+
+
+def pixel_metrics(path, name):
+    from PIL import Image
+    with Image.open(path) as image:
+        image.load()
+        width, height, _ = CASES[name]
+        if image.format != 'PNG' or image.size != (width, height) or image.mode not in ('RGB', 'RGBA'):
+            raise ValueError('Validation output dimensions/layout differ: ' + name)
+        maximum = 0
+        for y in range(height):
+            expected = expected_pixel(name, y)
+            for x in range(width):
+                pixel = image.getpixel((x, y))
+                if len(pixel) == 4 and pixel[3] != 255:
+                    raise ValueError('Opaque calibration output acquired transparency: ' + name)
+                maximum = max(maximum, *(abs(a - b) for a, b in zip(pixel[:3], expected)))
+        return dict(pixels=width * height, max_lsb=maximum)
 
 
 def sha(path):
@@ -134,13 +175,11 @@ def check_report(report, closure):
                 entry.get('status') == 'success' and Path(entry['path']).resolve() == target
                 for entry in results[0].get('outputs', [])):
             raise ValueError('Missing successful validation output log')
-        from PIL import Image
-        with Image.open(target) as image:
-            image.load()
-            if image.size != layout[:2]:
-                raise ValueError('Validation output dimensions differ')
-        if case['pixels'] != layout[0] * layout[1] or not 0 <= case['max_lsb'] <= layout[2]:
-            raise ValueError('Validation pixel coverage/result differs')
+        measured = pixel_metrics(target, case['name'])
+        if any(type(case.get(key)) is not int or case[key] != value for key, value in measured.items()):
+            raise ValueError('Validation pixel metrics contradict actual output: ' + case['name'] + ' actual=' + str(measured))
+        if measured['max_lsb'] > layout[2]:
+            raise ValueError('Validation pixel error exceeds calibration limit: ' + case['name'])
     return dict(schema_version=VERSION, cases=len(cases), runtime_files=len(runtime),
                 pixels=sum(layout[0] * layout[1] for layout in required_cases.values() if layout))
 
@@ -149,8 +188,14 @@ def check_frozen(evidence, closure, require_independent=True):
     mode = evidence.get('validation_mode')
     if mode == 'independent-v2':
         entry = evidence['product_validation']
+        if evidence['ctest']['validation_sha256'] != entry['sha256']:
+            raise ValueError('Frozen validation report references disagree')
         if sha(entry['path']) != entry['sha256']:
             raise ValueError('Frozen independent validation report changed')
+        submitted = evidence['submitted_validation']
+        if sha(submitted['path']) != submitted['sha256']:
+            raise ValueError('Frozen submitted validation report changed')
+        check_report(load(submitted['path']), closure)
         return check_report(load(entry['path']), closure)
     if mode == 'full-ctest' and not require_independent:
         tests = evidence['ctest']
