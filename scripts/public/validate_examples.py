@@ -2,8 +2,43 @@
 import json
 from pathlib import Path
 import re
+from urllib.parse import unquote, urlsplit
 
 from jsonschema import Draft202012Validator
+
+
+def public_documents(root):
+    return [root / 'README.md', root / 'CHANGELOG.md',
+            *sorted((root / 'docs').rglob('*.md')),
+            *sorted((root / 'examples').rglob('*.md')),
+            root / 'benchmarks/README.md', root / 'benchmarks/PRODUCTION_RESULTS.md',
+            *sorted((root / 'benchmarks/results').glob('*/SUMMARY.md'))]
+
+
+def validate_links(root, documents):
+    root = root.resolve()
+    links = 0
+    for document in documents:
+        if not document.is_file():
+            raise ValueError(f'Missing public document: {document.name}')
+        targets = re.findall(r'\[[^\]]*\]\((<[^>]+>|[^\s)]+)(?:\s+[\'"][^)]*[\'"])?\)',
+                             document.read_text(encoding='utf-8'))
+        for target in targets:
+            target = target.removeprefix('<').removesuffix('>')
+            scheme = urlsplit(target).scheme.lower()
+            if scheme in ('https', 'http', 'mailto') or target.startswith('#'):
+                continue
+            path = unquote(target.split('#', 1)[0].split('?', 1)[0])
+            resolved = (document.parent / path).resolve()
+            if scheme or not resolved.is_relative_to(root):
+                raise ValueError(f'Public link outside repository in {document.name}: {target}')
+            relative = resolved.relative_to(root)
+            if any(part in ('.deps', '.venv', 'build', '__pycache__') for part in relative.parts):
+                raise ValueError(f'Public link requires private/generated files in {document.name}: {target}')
+            if not resolved.exists():
+                raise ValueError(f'Missing link target in {document.name}: {target}')
+            links += 1
+    return links
 
 
 def main():
@@ -16,19 +51,9 @@ def main():
         raise ValueError("No public manifests found")
     for manifest in manifests:
         validator.validate(json.loads(manifest.read_text(encoding="utf-8")))
-    documents = [root / "CHANGELOG.md", root / "examples/public/README.md"]
-    documents += [root / "docs" / name for name in
-                  ("getting-started.md", "public-assets.md", "public-reports.md")]
-    links = 0
-    for document in documents:
-        for target in re.findall(r"\[[^\]]*\]\(([^\s)]+)\)", document.read_text(encoding="utf-8")):
-            if "://" in target or target.startswith("#"):
-                continue
-            path = target.split("#", 1)[0]
-            if not (document.parent / path).is_file():
-                raise ValueError(f"Missing link target in {document.name}: {target}")
-            links += 1
-    print(f"Validated {len(manifests)} public manifests and {links} local link targets")
+    documents = public_documents(root)
+    links = validate_links(root, documents)
+    print(f"Validated {len(manifests)} public manifests, {len(documents)} documents and {links} local link targets")
 
 
 if __name__ == "__main__":
