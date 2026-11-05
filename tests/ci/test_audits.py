@@ -12,6 +12,17 @@ spec.loader.exec_module(ci)
 
 
 class Audits(unittest.TestCase):
+    def test_bounded_runtime_is_required_when_ci_selects_it(self):
+        base = dict(type='capabilities', deep_compressions=['none', 'rle', 'zips'])
+        self.assertEqual(ci.audit_capabilities(json.dumps(base)), base['deep_compressions'])
+        with self.assertRaisesRegex(RuntimeError, 'bounded ZSTD runtime'):
+            ci.audit_capabilities(json.dumps(base), True)
+        base['deep_compressions'].append('zstd')
+        self.assertIn('zstd', ci.audit_capabilities(json.dumps(base), True))
+        for bad in ('', '{}', json.dumps(base) + '\n' + json.dumps(base), '{"type":"capabilities"}'):
+            with self.subTest(bad=bad), self.assertRaises(RuntimeError):
+                ci.audit_capabilities(bad)
+
     def setUp(self):
         self.names = ['public_cli', 'public_protocol', 'public_interrupt', 'public_aov', 'public_color_input',
                       'public_cryptomatte', 'public_sampled_id', 'public_deep', 'core_deep_flatten', 'core_deep_reader', 'core_deep_output', 'core_deep_selection', 'core_deep_runtime', 'core_deep_infinite', 'core_deep_zstd', 'core_selected_input', 'core_cms', 'future_test']
