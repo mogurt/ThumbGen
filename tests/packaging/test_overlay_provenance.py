@@ -59,6 +59,15 @@ class ProvenanceBoundaries(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'Untracked or ignored'):
             proof.source_tree(policy, self.root, commit)
 
+    def test_git_windows_emulated_symlink_matches_exact_locked_blob(self):
+        self.source()
+        (self.root / 'upstream-link').write_bytes(b'source.c')
+        blob = self.git('hash-object', '-w', 'upstream-link').decode().strip()
+        self.git('update-index', '--add', '--cacheinfo', '120000,' + blob + ',upstream-link')
+        self.git('-c', 'user.name=Packaging test', '-c', 'user.email=local@example.invalid', 'commit', '-qm', 'locked link')
+        commit = self.git('rev-parse', 'HEAD').decode().strip()
+        self.assertIn('upstream-link', proof.source_tree(policy, self.root, commit)['files_sha256'])
+
     def test_trusted_patch_exact_context(self):
         patch_bytes = b'diff --git a/a.c b/a.c\n--- a/a.c\n+++ b/a.c\n@@ -1 +1 @@\n-old\n+new\n'
         self.assertEqual(proof.patched_blobs({'a.c': b'old\n'}, patch_bytes), {'a.c': b'new\n'})
