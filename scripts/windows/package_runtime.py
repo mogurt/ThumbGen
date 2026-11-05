@@ -121,10 +121,14 @@ def pack(exe, sdk, evidence_file, output, runtime_notices, color_overlay=None, b
         data = original.read_bytes()
         destination = 'licenses/MSVC-runtime/' + original.name
         add(destination, data)
-        notices.append(dict(file=destination, sha256=hashlib.sha256(data).hexdigest()))
+        entry = dict(file=destination, sha256=hashlib.sha256(data).hexdigest())
+        if len(data) < 1024 and b'https://aka.ms/vs/17/redist.txt' in data:
+            entry.update(material_kind='link-pointer', referenced_url='https://aka.ms/vs/17/redist.txt',
+                         limitation='This installed pointer is not the complete redistribution list or license terms.')
+        notices.append(entry)
     components.append(dict(name='MSVC-runtime', version=Path(sdk_receipt['runtime']['source']).name,
                            source='Selected Visual Studio 2022 redistributable', notices=notices,
-                           review='Original installed VS notice materials retained; runtime redistribution terms require final review.'))
+                           review='Original installed VS materials retained; they may be link pointers, not complete terms. File counts do not establish MSVC redistribution eligibility or completed license review.'))
     notice_index = ['INTERNAL EVALUATION CANDIDATE - project license not selected.',
                     'This index preserves upstream notices; redistribution review remains open.', '']
     for component in components:
