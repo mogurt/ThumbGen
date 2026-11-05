@@ -1,0 +1,25 @@
+--- a/src/lib/OpenEXRCore/internal_dwa_simd.h
++++ b/src/lib/OpenEXRCore/internal_dwa_simd.h
+@@ -2374,18 +2374,10 @@
+     dctInverse8x8_5 = dctInverse8x8_scalar_5;
+     dctInverse8x8_6 = dctInverse8x8_scalar_6;
+     dctInverse8x8_7 = dctInverse8x8_scalar_7;
+-    if (avx)
+-    {
+-        dctInverse8x8_0 = dctInverse8x8_avx_0;
+-        dctInverse8x8_1 = dctInverse8x8_avx_1;
+-        dctInverse8x8_2 = dctInverse8x8_avx_2;
+-        dctInverse8x8_3 = dctInverse8x8_avx_3;
+-        dctInverse8x8_4 = dctInverse8x8_avx_4;
+-        dctInverse8x8_5 = dctInverse8x8_avx_5;
+-        dctInverse8x8_6 = dctInverse8x8_avx_6;
+-        dctInverse8x8_7 = dctInverse8x8_avx_7;
+-    }
+-    else if (sse2)
++    // ThumbGen portable-dwa-v1: keep x64 DWAA/DWAB inverse DCT on the
++    // common SSE2 path across MSVC and GCC. AVX IDCT rounding differs at
++    // HALF/zero boundaries. Preserve the independent F16C conversion above.
++    if (sse2)
+     {
+         dctInverse8x8_0 = dctInverse8x8_sse2_0;
+         dctInverse8x8_1 = dctInverse8x8_sse2_1;
