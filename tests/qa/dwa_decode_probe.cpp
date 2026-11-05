@@ -13,17 +13,28 @@
 using namespace OIIO;
 using Json=nlohmann::ordered_json;
 int main(int argc,char**argv){try {
- if(argc!=3)return 2;
+ if(argc!=3 && (argc!=4 || std::string(argv[3])!="rows"))return 2;
+ const bool segmented=argc==4;
  auto in=ImageInput::open(argv[1]);if(!in)throw std::runtime_error(geterror());auto s=in->spec();
  Json j={{"oiio_version",OIIO_VERSION_STRING},{"input",argv[1]},{"width",s.width},{"height",s.height},{"x",s.x},{"y",s.y},{"format",s.format.c_str()},{"compression",s.get_string_attribute("compression")},{"channels",s.channelnames},{"reads",Json::array()}};
  j["metadata_xml"]=s.to_xml();for(auto name:{"buildinfo","library_list","simd","hw:simd"})j[name]=get_string_attribute(name);
+ j["read_strategy"]=segmented?"segmented-scanlines":"whole-image";
  for(int c=0;c<s.nchannels;++c)j["channel_types"].push_back(s.channelformats.empty()?s.format.c_str():s.channelformats[c].c_str());
  std::vector<int> channels;for(const auto& name:{"id_a.R","id_a.G","id_a.B"}){auto it=std::find(s.channelnames.begin(),s.channelnames.end(),name);if(it==s.channelnames.end())throw std::runtime_error("missing channel");channels.push_back(int(it-s.channelnames.begin()));}
  if(channels[1]!=channels[0]+1||channels[2]!=channels[0]+2)throw std::runtime_error("noncontiguous RGB");
  for(auto format:{TypeDesc::UNKNOWN,TypeDesc::HALF,TypeDesc::FLOAT,TypeDesc::DOUBLE})for(int component=-1;component<3;++component){
   int begin=channels[component<0?0:component],end=component<0?channels[2]+1:begin+1;
   TypeDesc type(format);size_t stride=type==TypeDesc::UNKNOWN?s.pixel_bytes(begin,end,true):type.size()*(end-begin);std::vector<unsigned char> data(size_t(s.width)*s.height*stride);
-  if(!in->read_image(0,0,begin,end,type,data.data()))throw std::runtime_error(in->geterror());
+  if(segmented) {
+   std::vector<int> rows{0,1,7,31,32,63,64,127,128,255,256,257,511,512,s.height};
+   rows.erase(std::remove_if(rows.begin(),rows.end(),[&](int y){return y>s.height;}),rows.end());
+   std::sort(rows.begin(),rows.end());rows.erase(std::unique(rows.begin(),rows.end()),rows.end());
+   j["row_boundaries"]=rows;
+   for(size_t r=1;r<rows.size();++r)
+    if(!in->read_scanlines(0,0,s.y+rows[r-1],s.y+rows[r],s.z,begin,end,type,
+       data.data()+size_t(rows[r-1])*s.width*stride,stride,size_t(s.width)*stride))
+      throw std::runtime_error(in->geterror());
+  } else if(!in->read_image(0,0,begin,end,type,data.data()))throw std::runtime_error(in->geterror());
   std::string name=std::string(type.c_str())+"-"+(component<0?"rgb":std::to_string(component))+".bin";
   std::ofstream file(std::string(argv[2])+"/"+name,std::ios::binary);file.write(reinterpret_cast<const char*>(data.data()),data.size());if(!file)throw std::runtime_error("write failed");
   j["reads"].push_back({{"format",type.c_str()},{"component",component},{"begin",begin},{"end",end},{"stride",stride},{"file",name},{"bytes",data.size()}});
