@@ -1,15 +1,17 @@
-"""Read-only, explicitly approved Windows overlays; never a DLL search path.
+"""Read-only Windows overlays with native build provenance; no DLL search path.
 
-Receipts are allowlisted by exact digest because the historical color helper did
-not record its own identity. A new install requires review and a new pin here;
-an arbitrary self-authored installed_sha256 map is deliberately insufficient.
-These local provenance checks are not signed supply-chain attestations.
+Fresh public builds use build_verified_overlay.py and reconstruct native build
+evidence against this trusted checkout. The allowlist below is historical-only;
+new installations do not require a pin or source edit. Neither local profile is
+a signed supply-chain attestation.
 """
+import importlib.util
 import hashlib
 import json
 from pathlib import Path, PurePosixPath
 import re
 import subprocess
+from types import SimpleNamespace
 
 REPO = Path(__file__).resolve().parents[2]
 PINS = {
@@ -94,16 +96,26 @@ def verify(kind, prefix):
     prefix = prefix.resolve(strict=True)
     root = prefix.parent
     receipt_file = root / 'receipt.json'
-    if sha(receipt_file) != PINS[kind]:
+    modern = (root / 'overlay-provenance.json').is_file()
+    proof = None
+    if modern:
+        spec = importlib.util.spec_from_file_location('overlay_provenance', REPO / 'scripts/dependencies/overlay_provenance.py')
+        provenance = importlib.util.module_from_spec(spec); spec.loader.exec_module(provenance)
+        policy = SimpleNamespace(REPO=REPO, sha=sha, safe=safe, load=load, git=git, identity=identity, installed=installed)
+        proof = provenance.verify(policy, kind, prefix)
+    elif sha(receipt_file) != PINS[kind]:
         raise ValueError('Unapproved ' + kind + ' overlay receipt')
     receipt = load(receipt_file)
     files = installed(prefix, receipt['installed_sha256'])
     report = dict(kind=kind, prefix=str(prefix), receipt_sha256=sha(receipt_file),
                   installed_sha256={p.relative_to(prefix).as_posix(): sha(p) for p in files.values()},
                   recipes=[], components=[])
+    if proof:
+        report['build_provenance'] = dict(profile=proof['kind'], sha256=sha(root / 'overlay-provenance.json'),
+                                         evidence_file=str(root / 'overlay-provenance.json'))
     dlls, notices = {}, {}
     if kind == 'color':
-        report['recipes'] = [recipe('dependencies/color-sdk.json', COLOR_LOCK),
+        report['recipes'] = proof['recipes'] if proof else [recipe('dependencies/color-sdk.json', COLOR_LOCK),
                              recipe('scripts/build-color-sdk.py', COLOR_HELPER)]
         lock = load(REPO / 'dependencies/color-sdk.json')
         if {x['package'] for x in receipt['components']} != set(lock):
@@ -136,13 +148,18 @@ def verify(kind, prefix):
                 source_commit=expected['commit'], url=expected['repository']), dict(sha256=sha(dll)))
             report['components'].append(dict(expected, name=package, notices=indexed, linkage='shared'))
     else:
-        report['recipes'] = [recipe('scripts/dependencies/build_bounded_openexr.py', BOUNDED_HELPER_LF),
+        report['recipes'] = proof['recipes'] if proof else [recipe('scripts/dependencies/build_bounded_openexr.py', BOUNDED_HELPER_LF),
                              recipe('dependencies/patches/openexr-bounded-zstd-v1.patch', PATCH)]
-        if (receipt['upstream'] != UPSTREAM or receipt['helper_sha256'] != BOUNDED_HELPER or
-                receipt['patch_sha256'] != PATCH or receipt['runtime_identity'] != '-dev-thumbgen-bounded-zstd-v1'):
+        helper = REPO / 'scripts/dependencies/build_bounded_openexr.py'
+        patch_digest = sha(REPO / 'dependencies/patches/openexr-bounded-zstd-v1.patch') if modern else PATCH
+        upstream = provenance.helper_constants(policy)['COMMIT'] if modern else UPSTREAM
+        helper_digest = sha(helper) if modern else BOUNDED_HELPER
+        runtime_identity = provenance.helper_constants(policy)['IDENTITY'] if modern else '-dev-thumbgen-bounded-zstd-v1'
+        if (receipt['upstream'] != upstream or receipt['helper_sha256'] != helper_digest or
+                receipt['patch_sha256'] != patch_digest or receipt['runtime_identity'] != runtime_identity):
             raise ValueError('Bounded Core identity differs')
         source = root / 'source'
-        identity(source, UPSTREAM)
+        identity(source, upstream)
         patch = REPO / 'dependencies/patches/openexr-bounded-zstd-v1.patch'
         subprocess.run(['git', '-C', str(source), 'apply', '--reverse', '--check', str(patch)], check=True, capture_output=True)
         changed = set(git(source, 'diff', '--name-only', 'HEAD').decode().splitlines())
@@ -155,7 +172,7 @@ def verify(kind, prefix):
         for relative in git(source, 'ls-files', '-z').decode().split('\0'):
             if not relative or not PurePosixPath(relative).name.upper().startswith(('LICENSE', 'COPYING', 'COPYRIGHT', 'NOTICE', 'PATENTS')):
                 continue
-            data = git(source, 'show', UPSTREAM + ':' + relative)
+            data = git(source, 'show', upstream + ':' + relative)
             if safe(source, relative).read_bytes().replace(b'\r\n', b'\n') != data.replace(b'\r\n', b'\n'):
                 raise ValueError('Bounded notice differs: ' + relative)
             destination = 'licenses/overlay-OpenEXRCore/' + relative
@@ -165,8 +182,8 @@ def verify(kind, prefix):
             raise ValueError('Missing bounded Core notices')
         library = files['lib/openexrcore_v_3_5_0_openimageio_v3_2.lib']
         report['static_library'] = dict(path=str(library), sha256=sha(library))
-        report['components'].append(dict(name='overlay-OpenEXRCore', version='3.5.0-dev', commit=UPSTREAM,
-            repository='https://github.com/AcademySoftwareFoundation/openexr', patch_sha256=PATCH,
+        report['components'].append(dict(name='overlay-OpenEXRCore', version='3.5.0-dev', commit=upstream,
+            repository='https://github.com/AcademySoftwareFoundation/openexr', patch_sha256=patch_digest,
             linkage='static; separate from OIIO embedded original OpenEXR', notices=indexed))
         notices['provenance/patches/openexr-bounded-zstd-v1.patch'] = patch.read_bytes()
     return report, dlls, notices
