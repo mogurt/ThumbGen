@@ -91,6 +91,7 @@
             "colour_display_not_found",
             "colour_view_not_found",
             "colour_failed",
+            "colour_input_unsupported",
             "decode_limit_exceeded",
             "canvas_limit_exceeded",
             "decode_failed",

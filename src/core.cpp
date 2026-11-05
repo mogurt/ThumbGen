@@ -1,5 +1,6 @@
 #include <thumbgen/core.h>
 #include "selection.h"
+#include "color_input.h"
 #include "build_info.h"
 #include "files.h"
 #include "quantize.h"
@@ -295,6 +296,9 @@ Json Engine::convert(const Job& job) {
         read_config.attribute("oiio:UnassociatedAlpha",1);
         auto in=OIIO::ImageInput::open(job.input,&read_config);
         if(!in){auto error=OIIO::geterror();verify_source();throw Failure("open_failed",error);}
+        const bool container_icc=!data && detail::container_has_icc(job.input);
+        if(!data && detail::container_separated_colour(job.input))
+            throw Failure("colour_input_unsupported","CMYK/separated input requires an external profile-aware conversion to RGB");
         stage="selection";
         OIIO::ImageSpec spec;
         std::vector<int> channels;
@@ -312,6 +316,8 @@ Json Engine::convert(const Job& job) {
         for(int p=0;;++p) {
             OIIO::ImageSpec candidate;
             if(!in->seek_subimage(p,0,candidate))break;
+            if(!data && detail::separated_colour(candidate))
+                throw Failure("colour_input_unsupported","CMYK/separated input requires an external profile-aware conversion to RGB; input_space cannot undo decoder conversion");
             ++part_count;
             auto groups=candidate.deep && job.options.deep_mode=="flatten"?detail::deep_colour_candidates(candidate):detail::classify(candidate);
             if(crypto) {
@@ -477,6 +483,11 @@ Json Engine::convert(const Job& job) {
         std::string working_space,input_space,output_space;
         if(!data) {
             stage="colour";
+            const bool embedded_icc=container_icc || spec.find_attribute("ICCProfile");
+            if(embedded_icc && job.options.input_space=="auto")
+                throw Failure("colour_input_unsupported","embedded ICC is unsupported; convert externally to a known RGB space or explicitly set input_space to override the profile");
+            if(embedded_icc)
+                r["warnings"].push_back("embedded ICC profile bypassed by explicit input_space; no ICC transform or profile validation performed");
             std::string config_name=job.options.ocio_config,config_basis="explicit";
             if(config_name.empty()) {
                 const char* environment=std::getenv("OCIO");
@@ -644,7 +655,6 @@ Json Engine::convert(const Job& job) {
             check(iba::reorient(oriented,working),oriented,"orientation_failed");working=std::move(oriented);
         }
         stage="colour";tick=Clock::now();
-        if(!data && spec.find_attribute("ICCProfile"))r["warnings"].push_back("embedded ICC profile is not independently transformed; verify input_space against its profile");
         if(!data && input_space!=working_space)
             check(iba::colorconvert(working,working,input_space,working_space,true,"","",config),working,"colour_failed");
         r["timings_ms"]["working_colour"]=ms(tick);

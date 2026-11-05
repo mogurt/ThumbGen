@@ -32,7 +32,7 @@ file(READ "${CMAKE_CURRENT_SOURCE_DIR}/schemas/errors-v1.json" THUMBGEN_ERROR_RE
 configure_file(src/error_registry.h.in generated/error_registry.h @ONLY)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/schemas/errors-v1.json")
 
-add_library(thumbgen_core STATIC src/core.cpp src/selection.cpp src/files.cpp src/quantize.cpp src/data_preview.cpp src/data_image.cpp src/selected_input.cpp src/cryptomatte.cpp src/sampled_id.cpp src/deep_flatten.cpp src/deep_reader.cpp src/deep_selection.cpp)
+add_library(thumbgen_core STATIC src/core.cpp src/color_input.cpp src/selection.cpp src/files.cpp src/quantize.cpp src/data_preview.cpp src/data_image.cpp src/selected_input.cpp src/cryptomatte.cpp src/sampled_id.cpp src/deep_flatten.cpp src/deep_reader.cpp src/deep_selection.cpp)
 target_compile_features(thumbgen_core PUBLIC cxx_std_17)
 target_include_directories(thumbgen_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_include_directories(thumbgen_core PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
@@ -329,6 +329,9 @@ if(BUILD_TESTING)
         message(FATAL_ERROR "The explicit test Python is unavailable; refusing to omit public tests")
     endif()
     if(Python3_Interpreter_FOUND)
+        add_executable(thumbgen_color_input_probe tests/color_input_probe.cpp src/color_input.cpp)
+        target_include_directories(thumbgen_color_input_probe PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+        target_link_libraries(thumbgen_color_input_probe PRIVATE OpenImageIO::OpenImageIO nlohmann_json::nlohmann_json)
         add_test(NAME public_cli COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cli.py --exe $<TARGET_FILE:thumbgen>
             --runtime-dir $<TARGET_FILE_DIR:OpenImageIO::OpenImageIO>)
@@ -337,6 +340,11 @@ if(BUILD_TESTING)
             message(FATAL_ERROR "Full tests require THUMBGEN_TEST_PROTOCOL=ON")
         endif()
         if(THUMBGEN_TEST_PROTOCOL)
+            add_test(NAME public_color_input COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_color_input.py --exe $<TARGET_FILE:thumbgen>
+                --probe-exe $<TARGET_FILE:thumbgen_color_input_probe> --schema-dir ${CMAKE_CURRENT_SOURCE_DIR}/schemas
+                --runtime-dir $<TARGET_FILE_DIR:OpenImageIO::OpenImageIO>)
+            set_tests_properties(public_color_input PROPERTIES TIMEOUT 120 LABELS "protocol;colour")
             add_test(NAME public_sampled_id COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_sampled_id_cli.py --exe $<TARGET_FILE:thumbgen>
                 --fixture-exe $<TARGET_FILE:thumbgen_categorical_tests> --schema-dir ${CMAKE_CURRENT_SOURCE_DIR}/schemas

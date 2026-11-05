@@ -92,6 +92,11 @@
       "description": "色彩处理器或变换失败"
     },
     {
+      "code": "colour_input_unsupported",
+      "category": "colour",
+      "description": "ICC 需要显式输入空间覆盖；CMYK/分色需要外部色彩管理转换"
+    },
+    {
       "code": "decode_limit_exceeded",
       "category": "resource",
       "description": "解码像素缓冲区超过限额"
