@@ -154,9 +154,23 @@ def cache_check(values, source, prefix, options):
             raise ValueError('Unexpected overlay CMake option: ' + key)
     for key in ('CMAKE_TOOLCHAIN_FILE', 'CMAKE_PROJECT_TOP_LEVEL_INCLUDES', 'CMAKE_PROJECT_INCLUDE',
                 'CMAKE_PROJECT_INCLUDE_BEFORE', 'CMAKE_USER_MAKE_RULES_OVERRIDE', 'CMAKE_C_COMPILER_LAUNCHER',
-                'CMAKE_CXX_COMPILER_LAUNCHER', 'CMAKE_C_LINKER_LAUNCHER', 'CMAKE_CXX_LINKER_LAUNCHER'):
+                'CMAKE_CXX_COMPILER_LAUNCHER', 'CMAKE_C_LINKER_LAUNCHER', 'CMAKE_CXX_LINKER_LAUNCHER',
+                'CMAKE_C_STANDARD_INCLUDE_DIRECTORIES', 'CMAKE_CXX_STANDARD_INCLUDE_DIRECTORIES',
+                'CMAKE_INCLUDE_PATH', 'CMAKE_LIBRARY_PATH', 'CMAKE_PROGRAM_PATH', 'CMAKE_FIND_ROOT_PATH'):
         if values.get(key):
             raise ValueError('Unsupported overlay CMake injection: ' + key)
+    # The public entry point exposes no custom compiler/linker flags. In
+    # particular a forged cache must not introduce /FI, /arch, /LIBPATH or an
+    # arbitrary define while retaining the lock's shared/static booleans.
+    for key in ('CMAKE_C_FLAGS', 'CMAKE_CXX_FLAGS', 'CMAKE_C_FLAGS_RELEASE', 'CMAKE_CXX_FLAGS_RELEASE'):
+        allowed = ({'/md', '/o2', '/ob2', '/dndebug'} if key.endswith('_RELEASE') else
+                   {'/dwin32', '/d_windows', '/w3', '/gr', '/ehsc'})
+        if key in values and set(values[key].lower().split()) - allowed:
+            raise ValueError('Unsupported overlay compiler flags: ' + key)
+    for prefix_name in ('CMAKE_EXE_LINKER_FLAGS', 'CMAKE_SHARED_LINKER_FLAGS', 'CMAKE_STATIC_LINKER_FLAGS'):
+        for key in (prefix_name, prefix_name + '_RELEASE'):
+            if set(values.get(key, '').lower().split()) - {'/machine:x64', '/incremental:no'}:
+                raise ValueError('Unsupported overlay linker flags: ' + key)
 
 
 def tlog_records(path):
@@ -213,6 +227,8 @@ def install_map(policy, trace, source, build, prefix):
 def native_build(policy, source, build, prefix, options, trace, dependency_files=None):
     cache = cache_values(build / 'CMakeCache.txt')
     cache_check(cache, source, prefix, options)
+    if not {'CMAKE_C_FLAGS', 'CMAKE_C_FLAGS_RELEASE'} <= set(cache):
+        raise ValueError('Missing native compiler flag configuration')
     bindings = {}
     def bind(path):
         bindings[path.relative_to(build).as_posix()] = policy.sha(path)
@@ -382,7 +398,7 @@ def observe(policy, kind, prefix):
         if lock:
             commit, patch = lock[name]['commit'], None
             options = dict(item.split('=', 1) for item in lock[name]['options'])
-            options['CMAKE_MSVC_RUNTIME_LIBRARY'] = 'MultiThreadedDLL'
+            options.update(CMAKE_MSVC_RUNTIME_LIBRARY='MultiThreadedDLL', CMAKE_PREFIX_PATH='')
         else:
             commit = helper_constants(policy)['COMMIT']
             patch = (policy.REPO / 'dependencies/patches/openexr-bounded-zstd-v1.patch').read_bytes().replace(b'\r\n', b'\n')
@@ -390,6 +406,7 @@ def observe(policy, kind, prefix):
                 OPENEXR_INSTALL_TOOLS='OFF', OPENEXR_BUILD_EXAMPLES='OFF', OPENEXR_BUILD_PYTHON='OFF',
                 OPENEXR_FORCE_INTERNAL_DEFLATE='ON', OPENEXR_LIB_SUFFIX='_v_3_5_0_OpenImageIO_v3_2',
                 OPENEXR_INTERNAL_IMF_NAMESPACE='OpenImageIO_v3_2_Imf__3_5_0', OPENEXR_NAMESPACE_CUSTOM='1')
+            options['CMAKE_PREFIX_PATH'] = str(deps_prefix)
         result['sources'][name] = source_tree(policy, source, commit, patch)
         trace = root / (name + '-install-trace.jsonl')
         native = native_build(policy, source, build, prefix, options, trace,
