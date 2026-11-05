@@ -58,7 +58,10 @@ int main(){
         DeepChannels scalar_channels{{"R","G","B"},{"A","A","A"},"Z","Zback"};auto rle_image=read_deep_image(rle,0,scalar_channels);
         require(rle_image.pixels[0]==.5f && rle_image.pixels[2]==.25f && rle_image.pixels[3]==.75f,"native RLE/scalar alpha differs");
         auto zstd=root/"native-zstd.exr";native_fixture(zstd,OPENEXR_IMF_NAMESPACE::ZSTD_COMPRESSION);
-        rejected("deep_layout_unsupported",[&]{read_deep_image(zstd,0,scalar_channels);});
+        if(bounded_deep_zstd_available()) {
+            auto image=read_deep_image(zstd,0,scalar_channels);
+            require(image.pixels[0]==.5f && image.pixels[2]==.25f,"ZSTD raw fallback differs");
+        }else rejected("deep_layout_unsupported",[&]{read_deep_image(zstd,0,scalar_channels);});
         for(const auto& reference:references["cases"]){
             std::vector<DeepSample> samples;
             for(const auto& sample:reference["samples"])samples.push_back({sample["z"],sample["zback"],sample["colour"].get<std::array<float,3>>(),sample["alpha"].get<std::array<float,3>>()});
