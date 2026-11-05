@@ -17,6 +17,7 @@ from runtime_overlays import audit, audit_base, cache_values, require, run, sha,
 p = argparse.ArgumentParser(description=__doc__)
 for name in ('source', 'archive', 'build', 'install', 'cache', 'color-root', 'core-root', 'output', 'cmake'):
     p.add_argument('--' + name, required=True, type=Path)
+p.add_argument('--dwa-root', type=Path, help='Optional portable-DWA build root containing prefix, source and native build trees')
 a = p.parse_args()
 require(not a.output.exists(), 'Stage must be a new private directory')
 source, build, install, stage = (x.resolve() for x in (a.source, a.build, a.install, a.output))
@@ -32,8 +33,8 @@ require(values['CMAKE_CXX_FLAGS'] == '-march=x86-64 -mtune=generic', 'Product CP
 require(values['CMAKE_INSTALL_PREFIX'] == str(install), 'Install prefix differs')
 require(not any(k.startswith('Python') for k in values), 'Test Python entered product configure')
 commands = run('ninja', '-C', build, '-t', 'commands', 'thumbgen')
-overlay = audit(source, a.color_root, a.core_root, build)
 base = audit_base(source, a.cache)
+overlay = audit(source, a.color_root, a.core_root, build, a.dwa_root, base)
 stage.mkdir(parents=True)
 for name in ('bin', 'lib'):
     (stage / name).mkdir()
@@ -41,7 +42,7 @@ shutil.copy2(install / 'bin/thumbgen', stage / 'bin/thumbgen')
 require(str(install / 'bin/thumbgen') in (build / 'install_manifest.txt').read_text().splitlines(), 'Product not in install manifest')
 env = dict(PATH=os.environ['PATH'], HOME=os.environ['HOME'], LANG='C', LC_ALL='C',
            LD_LIBRARY_PATH=':'.join(str(x) for x in [a.color_root / 'sdk/lib64', a.color_root / 'sdk/lib',
-                a.cache / 'sdk/lib', a.cache / 'oiio-deps/dist/lib']))
+                *([a.dwa_root / 'prefix/lib'] if a.dwa_root else []), a.cache / 'sdk/lib', a.cache / 'oiio-deps/dist/lib']))
 loader = subprocess.check_output(['ldd', str(install / 'bin/thumbgen')], env=env, text=True)
 require('not found' not in loader, 'Unresolved installation closure')
 expected_shared = dict(base['verified_files'])
