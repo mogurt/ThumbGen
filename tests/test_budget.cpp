@@ -32,6 +32,11 @@ int main() {
         require(estimate_memory(mixed).source==10ULL*1024*1024,"mixed native source rounded to widest channel");
         auto sampled=mixed;sampled.source_buffer_bytes=1024;
         require(estimate_memory(sampled).source==1024,"sampled source buffer was ignored");
+        auto deep=compact_source;deep.deep_buffer_bytes=512ULL*1024*1024;
+        require(estimate_memory(deep).source==deep.deep_buffer_bytes && estimate_memory(deep).incremental>deep.deep_buffer_bytes,"Deep combined ceiling missing from admission");
+        rejects<std::invalid_argument>([&]{auto invalid=deep;invalid.deep_buffer_bytes=15ULL*1024*1024;estimate_memory(invalid);});
+        rejects<std::invalid_argument>([&]{auto invalid=deep;invalid.native_categorical=true;estimate_memory(invalid);});
+        rejects<std::invalid_argument>([&]{auto invalid=sampled;invalid.deep_buffer_bytes=512ULL*1024*1024;estimate_memory(invalid);});
         rejects<std::invalid_argument>([&]{auto invalid=sampled;invalid.native_categorical=false;estimate_memory(invalid);});
         rejects<std::invalid_argument>([&]{auto invalid=sampled;invalid.source_pixel_bytes=0;estimate_memory(invalid);});
         rejects<std::invalid_argument>([&]{auto invalid=sampled;invalid.source_buffer_bytes=11ULL*1024*1024;estimate_memory(invalid);});

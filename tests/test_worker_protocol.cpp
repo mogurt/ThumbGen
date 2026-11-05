@@ -27,7 +27,7 @@ int main() {
         thumbgen::Job job;job.id=u8"任务 / 1";auto root=std::filesystem::temp_directory_path();job.input=(root/std::filesystem::u8path(u8"source 空格.exr")).u8string();
         job.sequence_id="sequence";job.options.part_name="hero";job.outputs.push_back({(root/"preview.png").u8string(),"png",512,256,90,"replace"});
         auto wire=job_to_wire(job);require(job_to_wire(job_from_wire(wire))==wire);
-        for(const char* field:{"threads","part","max_decode_mib"}) {
+        for(const char* field:{"threads","part","max_decode_mib","deep_samples_per_pixel"}) {
             auto bad=wire;bad["options"][field]=1.5;rejects([&]{job_from_wire(bad);});
             bad["options"][field]=18446744073709551615ULL;rejects([&]{job_from_wire(bad);});
         }
@@ -35,6 +35,12 @@ int main() {
         bad=wire;bad["input"]="relative.exr";rejects([&]{job_from_wire(bad);});
         bad=wire;bad["options"]["extra"]=true;rejects([&]{job_from_wire(bad);});
         bad=wire;bad["outputs"].push_back(bad["outputs"][0]);rejects([&]{job_from_wire(bad);});
+        job.options.deep_mode="flatten";job.options.deep_samples_per_pixel=17;
+        wire=job_to_wire(job);require(job_to_wire(job_from_wire(wire))==wire);
+        bad=wire;bad["options"]["deep_mode"]="automatic";rejects([&]{job_from_wire(bad);});
+        bad=wire;bad["options"]["deep_samples_per_pixel"]=0;rejects([&]{job_from_wire(bad);});
+        bad=wire;bad["options"]["visualization"]="normal";rejects([&]{job_from_wire(bad);});
+        job.options.deep_mode="reject";
         job.options.visualization="vector";job.options.channels="motion";job.options.data_range={-2,2};job.options.invalid_values="error";
         wire=job_to_wire(job);require(job_to_wire(job_from_wire(wire))==wire);
         for(const auto& range:{Json::array(),Json::array({0}),Json::array({1,1}),Json::array({2,1}),Json::array({true,1}),Json::array({-1e308,1e308})}) {

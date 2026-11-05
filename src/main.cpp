@@ -76,6 +76,7 @@ static void usage() {
         "  --input-space SPACE, --ocio-config FILE, --display NAME --view NAME\n"
         "  --channels RGB|GRAY|GROUP, --part N or --part-name NAME\n"
         "  --selection-policy primary|root_rgb, --threads N, --max-decode-mib N\n"
+        "  --deep-mode reject|flatten, --deep-samples-per-pixel 1..1048576\n"
         "  --visualize colour|depth|normal|vector|id|id_rgb|cryptomatte, --data-range MIN,MAX, --invalid-values black|magenta|error\n"
         "  --existing error|skip|replace (default: error)\n"
         "  --workers N, --thread-budget N, --memory-budget-mib N, --startup-timeout-ms N, --task-timeout-ms N\n"
@@ -117,6 +118,9 @@ static void validate_options(const Options& o) {
     if(o.background!="black"&&o.background!="white"&&o.background!="transparent")throw std::invalid_argument("invalid background");
     if(o.threads<1||o.threads>256)throw std::invalid_argument("threads must be in 1..256");
     if(o.max_decode_mib<1||o.max_decode_mib>16384)throw std::invalid_argument("max_decode_mib must be in 1..16384");
+    if(o.deep_mode!="reject" && o.deep_mode!="flatten")throw std::invalid_argument("invalid deep_mode");
+    if(o.deep_samples_per_pixel<1 || o.deep_samples_per_pixel>1048576)throw std::invalid_argument("deep_samples_per_pixel must be in 1..1048576");
+    if(o.deep_mode=="flatten" && o.visualization!="colour")throw std::invalid_argument("Deep flattening requires colour visualization");
     if(o.part < -1)throw std::invalid_argument("part must be nonnegative");
     if(o.part>=0 && !o.part_name.empty())throw std::invalid_argument("part and part_name are mutually exclusive");
     if(o.selection_policy!="primary" && o.selection_policy!="root_rgb")throw std::invalid_argument("invalid selection_policy");
@@ -130,21 +134,22 @@ static void validate_options(const Options& o) {
 }
 static Options options(const Json& values,bool partial=false) {
     keys(values,{"preset","input_space","background","ocio_config","display","view","channels","part_name","selection_policy",
-        "part","threads","max_decode_mib","quality","format","size","existing","visualization","data_range","invalid_values"});
+        "part","threads","max_decode_mib","quality","format","size","existing","visualization","data_range","invalid_values","deep_mode","deep_samples_per_pixel"});
     if(values.contains("existing")) {
         auto policy=values["existing"].get<std::string>();
         if(policy!="error" && policy!="skip" && policy!="replace")throw std::invalid_argument("invalid existing policy");
     }
-    for(const char* key:{"part","threads","max_decode_mib","quality"})
+    for(const char* key:{"part","threads","max_decode_mib","quality","deep_samples_per_pixel"})
         if(values.contains(key)&&!values[key].is_number_integer())throw std::invalid_argument(std::string(key)+" must be an integer");
     for(auto bound:{std::make_pair("part",2147483647),std::make_pair("threads",256),
-                    std::make_pair("max_decode_mib",16384),std::make_pair("quality",100)}) {
+                    std::make_pair("max_decode_mib",16384),std::make_pair("quality",100),std::make_pair("deep_samples_per_pixel",1048576)}) {
         if(!values.contains(bound.first))continue;
         auto n=values[bound.first].get<long double>();
         auto minimum=std::string(bound.first)=="part"?-1:1;
         if(n<minimum||n>bound.second)throw std::invalid_argument(std::string(bound.first)+" out of range");
     }
     Options o;
+    o.deep_mode=values.value("deep_mode",o.deep_mode);o.deep_samples_per_pixel=values.value("deep_samples_per_pixel",o.deep_samples_per_pixel);
     o.visualization=values.value("visualization",o.visualization);o.invalid_values=values.value("invalid_values",o.invalid_values);
     if(values.contains("data_range")) {
         const auto& range=values["data_range"];
@@ -333,6 +338,8 @@ static int execute(const std::vector<std::string>& args) {
             }
             else if(flag=="--existing")values["existing"]=value();
             else if(flag=="--max-decode-mib")values["max_decode_mib"]=number(value());
+            else if(flag=="--deep-mode")values["deep_mode"]=value();
+            else if(flag=="--deep-samples-per-pixel")values["deep_samples_per_pixel"]=number(value());
             else if(flag=="--preset")values["preset"]=value();
             else if(flag=="--format")values["format"]=value();
             else if(flag=="--background")values["background"]=value();

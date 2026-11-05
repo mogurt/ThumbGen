@@ -7,6 +7,8 @@
 #include "selected_input.h"
 #include "cryptomatte.h"
 #include "sampled_id.h"
+#include "deep_selection.h"
+#include "deep_flatten.h"
 #include <OpenImageIO/color.h>
 #include <OpenImageIO/imagebuf.h>
 #include <OpenImageIO/imagebufalgo.h>
@@ -147,7 +149,8 @@ void Engine::restore_sequence_lock(const std::string& id,const Json& lock) {
     valid(!id.empty() && lock.is_object() && lock.size()==3 && lock.contains("key") && lock.contains("request") && lock.contains("named"));
     valid(lock["named"].is_boolean());const bool named=lock["named"].get<bool>();
     const auto& key=lock["key"];const auto& request=lock["request"];
-    valid(key.is_object() && key.size()==(named?4u:5u));
+    const bool deep=key.is_object() && key.contains("deep");
+    valid(key.is_object() && key.size()==(named?4u:5u)+(deep?1u:0u));
     for(const char* field:{"part_name","group","kind"})valid(key.contains(field) && key[field].is_string());
     const bool data=request.is_object() && request.contains("data");
     valid(!key["group"].get<std::string>().empty() && (data?key["kind"]=="data":(key["kind"]=="colour" || key["kind"]=="grey")));
@@ -155,7 +158,19 @@ void Engine::restore_sequence_lock(const std::string& id,const Json& lock) {
     if(named)valid(!key.contains("part"));else valid(key.contains("part") && key["part"].is_number_integer() && key["part"]==0);
     valid(key.contains("channels") && key["channels"].is_array() && (data?key["channels"].size()>=1:(key["channels"].size()==3 || key["channels"].size()==4)));
     for(const auto& channel:key["channels"])valid(channel.is_string() && !channel.get<std::string>().empty());
-    valid(request.is_object() && request.size()==(data?5u:4u));
+    const bool deep_request=request.is_object() && request.contains("deep_mode");
+    valid(request.is_object() && request.size()==4u+(data?1u:0u)+(deep_request?1u:0u));
+    if(deep_request)valid(!data && request["deep_mode"]=="flatten");
+    if(deep) {
+        valid(deep_request && !data && key["channels"].size()==3);
+        const auto& mapping=key["deep"];
+        valid(mapping.is_object() && mapping.size()==6 && mapping.contains("policy") && mapping["policy"]=="deep-mapping-v1");
+        valid(mapping.contains("colour") && mapping["colour"]==key["channels"] && mapping.contains("alpha") && mapping["alpha"].is_array() && mapping["alpha"].size()==3);
+        for(const auto& name:mapping["alpha"])valid(name.is_string() && !name.get<std::string>().empty());
+        valid(mapping.contains("z") && mapping["z"].is_string() && !mapping["z"].get<std::string>().empty() && mapping.contains("zback") && mapping["zback"].is_string());
+        valid(mapping.contains("shared_alpha") && mapping["shared_alpha"].is_boolean() &&
+            mapping["shared_alpha"]==(mapping["alpha"][0]==mapping["alpha"][1] && mapping["alpha"][0]==mapping["alpha"][2]));
+    }
     if(data) {
         const auto& options=request["data"];
         valid(options.is_object() && options.size()==4 && options.contains("mode") && options["mode"].is_string() && options.contains("range") && options["range"].is_array() &&
@@ -192,11 +207,12 @@ Json Engine::capabilities() {
         {"selection_policy","v2"},
         {"quantization","unorm8-half-up-v1"},
         {"visualization_modes",{"colour","depth","normal","vector","id","id_rgb","cryptomatte"}},
+        {"deep_modes",{"reject","flatten"}},
         {"libraries",OIIO::get_string_attribute("library_list")},
         {"output_formats",output_formats},{"presets",{"fast","balanced","quality"}},
         {"defaults",{{"format","jpeg"},{"quality",90},{"size",{1024,1024}},
                      {"background","black"},{"preset","balanced"}}},
-        {"limitations",{"no Deep flattening; Cryptomatte overview requires a complete family within one part",
+        {"limitations",{"Deep flattening is opt-in for associated linear HALF/FLOAT colour with A or AR/AG/AB and Z; NONE/RLE/ZIPS only",
             "batch defaults to one worker; explicit execution budgets enable a bounded process pool",
             "max_decode_mib limits decoded source buffer, not process RSS"}}};
 }
@@ -235,6 +251,8 @@ Json Engine::convert(const Job& job) {
         const bool data=mapping.mode!=detail::DataMode::colour;
         const bool categorical=mapping.mode==detail::DataMode::id || mapping.mode==detail::DataMode::id_rgb;
         const bool crypto=mapping.mode==detail::DataMode::cryptomatte;
+        if((job.options.deep_mode!="reject" && job.options.deep_mode!="flatten") || job.options.deep_samples_per_pixel<1 || job.options.deep_samples_per_pixel>1048576 || (data && job.options.deep_mode!="reject"))
+            throw Failure("deep_options_invalid","invalid Deep options or non-colour visualization");
         if(data && (job.options.channels.empty() || job.options.input_space!="auto" || !job.options.ocio_config.empty() || !job.options.display.empty() || !job.options.view.empty()))
             throw Failure("visualization_options_invalid","data visualization needs explicit channels and does not accept colour transform options");
         OIIO::attribute("threads",job.options.threads);
@@ -280,7 +298,7 @@ Json Engine::convert(const Job& job) {
             OIIO::ImageSpec candidate;
             if(!in->seek_subimage(p,0,candidate))break;
             ++part_count;
-            auto groups=detail::classify(candidate);
+            auto groups=candidate.deep && job.options.deep_mode=="flatten"?detail::deep_colour_candidates(candidate):detail::classify(candidate);
             if(crypto) {
                 const std::vector<std::string> family{job.options.channels};
                 auto record=[&](const std::string& group){if(group!=job.options.channels && detail::crypto_group(family,group))crypto_rank_groups.insert(group);};
@@ -333,7 +351,12 @@ Json Engine::convert(const Job& job) {
             auto value=detail::candidate_json(choice.spec,choice.candidate,choice.part);
             // Named parts may move in the file without changing their identity.
             if(!value["part_name"].get<std::string>().empty())value.erase("part");
-            value.erase("reason");value.erase("primary");return value;
+            value.erase("reason");value.erase("primary");
+            if(choice.spec.deep) {
+                try{value["deep"]=detail::deep_selection(choice.spec,choice.candidate).identity();}
+                catch(const detail::DeepFailure&){value["deep"]=nullptr;}
+            }
+            return value;
         };
         if(!job.sequence_id.empty() && pin!=impl_->sequences.end()) {
             r["selection"]["lock_status"]="reused";r["selection"]["locked"]=pin->second.key;
@@ -345,7 +368,7 @@ Json Engine::convert(const Job& job) {
         }
         if(!part_exists)throw Failure("part_not_found","requested part does not exist");
         if(choices.empty()) {
-            if(has_deep)throw Failure("deep_requires_flattening","Deep data requires flattening");
+            if(has_deep)throw Failure(job.options.deep_mode=="flatten"?"deep_layout_unsupported":"deep_requires_flattening","Deep data requires an explicit supported colour mapping and flatten mode");
             if(crypto)throw Failure(crypto_metadata_seen?"cryptomatte_layout_unsupported":"cryptomatte_metadata_invalid","requested Cryptomatte family requires metadata and complete same-part rank layers");
             if(has_data)throw Failure("visualization_required","data AOV requires dedicated visualization; colour selection cannot override it");
             if(!job.options.channels.empty() && !matched_group)throw Failure("channels_not_found","requested channel group does not exist");
@@ -357,6 +380,8 @@ Json Engine::convert(const Job& job) {
         }
         auto chosen=std::move(choices[0]);const Json chosen_key=key(chosen);
         part=chosen.part;spec=std::move(chosen.spec);channels=chosen.candidate.channels;
+        std::optional<detail::DeepSelection> deep;
+        if(spec.deep)deep=detail::deep_selection(spec,chosen.candidate);
         r["selection"]["chosen"]=detail::candidate_json(spec,chosen.candidate,part);
         if(spec.width<1 || spec.height<1 || spec.depth!=1 || spec.full_width<1 || spec.full_height<1)
             throw Failure("invalid_dimensions","unsupported image dimensions");
@@ -374,6 +399,9 @@ Json Engine::convert(const Job& job) {
             r["selection"]["lock_status"]="created";r["selection"]["locked"]=chosen_key;
         }
         r["source"]=spec_json(spec,part);
+        if(deep)r["deep"]={{"mode","flatten"},{"policy","deep-colour-sweep-v1"},{"mapping",deep->identity()},
+            {"sample_limit",job.options.deep_samples_per_pixel},{"buffer_limit_bytes",job.options.max_decode_mib*1024ULL*1024ULL},
+            {"samples",0},{"chunks",0},{"peak_buffer_bytes",0}};
         r["selected_channels"]=Json::array();
         for(int c:channels)r["selected_channels"].push_back(spec.channelnames[c]);
         r["timings_ms"]["open_select"]=ms(tick);
@@ -420,9 +448,10 @@ Json Engine::convert(const Job& job) {
                 {"modified_seconds",stamp.modified_seconds},{"modified_fraction",stamp.modified_fraction}}},
                 {"footprint",{{"data_width",spec.width},{"data_height",spec.height},
                     {"display_width",display_width},{"display_height",display_height},
-                    {"channel_span",*span.second-*span.first+1},{"selected_channels",data?4:channels.size()},
+                    {"channel_span",*span.second-*span.first+1},{"selected_channels",data || deep?4:channels.size()},
                     {"source_sample_bytes",input_plan.sample_bytes},{"source_pixel_bytes",input_plan.pixel_bytes},
                     {"source_buffer_bytes",sampled?sampled->peak_bytes:0},
+                    {"deep_buffer_bytes",deep?job.options.max_decode_mib*1024ULL*1024ULL:0},
                     {"native_categorical",categorical},
                     {"output_width",largest_w},{"output_height",largest_h},{"threads",job.options.threads}}},
                 {"sequence_pin",sequence_lock(job.sequence_id)}};
@@ -464,6 +493,8 @@ Json Engine::convert(const Job& job) {
                 }
             }
             input_space=space(from);
+            if(deep && (!config->isColorSpaceLinear(input_space) || spec.get_int_attribute("oiio:UnassociatedAlpha",0)))
+                throw Failure("deep_colour_unsupported","Deep flattening requires associated samples in a verified linear input space");
             if(job.options.display.empty())output_space=space("sRGB");
             else {
                 const auto displays=config->getDisplayNames();
@@ -488,6 +519,7 @@ Json Engine::convert(const Job& job) {
         // ImageBuf may wrap caller-owned storage. Keep the colour source alive
         // throughout all outputs, as in the original colour conversion path.
         std::vector<float> pixels;
+        detail::DeepImage deep_image;
         if(data) {
             stage="visualization";
             try {
@@ -505,6 +537,37 @@ Json Engine::convert(const Job& job) {
                 throw Failure("data_invalid_value",error.what());
             }catch(...){in->close();verify_source();throw;}
             in->close();if(impl_->observer)impl_->observer("decoded",job);verify_source();
+        } else if(deep) {
+            stage="decode";tick=Clock::now();in->close();verify_source();
+            detail::DeepReadOutput output;
+            output.mode=job.options.background=="transparent"?detail::DeepOutputMode::associated_rgba:detail::DeepOutputMode::opaque_rgba;
+            if(job.options.background=="white") {
+                // White is specified in the working linear basis. Transform a
+                // single opaque pixel back to source before Deep composition.
+                OIIO::ImageSpec bs(1,1,3,OIIO::TypeDesc::FLOAT);OIIO::ImageBuf background(bs),converted;
+                check(iba::fill(background,std::vector<float>{1,1,1}),background,"colour_failed");
+                if(input_space!=working_space) {
+                    check(iba::colorconvert(converted,background,working_space,input_space,false,"","",config),converted,"colour_failed");
+                    background=std::move(converted);
+                }
+                float colour[3];background.getpixel(0,0,colour);for(int c=0;c<3;++c)output.background[c]=colour[c];
+            }
+            detail::DeepReadLimits limits;limits.bytes=job.options.max_decode_mib*1024ULL*1024ULL;limits.samples_per_pixel=job.options.deep_samples_per_pixel;
+            deep_image=detail::read_deep_image(source_path,part,deep->channels,limits,[&](const char* phase){
+                if(impl_->observer)impl_->observer(std::string("deep_")+phase,job);verify_source();
+            },output);
+            if(deep_image.x!=spec.x || deep_image.y!=spec.y || deep_image.width!=spec.width || deep_image.height!=spec.height)
+                throw Failure("source_changed","Deep geometry changed after metadata preparation",true);
+            if(impl_->observer)impl_->observer("decoded",job);verify_source();
+            r["decoded_mib"]=double(deep_image.bytes)/1048576;
+            r["deep"]["samples"]=deep_image.samples;r["deep"]["chunks"]=deep_image.chunks;r["deep"]["peak_buffer_bytes"]=deep_image.peak_accounted_bytes;
+            r["timings_ms"]["decode"]=ms(tick);
+            auto flat=spec;flat.deep=false;flat.nchannels=4;flat.format=OIIO::TypeDesc::FLOAT;flat.channelformats.clear();flat.channelnames={"R","G","B","A"};flat.alpha_channel=3;flat.z_channel=-1;
+            flat.attribute("oiio:UnassociatedAlpha",0);
+            working=OIIO::ImageBuf(flat,deep_image.pixels.get());order={0,1,2,3};
+            if(job.options.background=="transparent")for(std::size_t p=0;p<deep_image.bytes/sizeof(float);p+=4)
+                if(deep_image.pixels[p+3]==0 && (deep_image.pixels[p]!=0 || deep_image.pixels[p+1]!=0 || deep_image.pixels[p+2]!=0))
+                    throw Failure("deep_transparency_unsupported","Straight PNG/WebP cannot represent zero-alpha Deep emission; choose an opaque background");
         } else {
             const size_t limit=job.options.max_decode_mib*1024ULL*1024ULL/sizeof(float);
             size_t count=size_t(spec.width);
@@ -614,6 +677,13 @@ Json Engine::convert(const Job& job) {
                         check(iba::ociodisplay(preview,preview,job.options.display,job.options.view,working_space,"",true,false,"","",config),preview,"colour_failed");
                 }
                 if(job.options.background=="transparent" && preview.nchannels()==4) {
+                    if(deep) {
+                        const auto* p=static_cast<const float*>(preview.localpixels());
+                        if(!p || !preview.contiguous())throw Failure("deep_transparency_unsupported","Deep transparent preview must be contiguous RGBA");
+                        for(std::size_t i=0;i<std::size_t(w)*h*4;i+=4)
+                            if(p[i+3]==0 && (p[i]!=0 || p[i+1]!=0 || p[i+2]!=0))
+                                throw Failure("deep_transparency_unsupported","Straight PNG/WebP cannot represent zero-alpha Deep emission after filtering/colour conversion");
+                    }
                     // Supply straight display RGB explicitly. PNG and WebP plugins
                     // otherwise deassociate in different spaces (WebP uses gamma 2.2).
                     check(iba::unpremult(preview,preview),preview,"alpha_failed");
@@ -678,6 +748,8 @@ Json Engine::convert(const Job& job) {
         }
         r["ok"]=successes+skips==job.outputs.size();
         r["status"]=skips==job.outputs.size()?"skipped":r["ok"].get<bool>()?"success":successes+skips?"partial":"failed";
+    }catch(const detail::DeepFailure& e){
+        r["error"]={{"code",e.code},{"message",e.what()},{"stage",stage},{"retryable",false}};
     }catch(const Failure& e){
         if(e.code=="source_changed" && r.contains("source_check"))r["source_check"]["stable"]=false;
         r["error"]={{"code",e.code},{"message",e.what()},{"stage",stage},{"retryable",e.retryable}};

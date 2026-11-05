@@ -64,12 +64,12 @@ Json job_to_wire(const Job& job) {
         {"options",{{"preset",o.preset},{"input_space",o.input_space},{"background",o.background},{"ocio_config",o.ocio_config},
             {"display",o.display},{"view",o.view},{"channels",o.channels},{"part_name",o.part_name},{"selection_policy",o.selection_policy},
             {"part",o.part},{"threads",o.threads},{"max_decode_mib",o.max_decode_mib},
-            {"visualization",o.visualization},{"data_range",o.data_range},{"invalid_values",o.invalid_values}}}};
+            {"visualization",o.visualization},{"data_range",o.data_range},{"invalid_values",o.invalid_values},{"deep_mode",o.deep_mode},{"deep_samples_per_pixel",o.deep_samples_per_pixel}}}};
 }
 Job job_from_wire(const Json& value) {
     fields(value,{"id","input","sequence_id","options","outputs"});Job job;
     job.id=text(value["id"]);require(!job.id.empty(),"empty worker job id");job.input=text(value["input"]);path(job.input);job.sequence_id=text(value["sequence_id"]);
-    const auto& options=value["options"];fields(options,{"preset","input_space","background","ocio_config","display","view","channels","part_name","selection_policy","part","threads","max_decode_mib","visualization","data_range","invalid_values"});
+    const auto& options=value["options"];fields(options,{"preset","input_space","background","ocio_config","display","view","channels","part_name","selection_policy","part","threads","max_decode_mib","visualization","data_range","invalid_values","deep_mode","deep_samples_per_pixel"});
     auto& o=job.options;
     o.preset=text(options["preset"]);member(o.preset,{"fast","balanced","quality"});o.input_space=text(options["input_space"]);require(!o.input_space.empty(),"empty input space");
     o.background=text(options["background"]);member(o.background,{"black","white","transparent"});o.ocio_config=text(options["ocio_config"]);
@@ -78,6 +78,9 @@ Job job_from_wire(const Json& value) {
     o.part=integer(options["part"],-1,std::numeric_limits<int>::max());require(o.part<0 || o.part_name.empty(),"conflicting part selectors");
     o.threads=integer(options["threads"],1,256);o.max_decode_mib=size_t(integer(options["max_decode_mib"],1,16384));
     o.visualization=text(options["visualization"]);member(o.visualization,{"colour","depth","normal","vector","id","id_rgb","cryptomatte"});
+    o.deep_mode=text(options["deep_mode"]);member(o.deep_mode,{"reject","flatten"});
+    o.deep_samples_per_pixel=integer(options["deep_samples_per_pixel"],1,1048576);
+    require(o.deep_mode!="flatten" || o.visualization=="colour","Deep flattening requires colour visualization");
     o.invalid_values=text(options["invalid_values"]);member(o.invalid_values,{"black","magenta","error"});
     require(options["data_range"].is_array() && (options["data_range"].empty() || options["data_range"].size()==2),"invalid worker data range");
     for(const auto& endpoint:options["data_range"]) {require(endpoint.is_number() && std::isfinite(endpoint.get<double>()),"invalid worker range number");o.data_range.push_back(endpoint.get<double>());}

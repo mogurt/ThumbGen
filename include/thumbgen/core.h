@@ -11,6 +11,8 @@ struct Options {
     std::string preset = "balanced", input_space = "auto", background = "black";
     std::string ocio_config, display, view, channels, part_name, selection_policy = "primary";
     std::string visualization="colour",invalid_values="magenta";
+    std::string deep_mode="reject";
+    int deep_samples_per_pixel=4096;
     std::vector<double> data_range;
     int part = -1, threads = 4;
     size_t max_decode_mib = 512;

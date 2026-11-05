@@ -34,6 +34,12 @@ MemoryEstimate estimate_memory(const ImageFootprint& s) {
             throw std::invalid_argument("invalid sampled source buffer estimate");
         e.source=s.source_buffer_bytes;
     }
+    if(s.deep_buffer_bytes) {
+        if(s.native_categorical || s.source_buffer_bytes || s.selected_channels!=4 ||
+           s.deep_buffer_bytes>16384ULL*mib || s.deep_buffer_bytes<multiply(data,4*sizeof(float)))
+            throw std::invalid_argument("invalid Deep source budget");
+        e.source=s.deep_buffer_bytes;
+    }
     // Categorical modes retain native source + per-thread DOUBLE scan rows;
     // RGBA is allocated at preview size and already covered by output below.
     // Other modes keep full colour/mapping, padding and orientation temporaries.

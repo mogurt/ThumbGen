@@ -275,6 +275,56 @@
       "code": "cryptomatte_layout_unsupported",
       "category": "selection",
       "description": "Cryptomatte requires complete same-part FLOAT ID/coverage rank layers"
+    },
+    {
+      "code": "deep_channel_mapping_invalid",
+      "category": "input",
+      "description": "Deep颜色Alpha深度映射缺失或有歧义"
+    },
+    {
+      "code": "deep_colour_unsupported",
+      "category": "input",
+      "description": "Deep需要已关联且经配置确认的线性颜色空间"
+    },
+    {
+      "code": "deep_decode_failed",
+      "category": "input",
+      "description": "Deep计数或载荷读取失败"
+    },
+    {
+      "code": "deep_decode_limit_exceeded",
+      "category": "input",
+      "description": "Deep合并解码缓冲超出预算"
+    },
+    {
+      "code": "deep_layout_unsupported",
+      "category": "input",
+      "description": "Deep布局类型或压缩尚未支持"
+    },
+    {
+      "code": "deep_options_invalid",
+      "category": "input",
+      "description": "Deep选项或可视化模式不支持"
+    },
+    {
+      "code": "deep_sample_limit_exceeded",
+      "category": "input",
+      "description": "Deep像素块或整图样本数量超限"
+    },
+    {
+      "code": "deep_transparency_unsupported",
+      "category": "input",
+      "description": "普通透明输出无法表达所选Deep透明率或发光"
+    },
+    {
+      "code": "deep_value_invalid",
+      "category": "input",
+      "description": "Deep样本或展平值无效"
+    },
+    {
+      "code": "deep_workspace_limit_exceeded",
+      "category": "input",
+      "description": "Deep展平工作空间超限"
     }
   ]
 }

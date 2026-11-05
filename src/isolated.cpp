@@ -97,13 +97,34 @@ Json task_base(const Job& job) {
     return value;
 }
 void base_check(const Json& value,const Job& job) {
-    allowed(value,{"schema_version","type","id","input","ok","status","outputs","warnings","error","selection","source","selected_channels","colour","decoded_mib","preset","filter","timings_ms","sequence_id","source_check","visualization","cryptomatte","source_read"});
+    allowed(value,{"schema_version","type","id","input","ok","status","outputs","warnings","error","selection","source","selected_channels","colour","decoded_mib","preset","filter","timings_ms","sequence_id","source_check","visualization","cryptomatte","source_read","deep"});
     check(value.is_object() && value.value("type",std::string{})=="result" && value.value("id",std::string{})==job.id &&
         value.value("input",std::string{})==job.input && value.value("schema_version",0)==1,"worker result identity mismatch");
     check(value.value("sequence_id",std::string{})==job.sequence_id,"worker sequence identity mismatch");
     check(value.contains("warnings") && value["warnings"].is_array() && value.contains("timings_ms") && value["timings_ms"].is_object(),"invalid worker result metadata");
     for(const auto& warning:value["warnings"])check(warning.is_string(),"invalid worker warning");
     if(value.contains("error"))error_check(value["error"]);
+    if(value.contains("source") && value["source"].value("deep",false) && job.options.deep_mode=="flatten")
+        check(value.contains("deep"),"missing worker Deep diagnostics");
+    if(value.contains("deep")) {
+        const auto& deep=value["deep"];fields(deep,{"mode","policy","mapping","sample_limit","buffer_limit_bytes","samples","chunks","peak_buffer_bytes"});
+        check(job.options.deep_mode=="flatten" && job.options.visualization=="colour" && deep["mode"]=="flatten" && deep["policy"]=="deep-colour-sweep-v1" &&
+            deep["sample_limit"]==job.options.deep_samples_per_pixel && deep["buffer_limit_bytes"]==job.options.max_decode_mib*1024ULL*1024ULL &&
+            value.contains("source") && value["source"].value("deep",false),"worker Deep settings mismatch");
+        number(deep["samples"],64ULL*1024*1024);number(deep["chunks"],std::numeric_limits<std::uint64_t>::max());
+        number(deep["peak_buffer_bytes"],job.options.max_decode_mib*1024ULL*1024ULL);
+        // Reuse the strict sequence-key validator, including exact alpha/Z mappings.
+        check(value.contains("selection") && value["selection"].contains("chosen"),"missing Deep selection");
+        if(!job.sequence_id.empty() && value["selection"].contains("locked"))
+            check(value["selection"]["locked"].contains("deep") && value["selection"]["locked"]["deep"]==deep["mapping"],"worker Deep sequence mapping mismatch");
+        auto key=value["selection"]["chosen"];key.erase("reason");key.erase("primary");
+        if(key["part_name"]!="")key.erase("part");
+        else key["part"]=0; // A non-sequence multipart index is not a sequence identity.
+        key["deep"]=deep["mapping"];
+        auto request=selection_request(job);if(key["part_name"]=="")request["part"]=-1;
+        Engine verifier;try{verifier.restore_sequence_lock("validate",{{"key",key},{"request",request},{"named",key["part_name"]!=""}});}
+        catch(const std::exception&){check(false,"invalid worker Deep channel mapping");}
+    }
     if(value.contains("source_read")) {
         const auto& read=value["source_read"];fields(read,{"mode","grid","block","calls","buffer_bytes"});
         check(job.options.visualization=="id" && read["mode"]=="sampled_blocks","worker source read mode mismatch");
@@ -351,12 +372,14 @@ bool run_isolated(const std::vector<Job>& jobs,const std::string& executable,con
                         try {source=source_stamp(fs::u8path(job.input));}
                         catch(const FileFailure&){throw FileFailure("source_changed","source could not be verified after metadata preparation",true);}
                         if(stamp_json(*source)!=payload["source_stamp"])throw FileFailure("source_changed","source changed during metadata preparation",true);
-                        const auto& f=payload["footprint"];fields(f,{"data_width","data_height","display_width","display_height","channel_span","selected_channels","output_width","output_height","threads","source_sample_bytes","source_pixel_bytes","source_buffer_bytes","native_categorical"});
+                        const auto& f=payload["footprint"];fields(f,{"data_width","data_height","display_width","display_height","channel_span","selected_channels","output_width","output_height","threads","source_sample_bytes","source_pixel_bytes","source_buffer_bytes","native_categorical","deep_buffer_bytes"});
                         const bool categorical=job.options.visualization=="id" || job.options.visualization=="id_rgb";
                         check(f["native_categorical"].is_boolean() && f["native_categorical"]==categorical,"worker categorical footprint mismatch");
                         check(number(f["threads"],256)==unsigned(job.options.threads),"plan thread quota mismatch");
                         ImageFootprint shape{number(f["data_width"],2147483647),number(f["data_height"],2147483647),number(f["display_width"],2147483647),number(f["display_height"],2147483647),
                             number(f["channel_span"],2147483647),number(f["selected_channels"],4),number(f["output_width"],32768),number(f["output_height"],32768),unsigned(job.options.threads),unsigned(number(f["source_sample_bytes"],8)),categorical,number(f["source_pixel_bytes"],32),number(f["source_buffer_bytes"],std::numeric_limits<std::uint64_t>::max())};
+                        shape.deep_buffer_bytes=number(f["deep_buffer_bytes"],16384ULL*1024*1024);
+                        check(base.contains("deep")?(shape.deep_buffer_bytes==job.options.max_decode_mib*1024ULL*1024ULL && shape.selected_channels==4 && !categorical && !shape.source_buffer_bytes):shape.deep_buffer_bytes==0,"worker Deep budget mismatch");
                         check(shape.source_buffer_bytes?(job.options.visualization=="id" && base.contains("source_read") && base["source_read"]["buffer_bytes"]==shape.source_buffer_bytes):!base.contains("source_read"),"sampled source footprint mismatch");
                         check(shape.data_width && shape.data_height && shape.display_width && shape.display_height && shape.channel_span &&
                             (shape.selected_channels==3 || shape.selected_channels==4) && shape.output_width && shape.output_height && shape.source_sample_bytes &&

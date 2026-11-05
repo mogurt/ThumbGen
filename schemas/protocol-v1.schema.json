@@ -127,7 +127,17 @@
             "data_type_unsupported",
             "data_invalid_value",
             "cryptomatte_metadata_invalid",
-            "cryptomatte_layout_unsupported"
+            "cryptomatte_layout_unsupported",
+            "deep_channel_mapping_invalid",
+            "deep_colour_unsupported",
+            "deep_decode_failed",
+            "deep_decode_limit_exceeded",
+            "deep_layout_unsupported",
+            "deep_options_invalid",
+            "deep_sample_limit_exceeded",
+            "deep_transparency_unsupported",
+            "deep_value_invalid",
+            "deep_workspace_limit_exceeded"
           ]
         },
         "message": {
@@ -716,6 +726,9 @@
             "calls",
             "buffer_bytes"
           ]
+        },
+        "deep": {
+          "$ref": "#/$defs/deep_result"
         }
       },
       "required": [
@@ -1356,6 +1369,16 @@
             ]
           },
           "uniqueItems": true
+        },
+        "deep_modes": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "reject",
+              "flatten"
+            ]
+          },
+          "uniqueItems": true
         }
       },
       "required": [
@@ -1422,6 +1445,9 @@
           "items": {
             "type": "string"
           }
+        },
+        "deep": {
+          "$ref": "#/$defs/deep_mapping"
         }
       },
       "required": [
@@ -1661,6 +1687,100 @@
         "ranks",
         "manifest"
       ]
+    },
+    "deep_mapping": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "policy",
+        "colour",
+        "alpha",
+        "z",
+        "zback",
+        "shared_alpha"
+      ],
+      "properties": {
+        "policy": {
+          "const": "deep-mapping-v1"
+        },
+        "colour": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 3,
+          "maxItems": 3
+        },
+        "alpha": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 3,
+          "maxItems": 3
+        },
+        "z": {
+          "type": "string",
+          "minLength": 1
+        },
+        "zback": {
+          "type": "string"
+        },
+        "shared_alpha": {
+          "type": "boolean"
+        }
+      }
+    },
+    "deep_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "policy",
+        "mapping",
+        "sample_limit",
+        "buffer_limit_bytes",
+        "samples",
+        "chunks",
+        "peak_buffer_bytes"
+      ],
+      "properties": {
+        "mode": {
+          "const": "flatten"
+        },
+        "policy": {
+          "const": "deep-colour-sweep-v1"
+        },
+        "mapping": {
+          "$ref": "#/$defs/deep_mapping"
+        },
+        "sample_limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1048576
+        },
+        "buffer_limit_bytes": {
+          "type": "integer",
+          "minimum": 1048576,
+          "maximum": 17179869184
+        },
+        "samples": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 67108864
+        },
+        "chunks": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "peak_buffer_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 17179869184
+        }
+      }
     }
   }
 }

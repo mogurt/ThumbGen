@@ -236,6 +236,8 @@ if(BUILD_TESTING)
     add_test(NAME core_deep_selection COMMAND thumbgen_deep_selection_tests)
     set_tests_properties(core_deep_selection PROPERTIES TIMEOUT 30 ENVIRONMENT_MODIFICATION
         "PATH=path_list_prepend:$<TARGET_FILE_DIR:OpenImageIO::OpenImageIO>;LD_LIBRARY_PATH=path_list_prepend:$<TARGET_FILE_DIR:OpenImageIO::OpenImageIO>")
+    add_executable(thumbgen_deep_cli_fixtures tests/deep_cli_fixtures.cpp)
+    target_link_libraries(thumbgen_deep_cli_fixtures PRIVATE OpenImageIO::OpenImageIO nlohmann_json::nlohmann_json)
     add_executable(thumbgen_sampled_id_tests tests/test_sampled_id.cpp)
     target_include_directories(thumbgen_sampled_id_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
     target_link_libraries(thumbgen_sampled_id_tests PRIVATE thumbgen_core OpenImageIO::OpenImageIO Imath::Imath)
@@ -335,6 +337,11 @@ if(BUILD_TESTING)
                 --aov-exe $<TARGET_FILE:thumbgen_aov_tests> --schema-dir ${CMAKE_CURRENT_SOURCE_DIR}/schemas
                 --runtime-dir $<TARGET_FILE_DIR:OpenImageIO::OpenImageIO>)
             set_tests_properties(public_aov PROPERTIES TIMEOUT 120 LABELS "protocol;aov")
+            add_test(NAME public_deep COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_deep_cli.py --exe $<TARGET_FILE:thumbgen>
+                --fixtures-exe $<TARGET_FILE:thumbgen_deep_cli_fixtures> --schema-dir ${CMAKE_CURRENT_SOURCE_DIR}/schemas
+                --runtime-dir $<TARGET_FILE_DIR:OpenImageIO::OpenImageIO>)
+            set_tests_properties(public_deep PROPERTIES TIMEOUT 120 LABELS "protocol;deep")
             execute_process(COMMAND ${Python3_EXECUTABLE} -c "import jsonschema" RESULT_VARIABLE THUMBGEN_SCHEMA_IMPORT)
             if(NOT THUMBGEN_SCHEMA_IMPORT EQUAL 0)
                 message(FATAL_ERROR "Protocol tests require tests/requirements.txt in Python3_EXECUTABLE; or explicitly set THUMBGEN_TEST_PROTOCOL=OFF")
