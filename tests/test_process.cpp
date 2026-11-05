@@ -34,13 +34,31 @@ static int wait_exit(ChildProcess& child) {
 static std::string line(ChildProcess& child) {
     auto value=child.read(Clock::now()+3s);require(value.state==State::line,"expected line, got: "+value.text);return value.text;
 }
+#ifndef _WIN32
+static bool live_proc_stat(const std::string& value) {
+    auto end=value.rfind(')');
+    if(end==std::string::npos || end+2>=value.size())return false;
+    // Reaping can change Z (zombie) to X (dead) between consecutive reads.
+    // Neither can execute; sleeping/stopped tasks must still count as alive.
+    auto state=value[end+2];return state!='Z' && state!='X' && state!='x';
+}
+static void proc_state_regression() {
+    for(char state:std::string("RSDTtPIKW"))
+        require(live_proc_stat(std::string("54407 (worker ) helper) ")+state+" 1 54403 50310"),"live /proc state mistaken for stopped descendant");
+    // The captured failure read Z, then X six microseconds later for the same
+    // PID/starttime. Exercise the exact observer, independently of scheduling.
+    require(!live_proc_stat("54407 (worker helper) Z 50309 54403 50310"),"zombie /proc state mistaken for running descendant");
+    require(!live_proc_stat("54407 (worker helper) X 0 -1 -1"),"dead /proc state mistaken for running descendant");
+    require(!live_proc_stat("54407 (worker helper) x 0 -1 -1"),"legacy dead /proc state mistaken for running descendant");
+}
+#endif
 static bool running(unsigned long pid) {
 #ifdef _WIN32
     HANDLE process=OpenProcess(SYNCHRONIZE,FALSE,DWORD(pid));if(!process)return false;
     bool alive=WaitForSingleObject(process,0)==WAIT_TIMEOUT;CloseHandle(process);return alive;
 #else
     std::ifstream stat("/proc/"+std::to_string(pid)+"/stat");std::string value;std::getline(stat,value);
-    auto end=value.rfind(')');return end!=std::string::npos && end+2<value.size() && value[end+2]!='Z';
+    return live_proc_stat(value);
 #endif
 }
 static int run(const std::vector<std::string>& args) {
@@ -80,6 +98,9 @@ static int run(const std::vector<std::string>& args) {
         std::cout<<pid<<'\n'<<std::flush;std::this_thread::sleep_for(15s);return 0;
     }
     try {
+#ifndef _WIN32
+        proc_state_regression();
+#endif
         auto root=fs::temp_directory_path()/fs::u8path("thumbgen-child-"+std::to_string(Clock::now().time_since_epoch().count())+u8" 汉字");
         require(fs::create_directory(root),"cannot reserve test directory");
         auto executable=root/fs::u8path(u8"worker helper 空格"+fs::u8path(args[0]).extension().u8string());
