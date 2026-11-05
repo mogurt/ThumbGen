@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+import sys
 
 spec = importlib.util.spec_from_file_location('ci_run', Path(__file__).resolve().parents[2] / 'scripts/ci/run.py')
 ci = importlib.util.module_from_spec(spec)
@@ -50,6 +51,31 @@ class Audits(unittest.TestCase):
             with self.subTest(status=status), self.assertRaisesRegex(RuntimeError, 'disabled'):
                 ci.audit_tests(self.inventory, junit)
 
+    def test_disabled_inventory_is_rejected_even_with_success_junit(self):
+        for value in (True, 'TRUE', 'ON', '1'):
+            self.inventory['tests'][-1]['properties'] = [dict(name='DISABLED', value=value)]
+            with self.subTest(value=value), self.assertRaisesRegex(RuntimeError, 'Disabled'):
+                ci.audit_tests(self.inventory, self.xml())
+        for value in (False, 'OFF', '0'):
+            self.inventory['tests'][-1]['properties'] = [dict(name='DISABLED', value=value)]
+            self.assertEqual(ci.audit_tests(self.inventory, self.xml()), len(self.names))
+
+    def test_failed_and_missing_commands_retain_receipts(self):
+        with tempfile.TemporaryDirectory() as root:
+            directory = Path(root)
+            report = dict(commands=[])
+            run = ci.Commands(directory, directory, None, report)
+            with self.assertRaisesRegex(RuntimeError, 'failed'):
+                run('failure', [sys.executable, '-c', 'print("diagnostic", flush=True); raise SystemExit(7)'], quiet=True)
+            receipt = json.loads((directory / 'execution.json').read_text())
+            self.assertEqual(receipt['commands'][0]['returncode'], 7)
+            self.assertIn('diagnostic', (directory / 'failure.log').read_text())
+            with self.assertRaises(OSError):
+                run('missing', [str(directory / 'nonexistent-executable')])
+            receipt = json.loads((directory / 'execution.json').read_text())
+            self.assertIn('error', receipt['commands'][-1])
+            self.assertIn('finished', receipt['commands'][-1])
+
     def test_release_scope_and_python_contamination(self):
         with tempfile.TemporaryDirectory() as root:
             directory = Path(root)
@@ -67,6 +93,10 @@ class Audits(unittest.TestCase):
             (reply / 'index-1.json').write_text(json.dumps({'reply': {'codemodel-v2': {'jsonFile': 'model.json'}}}))
             (reply / 'model.json').write_text(json.dumps(dict(configurations=[dict(targets=targets)])))
             self.assertEqual(ci.audit_release(directory), expected)
+            (reply / 'model.json').write_text(json.dumps(dict(configurations=[dict(targets=targets + targets[:1])])))
+            with self.assertRaisesRegex(RuntimeError, 'scope'):
+                ci.audit_release(directory)
+            (reply / 'model.json').write_text(json.dumps(dict(configurations=[dict(targets=targets)])))
             for variable in ('_Python3_EXECUTABLE', 'PYTHON_EXECUTABLE'):
                 (directory / 'CMakeCache.txt').write_text(cache + '\n' + variable + ':INTERNAL=unexpected')
                 with self.subTest(variable=variable), self.assertRaisesRegex(RuntimeError, 'Python'):
