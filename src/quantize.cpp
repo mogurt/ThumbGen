@@ -37,4 +37,9 @@ void quantize_u8(const float* source,std::uint8_t* destination,std::size_t count
 #endif
     for(;i<count;++i)destination[i]=scalar(source[i]);
 }
+void quantize_rgba8(const float* source,std::uint8_t* destination,std::size_t pixels) noexcept {
+    quantize_u8(source,destination,pixels*4);
+    for(std::size_t i=0;i<pixels;++i,destination+=4)
+        if(destination[3]==0)destination[0]=destination[1]=destination[2]=0;
+}
 }

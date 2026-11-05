@@ -53,6 +53,30 @@ int main() {
             }
         }
         thumbgen::detail::quantize_u8(nullptr,nullptr,0);
+        // Pixel chunks must retain every old byte at nonzero encoded Alpha,
+        // including either side of the half-LSB transition and exceptional Alpha.
+        std::vector<float> rgba;
+        for(float alpha:values)rgba.insert(rgba.end(),{0.28431373834609985f,0.7f,1.0f,alpha});
+        const auto rgba_original=rgba;
+        std::vector<std::uint8_t> rgba_expected(rgba.size());
+        std::transform(rgba.begin(),rgba.end(),rgba_expected.begin(),reference);
+        for(std::size_t i=0;i<rgba_expected.size();i+=4)
+            if(rgba_expected[i+3]==0)rgba_expected[i]=rgba_expected[i+1]=rgba_expected[i+2]=0;
+        for(std::size_t pixels:{0,1,2,3,4,5,7,31,16385}) {
+            if(!pixels) {thumbgen::detail::quantize_rgba8(nullptr,nullptr,0);continue;}
+            for(std::size_t offset=0;offset<8;++offset) {
+                std::vector<float> input(offset+rgba.size());
+                std::copy(rgba.begin(),rgba.end(),input.begin()+offset);
+                std::vector<std::uint8_t> output(offset+rgba.size()+8,0xa5);
+                for(std::size_t start=0;start<values.size();start+=pixels)
+                    thumbgen::detail::quantize_rgba8(input.data()+offset+start*4,output.data()+offset+start*4,
+                        std::min(pixels,values.size()-start));
+                require(std::equal(rgba_expected.begin(),rgba_expected.end(),output.begin()+offset),"RGBA storage policy or chunk mismatch");
+                require(std::memcmp(input.data()+offset,rgba_original.data(),rgba.size()*sizeof(float))==0,"RGBA source changed");
+                require(std::all_of(output.begin(),output.begin()+offset,[](auto v){return v==0xa5;}) &&
+                    std::all_of(output.end()-8,output.end(),[](auto v){return v==0xa5;}),"RGBA canary overwritten");
+            }
+        }
         require(std::memcmp(values.data(),original.data(),values.size()*sizeof(float))==0,"source changed");
         std::cout<<values.size()<<" values, 12 chunk sizes, 8 alignments matched independent oracle\n";
         return 0;
