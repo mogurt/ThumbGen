@@ -4,10 +4,26 @@ import sys
 import unittest
 import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]/'benchmarks'))
-from production_data_reference import mapping, canvas, reduced_reference
+from production_data_reference import mapping, canvas, reduced_reference, resized_reference, fit_size
 
 
 class DataReference(unittest.TestCase):
+    def test_fractional_triangle_and_public_size_rounding(self):
+        self.assertEqual(fit_size(1920, 818, [425,260]), (425,181))
+        self.assertEqual(fit_size(1920,1080,[425,260]), (425,239))
+        self.assertEqual(fit_size(4,2,[425,260]), (4,2))
+        for mode in ('depth','id_rgb'):
+            result = resized_reference(np.ones((5,7,3)), mode, 3,2)
+            np.testing.assert_allclose(result, 1, atol=1e-14, rtol=0)
+        # 5 -> 3: middle target centre is source index2; weights .4,1,.4
+        # normalize to 2/9,5/9,2/9: the 2D central impulse contributes25/81.
+        impulse = np.zeros((5,5,3));impulse[2,2] = 1
+        result = resized_reference(impulse,'depth',3,3)
+        self.assertAlmostEqual(float(result[1,1,0]), 25/81, places=14)
+        from production_icc_reference import triangle
+        with self.assertRaises(ValueError):
+            triangle(impulse,3,3)
+
     def test_integer_triangle_impulse_and_transparent_edges(self):
         impulse = np.zeros((8,8,3))
         impulse[2:4,2:4] = 1
