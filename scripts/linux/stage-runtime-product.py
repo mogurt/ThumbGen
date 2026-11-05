@@ -12,7 +12,7 @@ import re
 import shutil
 import subprocess
 import tarfile
-from runtime_overlays import SYSTEM, audit, audit_base, cache_values, require, run, sha
+from runtime_overlays import audit, audit_base, cache_values, require, run, sha, system_elf
 
 p = argparse.ArgumentParser(description=__doc__)
 for name in ('source', 'archive', 'build', 'install', 'cache', 'color-root', 'core-root', 'output', 'cmake'):
@@ -44,7 +44,8 @@ env = dict(PATH=os.environ['PATH'], HOME=os.environ['HOME'], LANG='C', LC_ALL='C
                 a.cache / 'sdk/lib', a.cache / 'oiio-deps/dist/lib']))
 loader = subprocess.check_output(['ldd', str(install / 'bin/thumbgen')], env=env, text=True)
 require('not found' not in loader, 'Unresolved installation closure')
-expected_shared = {x['path']: x['sha256'] for x in overlay['shared'].values()}
+expected_shared = dict(base['verified_files'])
+expected_shared.update(overlay['verified_files'])
 objects, copied = [], []
 for item in re.findall(r'(?:=>\s*)?(/[^\s()]+)', loader):
     path = Path(item).resolve()
@@ -54,13 +55,9 @@ for item in re.findall(r'(?:=>\s*)?(/[^\s()]+)', loader):
     match = re.search(r'\(SONAME\).*?\[(.*?)\]', dynamic)
     soname = match[1] if match else path.name
     objects.append(dict(path=str(path), sha256=sha(path)))
-    if soname.startswith(SYSTEM) or path.name.startswith('ld-'):
+    if system_elf(path):
         continue
     allowed = expected_shared.get(str(path))
-    if path.is_relative_to(a.cache.resolve()):
-        relative = path.relative_to(a.cache.resolve()).as_posix()
-        original = json.loads((a.cache / 'sdk-rebuild.json').read_text())
-        allowed = original['installed_sha256'].get(relative)
     if soname in ('libstdc++.so.6', 'libgcc_s.so.1'):
         package = run('rpm', '-qf', path)
         require(package.startswith(('libstdc++-4.8.5-', 'libgcc-4.8.5-')), 'Unknown compiler runtime')

@@ -18,6 +18,11 @@ import importlib.util
 _native_spec = importlib.util.spec_from_file_location('linux_runtime_native', Path(__file__).with_name('runtime_native.py'))
 _native = importlib.util.module_from_spec(_native_spec)
 _native_spec.loader.exec_module(_native)
+_alias_spec = importlib.util.spec_from_file_location('linux_runtime_aliases', Path(__file__).with_name('runtime_aliases.py'))
+_aliases = importlib.util.module_from_spec(_alias_spec)
+_alias_spec.loader.exec_module(_aliases)
+artifact_kind = _aliases.artifact_kind
+authorize_library = _aliases.authorize_library
 
 
 SYSTEM = ('libc.so.', 'libm.so.', 'libdl.so.', 'libpthread.so.', 'librt.so.',
@@ -142,7 +147,7 @@ def installed_product(build, prefix, relative, receipt, evidence):
     def equivalent(candidate):
         if sha(candidate) == sha(path):
             return True
-        if path.suffix == '.a':
+        if artifact_kind(candidate) == 'archive':
             return False
         pattern = r'\((?:RPATH|RUNPATH)\).*?\[(.*?)\]'
         old = re.search(pattern, run('readelf', '-d', candidate))
@@ -160,6 +165,67 @@ def installed_product(build, prefix, relative, receipt, evidence):
     return dict(path=str(path.resolve()), sha256=sha(path), native=native)
 
 
+def audit_installations(root, specs, installed_map):
+    """Derive library/tool/alias authority only from actual native installs."""
+    root = Path(root).resolve()
+    products, tools, rules_by_prefix = {}, {}, {}
+    for build, prefix in specs:
+        build, prefix = Path(build).resolve(), Path(prefix).resolve()
+        values = cache_values(build)
+        rules = _native.install_rules(build)
+        rules_by_prefix.setdefault(prefix, []).extend(rules)
+        prefix_key = prefix.relative_to(root).as_posix()
+        receipt = dict(installed_sha256={r.removeprefix(prefix_key + '/'): h for r, h in installed_map.items()
+            if r.startswith(prefix_key + '/')} if prefix != root else dict(installed_map))
+        for rule in rules:
+            origin = Path(rule['origin'])
+            if rule['kind'] == 'PROGRAM' and artifact_kind(origin) is None:
+                continue  # generated SDK config scripts are not ELF/library authority
+            if origin.is_symlink():
+                continue  # verified below against its exact real native product
+            path = prefix / rule['relative']
+            relative = path.relative_to(root).as_posix()
+            collection = tools if rule['kind'] in ('EXECUTABLE', 'PROGRAM') else products
+            require(relative not in collection, 'Conflicting native install products: ' + relative)
+            product = installed_product(build, prefix, rule['relative'], receipt, {})
+            expected_kind = 'archive' if rule['kind'] == 'STATIC_LIBRARY' else 'elf'
+            require(artifact_kind(path) == expected_kind, 'Installed native product has incorrect content type: ' + relative)
+            collection[relative] = product
+    libraries = {p['path']: p['sha256'] for p in products.values()}
+    executables = {p['path']: p['sha256'] for p in tools.values()}
+    native_products = {p['native']['output']: p['path'] for p in [*products.values(), *tools.values()]}
+    aliases = {}
+    for prefix, rules in rules_by_prefix.items():
+        declared = {}
+        for rule in rules:
+            origin = Path(rule['origin'])
+            if rule['kind'] == 'PROGRAM' and artifact_kind(origin) is None:
+                continue
+            if not origin.is_symlink():
+                continue
+            try:
+                native_target = str(origin.resolve(strict=True))
+            except (RuntimeError, OSError) as error:
+                raise ValueError('Invalid native alias: ' + str(origin)) from error
+            require(native_target in native_products, 'Native alias lacks a verified real install product: ' + str(origin))
+            declared[str(prefix / rule['relative'])] = native_products[native_target]
+        prefix_libraries = {p: h for p, h in libraries.items() if Path(p).is_relative_to(prefix)}
+        prefix_tools = {p: h for p, h in executables.items() if Path(p).is_relative_to(prefix)}
+        aliases.update(_aliases.audit_prefix(prefix, prefix_libraries, prefix_tools, declared))
+    return dict(products=products, tools=tools, aliases=aliases, verified_files=libraries)
+
+
+def check_native_link_inputs(installation):
+    libraries = dict(installation['verified_files'])
+    libraries.update({p['native']['output']: p['native']['output_sha256'] for p in installation['products'].values()})
+    for product in [*installation['products'].values(), *installation['tools'].values()]:
+        for linked in product['native']['link_inputs']:
+            path = Path(linked)
+            if artifact_kind(path):
+                if not system_elf(path):
+                    authorize_library(path, libraries)
+
+
 def normalized_elf_sha(path, desired, cmake):
     match = re.search(r'\((?:RPATH|RUNPATH)\).*?\[(.*?)\]', run('readelf', '-d', path))
     if not match or match[1] == desired:
@@ -173,7 +239,7 @@ def normalized_elf_sha(path, desired, cmake):
         return sha(copy)
 
 
-def audit_stage(stage, build, cache, overlay, cmake):
+def audit_stage(stage, build, cache, overlay, cmake, verified_base=None):
     """Recompute linked closure; never accept a self-authored stage SHA map."""
     stage, build, cache = map(Path, (stage, build, cache))
     values = cache_values(build)
@@ -182,22 +248,32 @@ def audit_stage(stage, build, cache, overlay, cmake):
     require(expected == sha(install) == sha(stage / 'bin/thumbgen'), 'Stage/install not linked product bytes')
     loader = subprocess.check_output(['ldd', str(build / 'thumbgen')], env={'PATH': '/usr/bin:/bin', 'LC_ALL': 'C'}, text=True)
     require('not found' not in loader, 'Linked build closure unresolved')
-    original = json.loads((cache / 'sdk-rebuild.json').read_text())['installed_sha256']
-    commands = run('ninja', '-C', build, '-t', 'commands', 'thumbgen')
-    static = {Path(p).resolve() for p in re.findall(r'/[^\s;]+\.a\b', commands)}
+    base = verified_base if verified_base is not None else audit_base(Path(values['CMAKE_HOME_DIRECTORY']), cache)
+    allowed = dict(base['verified_files'])
+    allowed.update(overlay['verified_files'])
+    _, inputs, _ = _native.query(build.resolve(), 'thumbgen')
+    for name in inputs:
+        path = Path(name) if Path(name).is_absolute() else build / name
+        if artifact_kind(path) == 'elf':
+            if path.suffix == '.o' and path.resolve().is_relative_to(build.resolve()):
+                rule, _, _ = _native.query(build.resolve(), path.resolve().relative_to(build.resolve()).as_posix())
+                require('_COMPILER' in rule, 'Product object lacks a native compiler rule')
+            elif not system_elf(path):
+                authorize_library(path, allowed)
+    static = {(Path(p) if Path(p).is_absolute() else build / p).resolve() for p in inputs
+        if artifact_kind(Path(p) if Path(p).is_absolute() else build / p) == 'archive'}
     require((cache / 'oiio-deps/dist/lib/libzstd.a').resolve() in static, 'Product must select the locked static ZSTD')
     patched = Path(overlay['evidence']['OpenEXRCore-patched']['product']['path']).resolve()
     for library in static - {patched}:
-        require(library.is_relative_to(cache.resolve()) and original.get(library.relative_to(cache.resolve()).as_posix()) == sha(library),
-                'Unknown or changed static link input: ' + str(library))
-    allowed = {x['path']: x['sha256'] for x in overlay['shared'].values()}
+        if library.is_relative_to(build.resolve()):
+            _native.target_proof(build.resolve(), library, Path(values['CMAKE_HOME_DIRECTORY']))
+        else:
+            authorize_library(library, allowed)
     for item in re.findall(r'(?:=>\s*)?(/[^\s()]+)', loader):
         path = Path(item).resolve()
         if system_elf(path):
             continue
         digest = allowed.get(str(path))
-        if path.is_relative_to(cache.resolve()):
-            digest = original.get(path.relative_to(cache.resolve()).as_posix())
         if path.name.startswith(('libstdc++.so.', 'libgcc_s-')):
             package = run('rpm', '-qf', path)
             require(package.startswith(('libstdc++-4.8.5-', 'libgcc-4.8.5-')), 'Unknown runtime RPM')
@@ -212,6 +288,8 @@ def audit(repo, color, core, product_build):
     lock = json.loads((repo / 'dependencies/color-sdk.json').read_text())
     receipt = json.loads((color / 'receipt.json').read_text())
     components, evidence, shared = [], {}, {}
+    color_install = audit_installations(color / 'sdk', [(color / (name + '-build'), color / 'sdk') for name in lock], receipt['installed_sha256'])
+    check_native_link_inputs(color_install)
     for name, item in lock.items():
         source, build, prefix = color / (name + '-source'), color / (name + '-build'), color / 'sdk'
         require(next((r for r in receipt['components'] if r['package'] == name), None) == dict(package=name, **item, license_sha256=sha(source / item['license_file'])),
@@ -252,6 +330,7 @@ def audit(repo, color, core, product_build):
                            dict(BUILD_SHARED_LIBS='OFF', BUILD_TESTING='OFF', OPENEXR_FORCE_INTERNAL_DEFLATE='ON'))
     library = 'lib/libOpenEXRCore_v_3_5_0_OpenImageIO_v3_2.a'
     product = installed_product(core / 'build', core / 'prefix', library, receipt, proof)
+    core_install = audit_installations(core / 'prefix', [(core / 'build', core / 'prefix')], receipt['installed_sha256'])
     symbols = run('nm', '-g', '--defined-only', product['path'])
     require('exr_get_library_version' in symbols and 'internal_exr_apply_dwa' in symbols, 'Unexpected Core archive')
     product_cache = cache_values(product_build)
@@ -270,6 +349,8 @@ def audit(repo, color, core, product_build):
         linkage='static direct product dependency; original unpatched OpenEXR remains embedded in OIIO',
         source=str(core / 'source'), patch=str(patch), patch_sha256=sha(patch)))
     return dict(components=components, evidence=evidence, shared=shared,
+                installations=dict(color=color_install, core=core_install),
+                verified_files={**color_install['verified_files'], **core_install['verified_files']},
                 trust='Corroborated local source/build/install evidence; not signed supply-chain proof')
 
 
@@ -286,8 +367,6 @@ def audit_base(repo, cache):
         # Pinned ZLIB CMakeLists.txt:72-76 moves the shipped zconf.h aside
         # before generating the build-specific header. Verify the saved bytes.
         trees[name] = locked_tree(source, item['commit'], renames={'zconf.h': 'zconf.h.included'} if name == 'ZLIB' else None)
-    for relative, expected in old['installed_sha256'].items():
-        require(sha(cache / relative) == expected, 'Original SDK installation changed: ' + relative)
     # Existing receipt is not enough: corroborate real build/install recipes,
     # source roots, raw successful logs and installed library products.
     records = {}
@@ -305,33 +384,11 @@ def audit_base(repo, cache):
     # Installation authority comes from each configured native install graph,
     # not the caller's installed_sha256 list. Header-only projects have no
     # library rules; every actual base library must be accounted for below.
-    products = {}
     specs = [(cache / 'oiio-build', cache / 'sdk')]
     specs += [(cache / 'oiio-deps' / (item['package'] + '-build'), cache / 'oiio-deps/dist') for item in lock['dependencies']]
-    expected_paths = set()
-    for build, prefix in specs:
-        values = cache_values(build)
-        manifest = build / 'install_manifest.txt'
-        proof = dict(installed_paths=manifest.read_text().splitlines(), options=values)
-        for rule in _native.install_rules(build):
-            origin = Path(rule['origin'])
-            if origin.is_symlink():
-                continue  # SONAME alias; the real native output is mandatory.
-            path = prefix / rule['relative']
-            relative = path.relative_to(cache).as_posix()
-            expected_paths.add(str(path))
-            products[relative] = installed_product(build, prefix, rule['relative'],
-                dict(installed_sha256={r.removeprefix(prefix.relative_to(cache).as_posix() + '/'): h
-                    for r, h in old['installed_sha256'].items() if r.startswith(prefix.relative_to(cache).as_posix() + '/')}), proof)
-    for prefix in (cache / 'sdk', cache / 'oiio-deps/dist'):
-        for path in prefix.rglob('*'):
-            if path.is_file() and (path.suffix == '.a' or '.so' in path.name) and path.name == path.resolve().name:
-                require(str(path) in expected_paths, 'Unknown base library outside native install graph: ' + str(path))
-    allowed = {p['path'] for p in products.values()} | {p['native']['output'] for p in products.values()}
-    for product in products.values():
-        for linked in product['native']['link_inputs']:
-            path = Path(linked)
-            if path.suffix == '.a' or '.so' in path.name:
-                system_link = str(path.parent) in ('/usr/lib64', '/lib64') and re.fullmatch(r'lib(?:m|dl|pthread|rt|c|gcc_s|stdc\+\+)(?:\.so.*|-[0-9.]+\.so)', path.name)
-                require(linked in allowed or system_link, 'Unknown native link library: ' + linked)
-    return dict(source_trees=trees, builds=records, products=products, receipt_sha256=sha(cache / 'sdk-rebuild.json'))
+    installation = audit_installations(cache, specs, old['installed_sha256'])
+    check_native_link_inputs(installation)
+    for relative, expected in old['installed_sha256'].items():
+        require(not Path(relative).is_absolute() and '..' not in Path(relative).parts, 'Unsafe SDK receipt path')
+        require(sha(cache / relative) == expected, 'Original SDK installation changed: ' + relative)
+    return dict(source_trees=trees, builds=records, **installation, receipt_sha256=sha(cache / 'sdk-rebuild.json'))

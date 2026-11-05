@@ -39,8 +39,9 @@ lock = json.loads((repo / 'scripts/linux/sources-lock.json').read_text())
 require(evidence['source_dependencies'] == lock['dependencies'], 'Stage dependency inventory differs from source lock')
 overlays = audit_overlays(repo, args.color_root, args.core_root, args.product_build)
 require(overlays == evidence['overlays'], 'Overlay provenance changed since product freeze')
-require(audit_base(repo, cache) == evidence['original_sdk'], 'Original SDK evidence changed since freeze')
-audit_stage(stage, args.product_build, cache, overlays, (args.tools_cache or cache) / 'tools/cmake-3.31.8-linux-x86_64/bin/cmake')
+base = audit_base(repo, cache)
+require(base == evidence['original_sdk'], 'Original SDK evidence changed since freeze')
+audit_stage(stage, args.product_build, cache, overlays, (args.tools_cache or cache) / 'tools/cmake-3.31.8-linux-x86_64/bin/cmake', base)
 for item in evidence['copied']:
     require(hashlib.sha256(Path(item['source']).read_bytes()).hexdigest() == item['sha256'], 'Original linked library changed')
 for filename, expected in evidence['product_install']['files'].items():
@@ -85,7 +86,7 @@ if identity['build']['revision'] == 'unknown':
                            embedded_revision='unknown', verification='Git archive bytes, full input map, frozen source tree and validated ELF SHA256')
 elif not revision.startswith(identity['build']['revision']):
     raise SystemExit('Embedded revision and frozen source evidence disagree')
-recipe_files = [Path(__file__).with_name(n) for n in ('package-runtime.py', 'runtime_overlays.py', 'runtime_native.py', 'runtime-notice-inventory.json')]
+recipe_files = [Path(__file__).with_name(n) for n in ('package-runtime.py', 'runtime_overlays.py', 'runtime_native.py', 'runtime_aliases.py', 'runtime-notice-inventory.json')]
 recipe_inputs = {p.name: digest(p) for p in recipe_files}
 recipe_sha256 = hashlib.sha256(json.dumps(recipe_inputs, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 name = 'thumbgen-' + re.sub(r'[^A-Za-z0-9_.-]', '_', identity['version']) + '-linux-x86_64-glibc217-' + revision[:12] + '-' + digest(exe)[:12] + '-r' + recipe_sha256[:8]
