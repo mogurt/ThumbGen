@@ -91,6 +91,11 @@ def pack(exe, sdk, evidence_file, output, runtime_notices, color_overlay=None, b
         components.extend(report['components'])
         add('provenance/' + kind + '-overlay.json', encode(report))
         add('provenance/' + kind + '-receipt.json', (prefix.resolve().parent / 'receipt.json').read_bytes())
+        if report.get('build_provenance'):
+            original = Path(report['build_provenance']['evidence_file'])
+            if digest(original) != report['build_provenance']['sha256']:
+                raise ValueError('Native overlay provenance changed during packaging')
+            add('provenance/' + kind + '-build.json', original.read_bytes())
     if bounded_overlay and not evidence.get('build_provenance', {}).get('bounded_core_link'):
         raise ValueError('Missing frozen static bounded Core link evidence')
     if color_overlay or bounded_overlay:
