@@ -1,0 +1,8 @@
+cmake_minimum_required(VERSION 3.24)
+project(thumbgen_ci_fixtures LANGUAGES CXX)
+set(CMAKE_CXX_STANDARD 17)
+find_package(OpenImageIO CONFIG REQUIRED)
+add_executable(public_fixtures ../../linux/sdk-smoke-fixtures.cpp)
+add_executable(read_preview read_preview.cpp)
+target_link_libraries(public_fixtures PRIVATE OpenImageIO::OpenImageIO)
+target_link_libraries(read_preview PRIVATE OpenImageIO::OpenImageIO)

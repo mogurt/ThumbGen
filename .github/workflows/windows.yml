@@ -61,12 +61,20 @@ jobs:
           name: windows-build-diagnostics
           retention-days: 14
           if-no-files-found: warn
+          include-hidden-files: true
           path: |
             build/ci/*.json
             build/ci/*.log
             build/ci/windows/*.json
             build/ci/windows/*.log
+            build/ci/windows/public-smoke/*.json
+            build/ci/windows/public-smoke/*.log
+            build/ci/windows/public-smoke/fixture-build/CMakeFiles/CMakeConfigureLog.yaml
+            build/ci/windows/negative-*/CMakeFiles/CMakeConfigureLog.yaml
             build/windows-dev/ci-tests.xml
+            build/windows-dev/CMakeCache.txt
             build/windows-dev/Testing/Temporary/
             build/windows-dev/CMakeFiles/CMakeConfigureLog.yaml
             build/windows-release/CMakeFiles/CMakeConfigureLog.yaml
+            build/windows-release/CMakeCache.txt
+            build/windows-release/.cmake/api/v1/reply/

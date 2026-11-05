@@ -21,7 +21,7 @@ jobs:
       run:
         shell: bash
     env:
-      CMAKE_BUILD_PARALLEL_LEVEL: '4'
+      CMAKE_BUILD_PARALLEL_LEVEL: '2'
       GIT_TERMINAL_PROMPT: '0'
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -63,10 +63,17 @@ jobs:
             build/ci/*.json
             build/ci/linux/*.json
             build/ci/linux/*.log
+            build/ci/linux/public-smoke/*.json
+            build/ci/linux/public-smoke/*.log
+            build/ci/linux/public-smoke/fixture-build/CMakeFiles/CMakeConfigureLog.yaml
+            build/ci/linux/negative-*/CMakeFiles/CMakeConfigureLog.yaml
             build/linux-dev/ci-tests.xml
+            build/linux-dev/CMakeCache.txt
             build/linux-dev/Testing/Temporary/
             build/linux-dev/CMakeFiles/CMakeConfigureLog.yaml
             build/linux-release/CMakeFiles/CMakeConfigureLog.yaml
+            build/linux-release/CMakeCache.txt
+            build/linux-release/.cmake/api/v1/reply/
             .deps/ci-linux-seed/public-sources.json
             .deps/ci-linux-sdk/source-seed.json
             .deps/ci-linux-sdk/sdk-rebuild.json
