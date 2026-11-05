@@ -6,7 +6,7 @@ from pathlib import Path
 import re
 import subprocess
 
-from runtime_closure import audit, digest
+from runtime_closure import audit, digest, overlays
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--build', type=Path, required=True)
@@ -50,6 +50,7 @@ if closure['sdk_profile'] != 'source':
 environment = dict(SystemRoot=os.environ['SystemRoot'], PATH=str(sdk / 'sdk/bin') + os.pathsep + str(Path(os.environ['SystemRoot']) / 'System32'))
 identity = json.loads(subprocess.check_output([str(exe), '--version', '--json'], env=environment, text=True, timeout=30))
 capabilities = json.loads(subprocess.check_output([str(exe), 'capabilities', '--json'], env=environment, text=True, timeout=30))
+overlays.require_bounded_selection(capabilities, args.bounded_overlay)
 if capabilities['cpu']['oiio_simd'] != 'sse2':
     raise RuntimeError('Candidate does not meet requested OIIO SSE2 profile')
 source_files = ['CMakeLists.txt', 'CMakePresets.json']
