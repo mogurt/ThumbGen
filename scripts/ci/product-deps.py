@@ -26,18 +26,25 @@ def plan(repo, sdk, output, python):
     for path in (sdk, output):
         if any(c in str(path) for c in (';', ':', '\n', '\r')) and os.name != 'nt':
             raise ValueError('Unsupported path separator in dependency prefix')
-    for relative in ('sdk', 'oiio-deps/dist', 'oiio-deps/OpenEXR', 'oiio-deps/libjpeg-turbo'):
+    for relative in ('sdk', 'oiio-source', 'oiio-deps/dist', 'oiio-deps/OpenEXR', 'oiio-deps/libjpeg-turbo'):
         if not (sdk / relative).is_dir():
             raise ValueError('Missing pinned SDK input: ' + relative)
     colour = output / 'colour'
     bounded = output / 'bounded-openexr'
+    dwa = output / 'portable-dwa'
     commands = [
         ('colour', [python, str(repo / 'scripts/build-color-sdk.py'), '--root', str(colour),
                     '--jpeg-cache', str(sdk / 'oiio-deps/libjpeg-turbo')]),
         ('bounded-openexr', [python, str(repo / 'scripts/dependencies/build_bounded_openexr.py'),
                              '--source-cache', str(sdk / 'oiio-deps/OpenEXR'),
-                             '--deps-prefix', str(sdk / 'oiio-deps/dist'), '--output', str(bounded)])]
-    prefixes = [colour / 'sdk', bounded / 'prefix', sdk / 'sdk', sdk / 'oiio-deps/dist']
+                             '--deps-prefix', str(sdk / 'oiio-deps/dist'), '--output', str(bounded)]),
+        ('portable-dwa', [python, str(repo / 'scripts/dependencies/build_portable_dwa_sdk.py'),
+                          '--openexr-cache', str(sdk / 'oiio-deps/OpenEXR'),
+                          '--oiio-cache', str(sdk / 'oiio-source'),
+                          '--deps-prefix', str(sdk / 'oiio-deps/dist'), '--output', str(dwa)])]
+    # Deep continues to select its bounded Core. Flat OIIO comes from the DWA
+    # prefix before the original SDK, without changing any read-only inputs.
+    prefixes = [colour / 'sdk', bounded / 'prefix', dwa / 'prefix', sdk / 'sdk', sdk / 'oiio-deps/dist']
     return dict(commands=commands, sdk_prefix=';'.join(map(str, prefixes)),
                 runtime_dirs=[str(p / sub) for p in prefixes for sub in ('lib', 'lib64')])
 
@@ -47,6 +54,8 @@ def prepare(repo, sdk, output, python, runner=subprocess.run):
     output.mkdir(parents=True, exist_ok=False)
     inputs = ['dependencies/color-sdk.json', 'dependencies/patches/openexr-bounded-zstd-v1.patch',
               'scripts/build-color-sdk.py', 'scripts/dependencies/build_bounded_openexr.py',
+              'dependencies/patches/openexr-portable-dwa-v1.patch',
+              'scripts/dependencies/build_portable_dwa_sdk.py',
               'scripts/linux/sources-lock.json', 'scripts/ci/product-deps.py']
     report = dict(status='running', commands=[], inputs_sha256={p: digest(repo / p) for p in inputs})
     def save():

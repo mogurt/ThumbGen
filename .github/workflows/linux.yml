@@ -44,7 +44,7 @@ jobs:
       # No installed SDK, build tree, private path, or source cache is restored.
       - name: Rebuild SDK from public pinned sources
         run: bash scripts/ci/linux-sdk.sh
-      - name: Build isolated CMS and bounded Deep dependencies
+      - name: Build isolated CMS, bounded Deep and portable DWA dependencies
         run: |
           python scripts/ci/product-deps.py --sdk .deps/ci-linux-sdk --output .deps/ci-product-deps 2>&1 | tee build/ci/product-deps.log
       - name: Set SDK paths
@@ -93,3 +93,5 @@ jobs:
             .deps/ci-product-deps/*.log
             .deps/ci-product-deps/*/receipt.json
             .deps/ci-product-deps/*/*.log
+            .deps/ci-product-deps/portable-dwa/*.stdout
+            .deps/ci-product-deps/portable-dwa/*.stderr

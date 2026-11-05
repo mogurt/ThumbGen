@@ -148,8 +148,10 @@ def main():
                                   for path in (repo / 'CMakePresets.json', repo / 'scripts/linux/sources-lock.json',
                                                repo / 'dependencies/color-sdk.json',
                                                repo / 'dependencies/patches/openexr-bounded-zstd-v1.patch',
+                                               repo / 'dependencies/patches/openexr-portable-dwa-v1.patch',
                                                repo / 'scripts/build-color-sdk.py',
                                                repo / 'scripts/dependencies/build_bounded_openexr.py',
+                                               repo / 'scripts/dependencies/build_portable_dwa_sdk.py',
                                                repo / 'scripts/ci/product-deps.py',
                                                repo / 'dependencies/windows-sdk.explicit.txt')}
         if args.parallel < 1:
