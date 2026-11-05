@@ -13,6 +13,10 @@ from pathlib import Path
 import re
 import struct
 
+_overlay_spec = importlib.util.spec_from_file_location('windows_overlays', Path(__file__).resolve().parents[1] / 'dependencies/windows_overlays.py')
+overlays = importlib.util.module_from_spec(_overlay_spec)
+_overlay_spec.loader.exec_module(overlays)
+
 
 def digest(path):
     value = hashlib.sha256()
@@ -125,7 +129,7 @@ def source_lock_identity(source, raw):
                 lf_sha256=lf_digest)
 
 
-def audit(exe, sdk, system):
+def audit(exe, sdk, system, color_overlay=None, bounded_overlay=None):
     repo = Path(__file__).resolve().parents[2]
     source_receipt = sdk / 'sdk/thumbgen-sdk.json'
     owners, packages = {}, {}
@@ -162,7 +166,21 @@ def audit(exe, sdk, system):
             if name in available and digest(available[name]) != digest(path):
                 raise ValueError('Ambiguous SDK DLL: ' + path.name)
             available.setdefault(name, path)
-    report = resolve(exe, sdk, system, available, owners, packages, used_packages)
+    overlay_reports, overlay_owners = [], {}
+    for kind, prefix in (('color', color_overlay), ('bounded', bounded_overlay)):
+        if prefix is None:
+            continue
+        receipt, dlls, _ = overlays.verify(kind, prefix)
+        overlay_reports.append(receipt)
+        for name, (path, owner, entry) in dlls.items():
+            if name in available and digest(available[name]) != digest(path):
+                raise ValueError('Ambiguous SDK/overlay DLL: ' + name)
+            available[name] = path
+            overlay_owners[path] = (owner, entry)
+            packages[owner['name']] = owner
+    report = resolve(exe, sdk, system, available, owners, packages, used_packages, overlay_owners)
+    if overlay_reports:
+        report['overlays'] = overlay_reports
     report.update(schema_version=1, exe_sha256=digest(exe), sdk_lock_sha256=sdk_receipt['lock_sha256'],
                   sdk_profile=profile, recipe_sha256=digest(Path(__file__).resolve()), architecture='AMD64',
                   redistribution_ready=False, minimum_platform_verified=False,
@@ -193,7 +211,7 @@ def conda_metadata(repo, sdk):
     return owners, packages, sdk_receipt
 
 
-def resolve(exe, sdk, system, available, owners, packages, used_packages):
+def resolve(exe, sdk, system, available, owners, packages, used_packages, overlay_owners=None):
     queue, resolved, external = [exe], {}, {}
     while queue:
         path = queue.pop(0)
@@ -201,9 +219,12 @@ def resolve(exe, sdk, system, available, owners, packages, used_packages):
         if key in resolved:
             continue
         checksum = digest(path)
-        record = dict(name=path.name, sha256=checksum, size=path.stat().st_size, imports=imports(path))
+        record = dict(name=path.name, sha256=checksum, size=path.stat().st_size, imports=imports(path), source_path=str(path))
         if path != exe:
-            owner, entry = owners[path.relative_to(sdk).as_posix().lower()]
+            if overlay_owners and path in overlay_owners:
+                owner, entry = overlay_owners[path]
+            else:
+                owner, entry = owners[path.relative_to(sdk).as_posix().lower()]
             expected = entry.get('sha256_in_prefix') or entry.get('sha256')
             if not expected or checksum != expected:
                 raise ValueError('Installed DLL contents differ from SDK receipt/metadata: ' + str(path))
@@ -244,9 +265,11 @@ if __name__ == '__main__':
     parser.add_argument('--sdk', type=Path, required=True)
     parser.add_argument('--system-dir', type=Path, default=Path(os.environ.get('SystemRoot', 'C:/Windows')) / 'System32')
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--color-overlay', type=Path)
+    parser.add_argument('--bounded-overlay', type=Path)
     args = parser.parse_args()
     try:
-        report = audit(args.exe.resolve(), args.sdk.resolve(), args.system_dir.resolve())
+        report = audit(args.exe.resolve(), args.sdk.resolve(), args.system_dir.resolve(), args.color_overlay, args.bounded_overlay)
     except (OSError, ValueError, KeyError) as error:
         parser.exit(1, str(error) + '\n')
     args.output.parent.mkdir(parents=True, exist_ok=True)
