@@ -161,6 +161,7 @@ def execute(args, repo, logs, env, run):
     run('ctest-version', ['ctest', '--version'])
     run('python-version', [python, '--version'])
     run('ci-audits', [python, '-m', 'unittest', 'discover', '-s', 'tests/ci', '-v'])
+    run('benchmark-tool-checks', [python, '-m', 'unittest', 'discover', '-s', 'tests/benchmarks', '-v'])
     run('test-python', [python, '-c', 'import jsonschema; print(jsonschema.__file__)'])
     run('public-examples', [python, 'scripts/public/validate_examples.py'])
     run('public-example-checks', [python, '-m', 'unittest', 'discover', '-s', 'tests/public', '-v'])
@@ -201,6 +202,7 @@ def execute(args, repo, logs, env, run):
         failure='Protocol tests require tests/requirements.txt')
     result = dict(platform=args.platform, registered_tests=count, executed_tests=count,
                   public_examples_checked=True,
+                  benchmark_tools_checked=True,
                   packaging_checks_checked=True,
                   public_example_runtime_checked=True,
                   release_targets=targets, release_test_python=False,
