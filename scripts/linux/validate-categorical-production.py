@@ -51,12 +51,16 @@ def main():
     for name in ('source', 'stage', 'previous-stage', 'previous-production', 'references', 'helper', 'directory'):
         parser.add_argument('--' + name, type=Path, required=True)
     parser.add_argument('--colour-reference-report', type=Path, help='Bound older runs-shaped d095 colour baseline for checks-shaped previous reports')
+    parser.add_argument('--previous-report-copy', type=Path, help='Explicit frozen stage copy when its collector uses a different report filename')
     args = parser.parse_args()
     utility = module('aov_utility', 'validate-aov-production.py')
     encoding = module('preview_encoding', 'verify-preview-encoding.py')
     digest = utility.digest
     original_report = args.previous_production / 'report.json'
-    assert digest(original_report) == digest(args.previous_stage / 'results' / os.environ['WSL_DISTRO_NAME'] / 'production-report.json')
+    collected = args.previous_report_copy or args.previous_stage / 'results' / os.environ['WSL_DISTRO_NAME'] / 'production-report.json'
+    if not collected.resolve().is_relative_to(args.previous_stage.resolve()):
+        raise ValueError('Previous report copy must belong to the frozen previous stage')
+    assert digest(original_report) == digest(collected)
     previous = json.loads(original_report.read_text())
     previous_sources, previous_exe, previous_runs = previous_references(previous, args.colour_reference_report)
     assert digest(args.previous_stage / 'bin/thumbgen') == previous_exe

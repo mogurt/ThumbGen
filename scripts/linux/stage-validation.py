@@ -54,6 +54,8 @@ if any(test['name'] == 'public_aov' for test in suite['tests']):
     python_tests.append('test_aov_cli.py')
 if any(test['name'] == 'public_cryptomatte' for test in suite['tests']):
     python_tests.append('test_cryptomatte_cli.py')
+if any(test['name'] == 'public_sampled_id' for test in suite['tests']):
+    python_tests.append('test_sampled_id_cli.py')
 for name in (*python_tests, 'requirements.txt'):
     shutil.copy2(repo / 'tests' / name, stage / 'tests' / name)
 for path in (repo / 'schemas').glob('*.json'):
@@ -66,6 +68,7 @@ replacements.update({str(repo / 'tests/test_cli.py'): '@TESTS@/test_cli.py',
                      str(repo / 'tests/test_interrupt.py'): '@TESTS@/test_interrupt.py',
                      str(repo / 'tests/test_aov_cli.py'): '@TESTS@/test_aov_cli.py',
                      str(repo / 'tests/test_cryptomatte_cli.py'): '@TESTS@/test_cryptomatte_cli.py',
+                     str(repo / 'tests/test_sampled_id_cli.py'): '@TESTS@/test_sampled_id_cli.py',
                      str(repo / 'schemas'): '@SCHEMAS@',
                      str(cache / 'sdk/lib'): '@LIB@',
                      str(tools_cache / 'tools/python-3.11.11/bin/python3'): '@PYTHON@'})
@@ -102,6 +105,8 @@ if 'thumbgen_aov_tests' in binaries and not any(test['name'] == 'public_aov' for
     raise SystemExit('Configured public AOV test is missing; refusing incomplete validation')
 if 'thumbgen_cryptomatte_tests' in binaries and not any(test['name'] == 'public_cryptomatte' for test in tests):
     raise SystemExit('Configured public Cryptomatte test is missing; refusing incomplete validation')
+if 'thumbgen_sampled_id_tests' in binaries and not any(test['name'] == 'public_sampled_id' for test in tests):
+    raise SystemExit('Configured public sampled-ID test is missing; refusing incomplete validation')
 (stage / 'tests/ctest-suite.json').write_text(json.dumps(dict(tests=tests), indent=2) + '\n')
 (stage / 'tools/cmake/bin').mkdir(parents=True, exist_ok=True)
 shutil.copy2(ctest, stage / 'tools/cmake/bin/ctest')
