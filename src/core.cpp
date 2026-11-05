@@ -164,10 +164,24 @@ void Engine::restore_sequence_lock(const std::string& id,const Json& lock) {
     if(deep) {
         valid(deep_request && !data && key["channels"].size()==3);
         const auto& mapping=key["deep"];
-        valid(mapping.is_object() && mapping.size()==6 && mapping.contains("policy") && mapping["policy"]=="deep-mapping-v1");
+        valid(mapping.is_object() && mapping.size()==6 && mapping.contains("policy") && mapping["policy"]=="deep-mapping-v2");
         valid(mapping.contains("colour") && mapping["colour"]==key["channels"] && mapping.contains("alpha") && mapping["alpha"].is_array() && mapping["alpha"].size()==3);
         for(const auto& name:mapping["alpha"])valid(name.is_string() && !name.get<std::string>().empty());
         valid(mapping.contains("z") && mapping["z"].is_string() && !mapping["z"].get<std::string>().empty() && mapping.contains("zback") && mapping["zback"].is_string());
+        auto component=[](std::string name) {
+            auto dot=name.rfind('.');if(dot!=std::string::npos)name=name.substr(dot+1);
+            std::transform(name.begin(),name.end(),name.begin(),[](unsigned char c){return char(std::tolower(c));});return name;
+        };
+        auto layer=[](const std::string& name){auto dot=name.rfind('.');return dot==std::string::npos?std::string{}:name.substr(0,dot);};
+        const auto z=mapping["z"].get<std::string>(),back=mapping["zback"].get<std::string>();
+        valid(layer(z).empty() && component(z)=="z" && (back.empty() || (layer(back).empty() && component(back)=="zback")));
+        for(int c=0;c<3;++c) {
+            const auto colour_name=key["channels"][c].get<std::string>(),alpha_name=mapping["alpha"][c].get<std::string>();
+            const auto colour_layer=layer(colour_name),alpha_layer=layer(alpha_name);
+            const auto base=component(colour_name),alpha=component(alpha_name);
+            valid(alpha_layer.empty() || alpha_layer==colour_layer || colour_layer.rfind(alpha_layer+".",0)==0);
+            valid(alpha=="a" || (base=="r" && alpha=="ar") || (base=="g" && alpha=="ag") || (base=="b" && alpha=="ab"));
+        }
         valid(mapping.contains("shared_alpha") && mapping["shared_alpha"].is_boolean() &&
             mapping["shared_alpha"]==(mapping["alpha"][0]==mapping["alpha"][1] && mapping["alpha"][0]==mapping["alpha"][2]));
     }

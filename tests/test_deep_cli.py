@@ -85,6 +85,31 @@ class DeepCLI(unittest.TestCase):
         self.output=self.directory/'root.png';self.convert('beauty','--selection-policy','root_rgb');self.pixels((0,0,0))
     def test_flat_input_keeps_ordinary_path(self):
         r=self.convert('flat');self.assertNotIn('deep',r);self.pixels((srgb(.5),0,srgb(.25)))
+    def test_layer_auxiliary_depth_cannot_override_base(self):
+        r=self.convert('depth_collision')
+        self.assertEqual(r['deep']['mapping']['z'],'Z');self.assertEqual(r['deep']['mapping']['zback'],'Zback')
+        self.assertEqual(r['deep']['mapping']['policy'],'deep-mapping-v2')
+        self.pixels((srgb(.5),0,srgb(.25)))
+    def test_enclosing_alpha_and_partial_triple(self):
+        r=self.convert('ancestor_alpha','--background','white')
+        self.assertEqual(r['deep']['mapping']['alpha'],['view.A']*3);self.pixels((srgb(.875),srgb(.8125),srgb(.9375)))
+        self.output=self.directory/'mixed.png';r=self.convert('mixed_alpha')
+        self.assertEqual(r['deep']['mapping']['alpha'],['AR','A','A']);self.pixels((srgb(.25),srgb(.5),srgb(.5)))
+        self.output=self.directory/'mixed-white.png';self.convert('mixed_alpha','--background','white');self.pixels((255,255,255))
+        self.output=self.directory/'mixed-transparent.png'
+        self.assertEqual(self.convert('mixed_alpha','--background','transparent',exit=4)['error']['code'],'deep_transparency_unsupported')
+    def test_luminance_uses_scalar_alpha(self):
+        r=self.convert('grey_alpha','--background','transparent')
+        self.assertEqual(r['deep']['mapping']['alpha'],['A']*3);self.pixels((srgb(.5),srgb(.5),srgb(.5),128))
+    def test_ancestor_alpha_disappearance_keeps_original_lock(self):
+        kinds=['ancestor_alpha','ancestor_alpha_shift','ancestor_alpha']
+        jobs=[dict(id=str(i),sequence_id='ancestor-shot',input=self.inputs[k],outputs=[dict(path=str(self.directory/(str(i)+'.png')))]) for i,k in enumerate(kinds)]
+        manifest=dict(schema_version=1,defaults=dict(deep_mode='flatten',ocio_config='ocio://default',input_space='linear',threads=1),jobs=jobs)
+        jobs_validator.validate(manifest);path=self.directory/'ancestor.json';path.write_text(json.dumps(manifest),encoding='utf-8')
+        rows=self.invoke('batch','--manifest',path,exit=3);results=[r for r in rows if r['type']=='result']
+        self.assertEqual([r['status'] for r in results],['success','failed','success'])
+        self.assertEqual(results[1]['error']['code'],'sequence_selection_changed')
+        self.assertEqual(results[2]['selection']['locked']['deep']['alpha'],['view.A']*3)
     def test_missing_mapping_and_nonlinear_fail(self):
         self.assertEqual(self.convert('missing_alpha',exit=4)['error']['code'],'deep_channel_mapping_invalid')
         self.assertEqual(self.convert('scalar','--input-space','sRGB',exit=4)['error']['code'],'deep_colour_unsupported')

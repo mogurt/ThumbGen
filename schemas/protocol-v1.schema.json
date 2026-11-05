@@ -1701,7 +1701,7 @@
       ],
       "properties": {
         "policy": {
-          "const": "deep-mapping-v1"
+          "const": "deep-mapping-v2"
         },
         "colour": {
           "type": "array",

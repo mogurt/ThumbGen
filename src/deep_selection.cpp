@@ -44,8 +44,8 @@ std::vector<Candidate> deep_colour_candidates(const OIIO::ImageSpec& spec) {
             alpha_group(std::string(spec.get_string_attribute("oiio:subimagename")));
     }),candidates.end());
     for(auto& candidate:candidates) {
-        // Scalar alpha selection belongs to deep_selection(), which also
-        // considers the more expressive AR/AG/AB mapping in the same namespace.
+        // Alpha selection belongs to deep_selection(), which resolves each
+        // colour separately through its own and enclosing layers.
         candidate.channels.resize(3);
         for(auto& c:candidate.channels)c=original.at(std::size_t(c));
         candidate.reason="Deep associated colour; explicit metadata mapping required";
@@ -53,7 +53,7 @@ std::vector<Candidate> deep_colour_candidates(const OIIO::ImageSpec& spec) {
     return candidates;
 }
 Json DeepSelection::identity() const {
-    return {{"policy","deep-mapping-v1"},{"colour",channels.colour},{"alpha",channels.alpha},
+    return {{"policy","deep-mapping-v2"},{"colour",channels.colour},{"alpha",channels.alpha},
         {"z",channels.z},{"zback",channels.zback},{"shared_alpha",shared_alpha}};
 }
 DeepSelection deep_selection(const OIIO::ImageSpec& spec,const Candidate& colour) {
@@ -80,26 +80,26 @@ DeepSelection deep_selection(const OIIO::ImageSpec& spec,const Candidate& colour
         }
         return found;
     };
-    auto alpha=[&](const std::string& space) {
-        std::array<std::string,3> values{find(space,"ar"),find(space,"ag"),find(space,"ab")};
-        const auto used=std::count_if(values.begin(),values.end(),[](const auto& value){return !value.empty();});
-        if(used && used!=3)throw DeepFailure("deep_channel_mapping_invalid","Deep per-component alpha must have all AR/AG/AB channels");
-        // Validate scalar ambiguity too, even if the complete triple takes precedence.
-        auto scalar=find(space,"a");
-        if(used==3)return values;
-        return std::array<std::string,3>{scalar,scalar,scalar};
-    };
-    result.channels.alpha=alpha(group);
-    if(result.channels.alpha[0].empty() && !group.empty())result.channels.alpha=alpha("");
-    if(result.channels.alpha[0].empty())
-        throw DeepFailure("deep_channel_mapping_invalid","Deep colour has no explicit A or complete AR/AG/AB; implicit opaque samples are not inferred");
+    // Resolve each colour independently. A closer A wins over a farther AR/AG/AB;
+    // partial triples are valid when the other components can find their own A.
+    for(int c=0;c<3;++c) {
+        const auto base=component(result.channels.colour[c]);
+        const auto matching=base=="r"?"ar":base=="g"?"ag":base=="b"?"ab":"";
+        auto space=group;
+        for(;;) {
+            auto alpha=matching[0]?find(space,matching):std::string{};
+            if(alpha.empty())alpha=find(space,"a");
+            if(!alpha.empty()){result.channels.alpha[c]=std::move(alpha);break;}
+            if(space.empty())throw DeepFailure("deep_channel_mapping_invalid","Deep colour has no matching alpha in its layer or enclosing layers");
+            space=prefix(space);
+        }
+    }
     result.shared_alpha=result.channels.alpha[0]==result.channels.alpha[1] && result.channels.alpha[0]==result.channels.alpha[2];
-    auto depth_group=group;
-    result.channels.z=find(depth_group,"z");
-    if(result.channels.z.empty() && !group.empty()){depth_group.clear();result.channels.z=find(depth_group,"z");}
-    if(result.channels.z.empty())throw DeepFailure("deep_channel_mapping_invalid","Deep colour requires a Z channel");
-    // Never combine local Z with a different namespace's Zback.
-    result.channels.zback=find(depth_group,"zback");
+    // OpenEXR defines positions for all layers using the base layer only.
+    // Layer-local *.Z / *.ZBack are auxiliary values, not sample positions.
+    result.channels.z=find("","z");
+    if(result.channels.z.empty())throw DeepFailure("deep_channel_mapping_invalid","Deep colour requires base-layer Z; layer-local depths are auxiliary channels");
+    result.channels.zback=find("","zback");
     std::set<std::string> names(result.channels.colour.begin(),result.channels.colour.end());
     names.insert(result.channels.alpha.begin(),result.channels.alpha.end());names.insert(result.channels.z);
     if(!result.channels.zback.empty())names.insert(result.channels.zback);
