@@ -372,13 +372,15 @@ bool run_isolated(const std::vector<Job>& jobs,const std::string& executable,con
                         try {source=source_stamp(fs::u8path(job.input));}
                         catch(const FileFailure&){throw FileFailure("source_changed","source could not be verified after metadata preparation",true);}
                         if(stamp_json(*source)!=payload["source_stamp"])throw FileFailure("source_changed","source changed during metadata preparation",true);
-                        const auto& f=payload["footprint"];fields(f,{"data_width","data_height","display_width","display_height","channel_span","selected_channels","output_width","output_height","threads","source_sample_bytes","source_pixel_bytes","source_buffer_bytes","native_categorical","deep_buffer_bytes"});
+                        const auto& f=payload["footprint"];fields(f,{"data_width","data_height","display_width","display_height","channel_span","selected_channels","output_width","output_height","threads","source_sample_bytes","source_pixel_bytes","source_buffer_bytes","native_categorical","deep_buffer_bytes","cms_buffer_bytes"});
                         const bool categorical=job.options.visualization=="id" || job.options.visualization=="id_rgb";
                         check(f["native_categorical"].is_boolean() && f["native_categorical"]==categorical,"worker categorical footprint mismatch");
                         check(number(f["threads"],256)==unsigned(job.options.threads),"plan thread quota mismatch");
                         ImageFootprint shape{number(f["data_width"],2147483647),number(f["data_height"],2147483647),number(f["display_width"],2147483647),number(f["display_height"],2147483647),
                             number(f["channel_span"],2147483647),number(f["selected_channels"],4),number(f["output_width"],32768),number(f["output_height"],32768),unsigned(job.options.threads),unsigned(number(f["source_sample_bytes"],8)),categorical,number(f["source_pixel_bytes"],32),number(f["source_buffer_bytes"],std::numeric_limits<std::uint64_t>::max())};
                         shape.deep_buffer_bytes=number(f["deep_buffer_bytes"],16384ULL*1024*1024);
+                        shape.cms_buffer_bytes=number(f["cms_buffer_bytes"],64ULL*1024*1024);
+                        check(!shape.cms_buffer_bytes || (job.options.visualization=="colour" && job.options.input_space=="auto" && !base.contains("deep")),"invalid worker CMS footprint");
                         check(base.contains("deep")?(shape.deep_buffer_bytes==job.options.max_decode_mib*1024ULL*1024ULL && shape.selected_channels==4 && !categorical && !shape.source_buffer_bytes):shape.deep_buffer_bytes==0,"worker Deep budget mismatch");
                         check(shape.source_buffer_bytes?(job.options.visualization=="id" && base.contains("source_read") && base["source_read"]["buffer_bytes"]==shape.source_buffer_bytes):!base.contains("source_read"),"sampled source footprint mismatch");
                         check(shape.data_width && shape.data_height && shape.display_width && shape.display_height && shape.channel_span &&

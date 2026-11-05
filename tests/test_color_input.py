@@ -5,6 +5,7 @@ as the oracle. PNG/TIFF/JPEG fixtures below follow the respective file layouts.
 """
 import argparse
 import hashlib
+import itertools
 import json
 import math
 import os
@@ -55,7 +56,7 @@ def read_png(path):
 def chunk(tag,data):
     return struct.pack('>I',len(data))+tag+data+struct.pack('>I',zlib.crc32(tag+data)&0xffffffff)
 
-def profile():
+def profile(grey=False,gamma=1):
     """Small ICC v2 RGB monitor matrix profile: D50 PCS, unit TRCs.
 
     These colourants are the D50-adapted Rec.709 matrix, encoded s15Fixed16.
@@ -69,29 +70,47 @@ def profile():
           (b'rXYZ',xyz((0.4360747,0.2225045,0.0139322))),
           (b'gXYZ',xyz((0.3850649,0.7168786,0.0971045))),
           (b'bXYZ',xyz((0.1430804,0.0606169,0.7141733)))]
-    tags += [(name,b'curv'+b'\0'*4+struct.pack('>IH',1,256)) for name in (b'rTRC',b'gTRC',b'bTRC')]
+    if grey:tags=[tag for tag in tags if tag[0] not in (b'rXYZ',b'gXYZ',b'bXYZ')]
+    tags += [(name,b'curv'+b'\0'*4+struct.pack('>IH',1,round(gamma*256))) for name in ((b'kTRC',) if grey else (b'rTRC',b'gTRC',b'bTRC'))]
     offset=132+12*len(tags);table=struct.pack('>I',len(tags));body=b''
     for name,data in tags:
         table+=name+struct.pack('>II',offset,len(data))
         padded=data+b'\0'*((-len(data))%4);body+=padded;offset+=len(padded)
     header=bytearray(128)
     struct.pack_into('>I',header,0,offset);header[8:12]=bytes((2,0x10,0,0))
-    header[12:24]=b'mntrRGB XYZ '
+    header[12:24]=b'mntrGRAYXYZ ' if grey else b'mntrRGB XYZ '
     struct.pack_into('>6H',header,24,2026,1,1,0,0,0)
     header[36:40]=b'acsp';header[40:44]=b'MSFT'
     header[68:80]=xyz((0.9642,1,0.8249))[8:]
     return bytes(header)+table+body
 
-def png(icc=None):
-    data=b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR',struct.pack('>IIBBBBB',8,8,8,2,0,0,0))
+def png(icc=None,grey=False,alpha=False):
+    data=b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR',struct.pack('>IIBBBBB',8,8,8,(4 if grey else 6) if alpha else (0 if grey else 2),0,0,0))
     if icc is not None:data+=chunk(b'iCCP',b'Calibration\0\0'+zlib.compress(icc))
-    return data+chunk(b'IDAT',zlib.compress((b'\0'+bytes((64,128,192))*8)*8))+chunk(b'IEND',b'')
+    row=b''.join(bytes(((128,) if grey else (64,128,192))+((a,) if alpha else ())) for a in ((0,64,128,255)*2))
+    return data+chunk(b'IDAT',zlib.compress((b'\0'+row)*8))+chunk(b'IEND',b'')
 
-def jpeg(cmyk=False,icc=None):
-    """8x8 constant 128 samples, unit quantizer, DC=0, AC=EOB.
+def cmyk_profile():
+    # Independently authored calibration LUT, not a printing characterization:
+    # neutral XYZ = D50 * (1 - (C+M+Y+K)/4). Affine interpolation is exact.
+    white=(.9642,1,.8249)
+    lut=b'mft2'+b'\0'*4+bytes((4,3,2,0))+struct.pack('>9i',65536,0,0,0,65536,0,0,0,65536)+struct.pack('>HH',2,2)
+    lut+=struct.pack('>8H',*([0,65535]*4))
+    for ink in itertools.product((0,1),repeat=4):
+        lut+=struct.pack('>3H',*(round(w*(1-sum(ink)/4)*32768) for w in white))
+    lut+=struct.pack('>6H',*([0,65535]*3))
+    wtpt=b'XYZ '+b'\0'*4+struct.pack('>3i',*(round(w*65536) for w in white))
+    tags=[(b'wtpt',wtpt),(b'A2B0',lut)];offset=132+12*len(tags);table=struct.pack('>I',len(tags));body=b''
+    for name,data in tags:
+        table+=name+struct.pack('>II',offset,len(data));padded=data+b'\0'*((-len(data))%4);body+=padded;offset+=len(padded)
+    header=bytearray(profile()[:128]);header[12:24]=b'prtrCMYKXYZ ';struct.pack_into('>I',header,0,offset)
+    return bytes(header)+table+body
 
-    The two one-bit Huffman codes encode zero DC difference and EOB; each
-    component block is 00. APP14 transform=0 marks inverted Adobe CMYK.
+def jpeg(cmyk=False,icc=None,samples=None):
+    """8x8 constant component samples, unit quantizer, DC-only blocks.
+
+    Four-bit DC Huffman codes select categories 0..11 and a one-bit AC code
+    supplies EOB. APP14 transform=0 marks inverted Adobe CMYK.
     """
     def segment(marker,data):return bytes((255,marker))+struct.pack('>H',len(data)+2)+data
     n=4 if cmyk else 3
@@ -100,17 +119,27 @@ def jpeg(cmyk=False,icc=None):
     if icc is not None:data+=segment(0xe2,b'ICC_PROFILE\0'+bytes((1,1))+icc)
     data+=segment(0xdb,b'\0'+b'\1'*64)
     data+=segment(0xc0,struct.pack('>BHHB',8,8,8,n)+b''.join(bytes((i+1,0x11,0)) for i in range(n)))
-    data+=segment(0xc4,b'\0'+b'\1'+b'\0'*15+b'\0'+b'\x10'+b'\1'+b'\0'*15+b'\0')
+    dc_counts=bytes((0,0,0,12))+b'\0'*12
+    data+=segment(0xc4,b'\0'+dc_counts+bytes(range(12))+b'\x10'+b'\1'+b'\0'*15+b'\0')
     data+=segment(0xda,bytes((n,))+b''.join(bytes((i+1,0)) for i in range(n))+bytes((0,63,0)))
-    bits='00'*n;bits+='1'*((-len(bits))%8)
-    return data+int(bits,2).to_bytes(len(bits)//8,'big')+b'\xff\xd9'
+    bits=''
+    for sample in ((128,)*n if samples is None else samples):
+        difference=8*(sample-128);category=abs(difference).bit_length()
+        bits+=format(category,'04b')
+        if category:bits+=format(difference if difference>=0 else (1<<category)-1+difference,f'0{category}b')
+        bits+='0' # AC EOB.
+    bits+='1'*((-len(bits))%8)
+    entropy=int(bits,2).to_bytes(len(bits)//8,'big').replace(b'\xff',b'\xff\0')
+    return data+entropy+b'\xff\xd9'
 
-def tiff(cmyk=False,icc=None,inkset=1,endian='<',big=False):
-    n=4 if cmyk else 3
+def tiff(cmyk=False,icc=None,inkset=1,endian='<',big=False,associated=False,orientation=1,sample_pixels=None):
+    n=4 if cmyk or associated else 3
     tags=[(256,4,1,8),(257,4,1,8),(258,3,n,None),(259,3,1,1),
           (262,3,1,5 if cmyk else 2),(273,4,1,None),(277,3,1,n),
           (278,4,1,8),(279,4,1,64*n),(284,3,1,1)]
     if cmyk:tags.append((332,3,1,inkset))
+    if associated:tags.append((338,3,1,1))
+    if orientation!=1:tags.append((274,3,1,orientation))
     if icc is not None:tags.append((34675,7,len(icc),None))
     tags.sort();offset=(16+8+20*len(tags)+8) if big else (8+2+12*len(tags)+4)
     # BigTIFF can keep BitsPerSample inline (at most 8 bytes).
@@ -129,8 +158,8 @@ def tiff(cmyk=False,icc=None,inkset=1,endian='<',big=False):
         if tag==34675 and count<=width:result+=icc.ljust(width,b'\0')
         elif tag==258 and big:result+=struct.pack(endian+'H'*n,*([8]*n)).ljust(width,b'\0')
         else:result+=struct.pack(endian+('H' if kind==3 and count==1 else 'I'),value).ljust(width,b'\0')
-    samples=bytes((0,64,128,32)) if cmyk else bytes((64,128,192))
-    return result+b'\0'*(8 if big else 4)+body+samples*64
+    samples=bytes((0,64,128,32)) if cmyk else bytes((32,64,96,128)) if associated else bytes((64,128,192))
+    return result+b'\0'*(8 if big else 4)+body+(samples*64 if sample_pixels is None else sample_pixels)
 
 def psd(mode=4):
     # Flat, uncompressed, 8-bit 4-channel PSD composite. PSD stores inverted inks.
@@ -165,7 +194,7 @@ class ColourInput(unittest.TestCase):
         result=self.convert(path,space,4)
         self.assertEqual(result['error']['code'],'colour_input_unsupported',result)
         self.assertFalse(self.target.exists())
-    def test_icc_auto_rejected(self):
+    def test_icc_auto_independent_reference(self):
         for extension,make in [('png',lambda:png(profile())),('jpg',lambda:jpeg(icc=profile())),('tif',lambda:tiff(icc=profile()))]:
             with self.subTest(extension=extension):
                 path=self.fixture('calibrated.'+extension,make())
@@ -173,7 +202,21 @@ class ColourInput(unittest.TestCase):
                 self.assertTrue(probe['icc'],probe)
                 expected=(128,128,128) if extension=='jpg' else (64,128,192)
                 for actual,value in zip(probe['first'],expected):self.assertAlmostEqual(actual,value/255,places=6)
-                self.reject(path)
+                result=self.convert(path)
+                self.assertEqual(result['colour']['basis'],'embedded_icc')
+                self.assertEqual(result['colour']['icc']['intent'],'relative_colorimetric')
+                self.assertGreater(result['colour']['icc']['peak_bytes'],0)
+                pixels=read_png(self.target)[2]
+                expected=tuple(math.floor(255*(12.92*(x/255) if x/255<=.0031308 else 1.055*(x/255)**(1/2.4)-.055)+.5) for x in expected)
+                for pixel in pixels:
+                    for actual,want in zip(pixel[:3],expected):self.assertLessEqual(abs(actual-want),1)
+                encoded=self.target.read_bytes();position=8
+                while position+12<=len(encoded):
+                    length=struct.unpack_from('>I',encoded,position)[0];tag=encoded[position+4:position+8]
+                    payload=encoded[position+8:position+8+length]
+                    if tag==b'iCCP':self.assertNotEqual(zlib.decompress(payload[payload.index(0)+2:]),profile(),'source ICC propagated onto transformed RGB')
+                    position+=length+12
+                self.target.unlink()
     def test_bad_icc_rejected_even_if_decoder_discards(self):
         for extension,data in [('png',png(b'bad')),('jpg',jpeg(icc=b'bad')),('tif',tiff(icc=b'bad')),('empty.tif',tiff(icc=b''))]:
             with self.subTest(extension=extension):self.reject(self.fixture('bad.'+extension,data))
@@ -185,7 +228,7 @@ class ColourInput(unittest.TestCase):
     def test_tiff_icc_tag_all_directory_layouts(self):
         for endian in ('<','>'):
             for big in (False,True):
-                for icc in (b'',profile()):
+                for icc in (b'',b'bad'):
                     with self.subTest(endian=endian,big=big,size=len(icc)):
                         self.reject(self.fixture('directory.tif',tiff(icc=icc,endian=endian,big=big)))
     def test_explicit_linear_override_independent_reference(self):
@@ -211,6 +254,25 @@ class ColourInput(unittest.TestCase):
         for extension,data in [('jpg',jpeg(True)),('ycck.jpg',ycck),('tif',tiff(True)),('icc.tif',tiff(True,profile())),('separated.tif',tiff(True,inkset=2)),('psd',psd()),('separated.psd',psd(7))]:
             for space in (None,'sRGB','linear'):
                 with self.subTest(extension=extension,space=space):self.reject(self.fixture('cmyk.'+extension,data),space)
+    def test_profiled_cmyk_uses_raw_inks(self):
+        ycck=jpeg(True,cmyk_profile(),(128,128,128,255)).replace(b'Adobe\0d\0\0\0\0\0',b'Adobe\0d\0\0\0\0\2')
+        for extension,data,linear in [('tif',tiff(True,cmyk_profile()),1-(0+64+128+32)/(4*255)),
+                                       ('jpg',jpeg(True,cmyk_profile(),(0,255,255,255)),.75),
+                                       ('ycck.jpg',ycck,1-(128*3)/(4*255))]:
+            with self.subTest(extension=extension):
+                self.target=self.root/('cmyk-out-'+extension+'.png')
+                path=self.fixture('profiled.'+extension,data)
+                self.reject(path,'sRGB')
+                result=self.convert(path)
+                self.assertEqual(result['colour']['icc']['model'],'CMYK')
+                expected=math.floor(255*(12.92*linear if linear<=.0031308 else 1.055*linear**(1/2.4)-.055)+.5)
+                for pixel in read_png(self.target)[2]:
+                    for actual in pixel[:3]:self.assertLessEqual(abs(actual-expected),2)
+        bad=self.fixture('truncated.jpg',jpeg(True,cmyk_profile())[:-3])
+        result=self.run_json(args.exe,['convert',bad,'--output',self.root/'bad.png','--json'],4)[0]
+        validator.validate(result);self.assertFalse((self.root/'bad.png').exists())
+        no_adobe=jpeg(True,cmyk_profile());no_adobe=no_adobe[:2]+no_adobe[18:]
+        self.target=self.root/'no-adobe.png';self.reject(self.fixture('no-adobe.jpg',no_adobe))
     def test_decoder_cmyk_formula_is_not_icc_transform(self):
         path=self.fixture('cmyk.tif',tiff(True))
         normal=self.run_json(args.probe_exe,[path])[0];raw=self.run_json(args.probe_exe,[path,'raw'])[0]
@@ -226,7 +288,8 @@ class ColourInput(unittest.TestCase):
         for value in normal['first']:self.assertAlmostEqual(value,64/255,places=6)
     def test_batch_failure_then_explicit_success(self):
         path=self.fixture('icc.png',png(profile()))
-        jobs=[{'id':name,'input':str(path),'options':{'input_space':space,'ocio_config':'ocio://default'},
+        bad=self.fixture('bad-icc.png',png(b'bad'))
+        jobs=[{'id':name,'input':str(bad if name=='auto' else path),'options':{'input_space':space,'ocio_config':'ocio://default'},
                'outputs':[{'path':str(self.root/(name+'.png')),'format':'png','size':[8,8]}]}
               for name,space in [('auto','auto'),('override','linear')]]
         manifest=self.root/'jobs.json';manifest.write_text(json.dumps({'schema_version':1,'jobs':jobs}),encoding='utf-8')
@@ -236,6 +299,106 @@ class ColourInput(unittest.TestCase):
         self.assertEqual(results['auto']['error']['code'],'colour_input_unsupported')
         self.assertTrue(results['override']['ok'])
         self.assertFalse((self.root/'auto.png').exists());self.assertTrue((self.root/'override.png').exists())
+    def test_gray_and_rgba_independent_reference(self):
+        for grey in (False,True):
+            for alpha in (False,True):
+                for gamma in (1,2):
+                    with self.subTest(grey=grey,alpha=alpha,gamma=gamma):
+                        self.target=self.root/f'gray-{grey}-{alpha}-{gamma}.png'
+                        result=self.convert(self.fixture('input.png',png(profile(grey,gamma),grey,alpha))) if not alpha else self.convert_transparent(self.fixture('input.png',png(profile(grey,gamma),grey,alpha)))
+                        self.assertTrue(result['ok'],result)
+                        pixels=read_png(self.target)[2]
+                        for index,pixel in enumerate(pixels):
+                            a=(0,64,128,255)[index%4] if alpha else 255
+                            rgb=(128,128,128) if grey else (64,128,192)
+                            for value,actual in zip(rgb,pixel[:3]):
+                                v=(value/255)**gamma;wanted=0 if a==0 else math.floor(255*(12.92*v if v<=.0031308 else 1.055*v**(1/2.4)-.055)+.5)
+                                self.assertLessEqual(abs(actual-wanted),1)
+                            if alpha:self.assertEqual(pixel[3],a)
+    def convert_transparent(self,path):
+        command=['convert',path,'--output',self.target,'--size','8','--background','transparent','--ocio-config','ocio://default','--json']
+        rows=self.run_json(args.exe,command)
+        for row in rows:validator.validate(row)
+        return rows[0]
+    def test_icc_budget_and_profile_mismatch(self):
+        self.reject(self.fixture('mismatch.png',png(profile(True))))
+        path=self.fixture('budget.png',png(profile()))
+        result=self.run_json(args.exe,['convert',path,'--output',self.target,'--max-decode-mib','1','--json'],4)[0]
+        validator.validate(result);self.assertEqual(result['error']['code'],'decode_limit_exceeded');self.assertFalse(self.target.exists())
+        self.reject(self.fixture('expanded-limit.png',png(b'\0'*(4*1024*1024+1))))
+    def test_webp_icc_independent_reference(self):
+        path=self.root/'calibrated.webp';self.run_json(args.probe_exe,['--write-webp',path])
+        data=path.read_bytes();position=12;chunks=[]
+        while position+8<=len(data):
+            tag=data[position:position+4];length=struct.unpack_from('<I',data,position+4)[0]
+            if tag!=b'VP8X':chunks.append(data[position:position+8+length+(length&1)])
+            position+=8+length+(length&1)
+        def riff_chunk(tag,payload):return tag+struct.pack('<I',len(payload))+payload+b'\0'*(len(payload)&1)
+        payload=riff_chunk(b'VP8X',bytes((0x30,0,0,0,7,0,0,7,0,0)))+riff_chunk(b'ICCP',profile())+b''.join(chunks)
+        path.write_bytes(b'RIFF'+struct.pack('<I',len(payload)+4)+b'WEBP'+payload)
+        result=self.convert_transparent(path);self.assertEqual(result['colour']['basis'],'embedded_icc')
+        expected=(137,188,225,128)
+        for pixel in read_png(self.target)[2]:
+            for actual,wanted in zip(pixel,expected):self.assertLessEqual(abs(actual-wanted),1)
+    def test_custom_config_requires_standard_bridge(self):
+        config=self.root/'missing-bridge.ocio'
+        config.write_text("""ocio_profile_version: 2
+roles:
+  scene_linear: working
+file_rules:
+  - !<Rule> {name: Default, colorspace: working}
+displays:
+  test:
+    - !<View> {name: test, colorspace: working}
+colorspaces:
+  - !<ColorSpace> {name: working, family: test, bitdepth: 32f, isdata: false}
+""",encoding='utf-8')
+        path=self.fixture('custom.png',png(profile()))
+        result=self.run_json(args.exe,['convert',path,'--output',self.target,'--ocio-config',config,'--json'],4)[0]
+        validator.validate(result);self.assertEqual(result['error']['code'],'colour_input_unsupported');self.assertIn('bridge',result['error']['message'])
+    def test_declared_bridge_to_distinct_project_linear(self):
+        config=self.root/'bridge.ocio'
+        config.write_text("""ocio_profile_version: 2
+roles:
+  scene_linear: project
+file_rules:
+  - !<Rule> {name: Default, colorspace: project}
+displays:
+  test:
+    - !<View> {name: test, colorspace: srgb_rec709_scene}
+colorspaces:
+  - !<ColorSpace>
+    name: project
+    bitdepth: 32f
+    isdata: false
+    to_scene_reference: !<MatrixTransform> {matrix: [0.5, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]}
+  - !<ColorSpace>
+    name: srgb_rec709_scene
+    aliases: [sRGB]
+    bitdepth: 32f
+    isdata: false
+    to_scene_reference: !<ExponentWithLinearTransform> {gamma: [2.4, 2.4, 2.4, 1], offset: [0.055, 0.055, 0.055, 0]}
+""",encoding='utf-8')
+        path=self.fixture('bridge.png',png(profile()))
+        result=self.run_json(args.exe,['convert',path,'--output',self.target,'--ocio-config',config,'--json'])[0]
+        validator.validate(result);self.assertEqual(result['colour']['working_space'],'project')
+        for pixel in read_png(self.target)[2]:
+            for actual,wanted in zip(pixel,(137,188,225)):self.assertLessEqual(abs(actual-wanted),1)
+    def test_associated_tiff_alpha_and_orientation(self):
+        path=self.fixture('associated.tif',tiff(icc=profile(),associated=True,orientation=6))
+        result=self.convert_transparent(path);self.assertTrue(result['ok'],result)
+        for pixel in read_png(self.target)[2]:
+            for actual,wanted in zip(pixel,(137,188,225,128)):self.assertLessEqual(abs(actual-wanted),1)
+    def test_icc_orientation_independent_reference(self):
+        values=[(x*31,y*29,(x+y)*11) for y in range(8) for x in range(8)]
+        data=bytes(component for pixel in values for component in pixel)
+        result=self.convert(self.fixture('orientation.tif',tiff(icc=profile(),orientation=6,sample_pixels=data)))
+        self.assertTrue(result['ok'],result)
+        for index,pixel in enumerate(read_png(self.target)[2]):
+            y,x=divmod(index,8);source=values[(7-x)*8+y]
+            for actual,value in zip(pixel,source):
+                linear=value/255;wanted=math.floor(255*(12.92*linear if linear<=.0031308 else 1.055*linear**(1/2.4)-.055)+.5)
+                self.assertLessEqual(abs(actual-wanted),1)
     def test_presence_scanner_headers(self):
         # Scanner unit tests: synthetic RIFF headers need not decode as images.
         def riff(chunks):return b'RIFF'+struct.pack('<I',4+len(chunks))+b'WEBP'+chunks

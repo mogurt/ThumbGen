@@ -534,6 +534,7 @@
                 "explicit",
                 "metadata",
                 "format_assumption",
+                "embedded_icc",
                 "data_visualization"
               ]
             },
@@ -559,6 +560,22 @@
             },
             "view": {
               "type": "string"
+            },
+            "icc": {
+              "type": "object",
+              "properties": {
+                "engine": {"const": "LittleCMS2 2.20"},
+                "model": {"enum": ["RGB","Gray","CMYK"]},
+                "intent": {"const": "relative_colorimetric"},
+                "black_point_compensation": {"const": false},
+                "bridge": {"const": "srgb_rec709_scene"},
+                "profile_limit_bytes": {"type":"integer","minimum":1},
+                "cms_limit_bytes": {"type":"integer","minimum":1},
+                "reservation_bytes": {"type":"integer","minimum":1},
+                "peak_bytes": {"type":"integer","minimum":0}
+              },
+              "required": ["engine","model","intent","black_point_compensation","bridge","profile_limit_bytes","cms_limit_bytes","reservation_bytes","peak_bytes"],
+              "additionalProperties": false
             }
           },
           "required": [

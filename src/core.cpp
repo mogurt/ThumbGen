@@ -1,6 +1,8 @@
 #include <thumbgen/core.h>
 #include "selection.h"
 #include "color_input.h"
+#include "cms_input.h"
+#include "cmyk_jpeg.h"
 #include "build_info.h"
 #include "files.h"
 #include "quantize.h"
@@ -298,9 +300,11 @@ Json Engine::convert(const Job& job) {
         // Ask unassociated formats to return straight RGB. In particular WebP
         // and PNG otherwise associate their nonlinear RGB in different spaces.
         read_config.attribute("oiio:UnassociatedAlpha",1);
+        bool container_icc=false;
+        try {container_icc=!data && detail::container_has_icc(job.input,job.options.input_space=="auto"?detail::icc_profile_limit:std::numeric_limits<std::size_t>::max());}
+        catch(const detail::CmsFailure& error){throw Failure("colour_input_unsupported",error.what());}
         auto in=OIIO::ImageInput::open(job.input,&read_config);
         if(!in){auto error=OIIO::geterror();verify_source();throw Failure("open_failed",error);}
-        const bool container_icc=!data && detail::container_has_icc(job.input);
         if(!data && detail::container_separated_colour(job.input))
             throw Failure("colour_input_unsupported","CMYK/separated input requires an external profile-aware conversion to RGB");
         stage="selection";
@@ -320,7 +324,12 @@ Json Engine::convert(const Job& job) {
         for(int p=0;;++p) {
             OIIO::ImageSpec candidate;
             if(!in->seek_subimage(p,0,candidate))break;
-            if(!data && detail::separated_colour(candidate))
+            if(!data && job.options.input_space=="auto" && p>0 && (container_icc || candidate.find_attribute("ICCProfile")))
+                throw Failure("colour_input_unsupported","automatic ICC supports a single flat image, not multipart/multiframe input");
+            const bool supported_cmyk=job.options.input_space=="auto" && candidate.find_attribute("ICCProfile") &&
+                ((std::string(in->format_name())=="tiff" && candidate.get_string_attribute("tiff:ColorSpace")=="CMYK") ||
+                 (std::string(in->format_name())=="jpeg" && !candidate.get_string_attribute("jpeg:ColorSpace").empty()));
+            if(!data && detail::separated_colour(candidate) && !supported_cmyk)
                 throw Failure("colour_input_unsupported","CMYK/separated input requires an external profile-aware conversion to RGB; input_space cannot undo decoder conversion");
             ++part_count;
             auto groups=candidate.deep && job.options.deep_mode=="flatten"?detail::deep_colour_candidates(candidate):detail::classify(candidate);
@@ -430,6 +439,10 @@ Json Engine::convert(const Job& job) {
         r["selected_channels"]=Json::array();
         for(int c:channels)r["selected_channels"].push_back(spec.channelnames[c]);
         r["timings_ms"]["open_select"]=ms(tick);
+        // Metadata snapshots can own independent ICC byte copies. Release
+        // unselected candidates before admission and never propagate a source
+        // profile onto the CMS/OCIO-converted RGB pixels.
+        all_choices.clear();choices.clear();
         bool all_skip=!job.outputs.empty();
         for(const auto& output:job.outputs) {
             if(output.existing!="skip"){all_skip=false;break;}
@@ -443,6 +456,17 @@ Json Engine::convert(const Job& job) {
             r["status"]="skipped";r["ok"]=true;r["timings_ms"]["total"]=ms(started);return r;
         }
         auto input_plan=detail::channel_plan(spec,crypto?crypto_layout->layers.front().channels:channels,data);
+        const bool cmyk=!data && detail::separated_colour(spec);
+        const bool cmyk_jpeg=cmyk && std::string(in->format_name())=="jpeg";
+        OIIO::ImageSpec raw_cmyk;
+        if(cmyk) {
+            raw_cmyk=spec;raw_cmyk.nchannels=4;raw_cmyk.channelnames={"C","M","Y","K"};raw_cmyk.alpha_channel=-1;
+            raw_cmyk.erase_attribute("ICCProfile");
+            input_plan=detail::channel_plan(raw_cmyk,{0,1,2,3},false);
+        }
+        const std::string input_format=in->format_name();
+        const bool icc_format=input_format=="png" || input_format=="jpeg" || input_format=="tiff" || input_format=="webp";
+        const bool use_icc=!data && !deep && icc_format && job.options.input_space=="auto" && (container_icc || spec.find_attribute("ICCProfile"));
         if(crypto)input_plan.pixel_bytes=detail::crypto_source_pixel_bytes(spec,*crypto_layout);
         std::optional<detail::SampledIdPlan> sampled;
         if(mapping.mode==detail::DataMode::id) {
@@ -473,10 +497,11 @@ Json Engine::convert(const Job& job) {
                 {"modified_seconds",stamp.modified_seconds},{"modified_fraction",stamp.modified_fraction}}},
                 {"footprint",{{"data_width",spec.width},{"data_height",spec.height},
                     {"display_width",display_width},{"display_height",display_height},
-                    {"channel_span",*span.second-*span.first+1},{"selected_channels",data || deep?4:channels.size()},
+                    {"channel_span",cmyk?4:*span.second-*span.first+1},{"selected_channels",data || deep?4:channels.size()},
                     {"source_sample_bytes",input_plan.sample_bytes},{"source_pixel_bytes",input_plan.pixel_bytes},
                     {"source_buffer_bytes",sampled?sampled->peak_bytes:0},
                     {"deep_buffer_bytes",deep?job.options.max_decode_mib*1024ULL*1024ULL:0},
+                    {"cms_buffer_bytes",use_icc?detail::cms_reservation:0},
                     {"native_categorical",categorical},
                     {"output_width",largest_w},{"output_height",largest_h},{"threads",job.options.threads}}},
                 {"sequence_pin",sequence_lock(job.sequence_id)}};
@@ -488,9 +513,9 @@ Json Engine::convert(const Job& job) {
         if(!data) {
             stage="colour";
             const bool embedded_icc=container_icc || spec.find_attribute("ICCProfile");
-            if(embedded_icc && job.options.input_space=="auto")
-                throw Failure("colour_input_unsupported","embedded ICC is unsupported; convert externally to a known RGB space or explicitly set input_space to override the profile");
-            if(embedded_icc)
+            if(embedded_icc && job.options.input_space=="auto" && !use_icc)
+                throw Failure("colour_input_unsupported","ICC is unsupported on this input format or Deep input");
+            if(embedded_icc && !use_icc)
                 r["warnings"].push_back("embedded ICC profile bypassed by explicit input_space; no ICC transform or profile validation performed");
             std::string config_name=job.options.ocio_config,config_basis="explicit";
             if(config_name.empty()) {
@@ -513,7 +538,16 @@ Json Engine::convert(const Job& job) {
             if(!config->isColorSpaceLinear(working_space))
                 throw Failure("colour_working_space_invalid","scene_linear role must use a linear colour space");
             std::string from=job.options.input_space,basis="explicit";
-            if(from=="auto") {
+            if(use_icc) {
+                from=std::string(config->resolve("srgb_rec709_scene"));basis="embedded_icc";
+                // Custom configs must explicitly declare this standardized
+                // scene sRGB bridge; arbitrary scene_linear is never relabeled.
+                bool declared=config_name=="ocio://default";
+                for(int i=0;i<config->getNumColorSpaces();++i)
+                    declared=declared || std::string(config->getColorSpaceNameByIndex(i))=="srgb_rec709_scene";
+                if(!declared || from.empty() || config->get_color_interop_id(from)!="srgb_rec709_scene")
+                    throw Failure("colour_input_unsupported","ICC requires a declared standard srgb_rec709_scene OCIO bridge");
+            } else if(from=="auto") {
                 from=spec.get_string_attribute("oiio:ColorSpace");basis="metadata";
                 if(from.empty()) {
                     auto ext=fs::u8path(job.input).extension().u8string();
@@ -537,6 +571,10 @@ Json Engine::convert(const Job& job) {
             r["colour"]={{"input_space",input_space},{"input_requested",from},{"basis",basis},
                 {"working_space",working_space},{"output_space",output_space},{"ocio_config",config->configname()},
                 {"config_basis",config_basis},{"display",job.options.display},{"view",job.options.view}};
+            if(use_icc)r["colour"]["icc"]={{"engine","LittleCMS2 2.20"},{"intent","relative_colorimetric"},{"black_point_compensation",false},
+                {"model",cmyk?"CMYK":chosen.candidate.kind=="grey"?"Gray":"RGB"},
+                {"bridge","srgb_rec709_scene"},{"profile_limit_bytes",detail::icc_profile_limit},{"cms_limit_bytes",detail::cms_memory_limit},
+                {"reservation_bytes",detail::cms_reservation},{"peak_bytes",0}};
         } else {
             r["colour"]={{"input_space","data"},{"input_requested",job.options.visualization},{"basis","data_visualization"},
                 {"working_space","display-referred"},{"output_space","sRGB"},{"ocio_config",""},{"config_basis","none"},{"display",""},{"view",""}};
@@ -599,7 +637,9 @@ Json Engine::convert(const Job& job) {
                 if(deep_image.pixels[p+3]==0 && (deep_image.pixels[p]!=0 || deep_image.pixels[p+1]!=0 || deep_image.pixels[p+2]!=0))
                     throw Failure("deep_transparency_unsupported","Straight PNG/WebP cannot represent zero-alpha Deep emission; choose an opaque background");
         } else {
-            const size_t limit=job.options.max_decode_mib*1024ULL*1024ULL/sizeof(float);
+            const size_t total_limit=job.options.max_decode_mib*1024ULL*1024ULL;
+            if(use_icc && total_limit<detail::cms_reservation)throw Failure("decode_limit_exceeded","ICC reservation exceeds decode budget");
+            const size_t limit=(total_limit-(use_icc?detail::cms_reservation:0))/sizeof(float);
             size_t count=size_t(spec.width);
             for(size_t factor:{size_t(spec.height),input_plan.channels.size()}) {
                 if(factor==0 || count>limit/factor)throw Failure("decode_limit_exceeded","decoded source buffer exceeds limit");
@@ -607,7 +647,19 @@ Json Engine::convert(const Job& job) {
             }
             stage="decode";tick=Clock::now();
             pixels.resize(count);
-            bool read_ok=detail::read_selected(*in,spec,part,input_plan,false,pixels.data());
+            if(cmyk && !cmyk_jpeg) {
+                in->close();read_config.attribute("oiio:RawColor",1);in=OIIO::ImageInput::open(job.input,&read_config);
+                if(!in || !in->seek_subimage(part,0,raw_cmyk) || raw_cmyk.nchannels!=4 || raw_cmyk.width!=spec.width || raw_cmyk.height!=spec.height ||
+                   raw_cmyk.channelnames!=std::vector<std::string>{"C","M","Y","K"})
+                    throw Failure("colour_input_unsupported","cannot read unmodified CMYK TIFF ink channels");
+                raw_cmyk.erase_attribute("ICCProfile");
+            }
+            bool read_ok=false;
+            if(cmyk_jpeg) {
+                in->close();
+                try{detail::read_cmyk_jpeg(job.input,spec.width,spec.height,pixels.data());read_ok=true;}
+                catch(const detail::CmsFailure& error){throw Failure("colour_input_unsupported",error.what());}
+            } else read_ok=detail::read_selected(*in,cmyk?raw_cmyk:spec,part,input_plan,false,pixels.data());
             const std::string read_error=read_ok?std::string{}:in->geterror();
             in->close();
             if(impl_->observer)impl_->observer("decoded",job);
@@ -615,9 +667,23 @@ Json Engine::convert(const Job& job) {
             if(!read_ok)throw Failure("decode_failed",read_error);
             r["timings_ms"]["decode"]=ms(tick);
             r["decoded_mib"]=double(count*sizeof(float))/1048576;
+            auto apply_icc=[&](float* values,int components,detail::CmsModel model,bool associated) {
+                auto* profile=spec.find_attribute("ICCProfile");
+                if(!profile || profile->type().basetype!=OIIO::TypeDesc::UINT8 || profile->datasize()<=0)
+                    throw Failure("colour_input_unsupported","embedded ICC was discarded or is invalid");
+                detail::CmsStats stats;
+                try {
+                    {detail::CmsInput cms(profile->data(),std::size_t(profile->datasize()),model,stats);
+                     cms.apply(values,std::size_t(spec.width)*spec.height,components,associated);}
+                    if(stats.live)throw detail::CmsFailure("CMS allocation ledger did not return to zero");
+                } catch(const detail::CmsFailure& error){throw Failure("colour_input_unsupported",error.what());}
+                r["colour"]["icc"]["peak_bytes"]=stats.peak;
+            };
+            if(cmyk)apply_icc(pixels.data(),4,detail::CmsModel::cmyk,false);
             OIIO::ImageSpec subset=spec;
+            subset.erase_attribute("ICCProfile");
             subset.nchannels=int(input_plan.channels.size());subset.format=OIIO::TypeDesc::FLOAT;subset.channelformats.clear();
-            subset.channelnames.clear();for(int c:input_plan.channels)subset.channelnames.push_back(spec.channelnames[c]);
+            subset.channelnames.clear();for(int c:input_plan.channels)subset.channelnames.push_back(cmyk?std::vector<std::string>{"R","G","B","A"}[c]:spec.channelnames[c]);
             auto alpha=std::find(input_plan.channels.begin(),input_plan.channels.end(),spec.alpha_channel);
             subset.alpha_channel=alpha!=input_plan.channels.end()?int(alpha-input_plan.channels.begin()):-1;
             auto depth=std::find(input_plan.channels.begin(),input_plan.channels.end(),spec.z_channel);
@@ -626,6 +692,8 @@ Json Engine::convert(const Job& job) {
             for(int c:channels)order.push_back(int(std::lower_bound(input_plan.channels.begin(),input_plan.channels.end(),c)-input_plan.channels.begin()));
             std::vector<std::string> names{"R","G","B"};if(order.size()==4)names.push_back("A");
             check(iba::channels(working,buffer,int(order.size()),order,{},names),working,"channels_failed");
+            if(use_icc && !cmyk)apply_icc(static_cast<float*>(working.localpixels()),working.nchannels(),
+                chosen.candidate.kind=="grey"?detail::CmsModel::grey:detail::CmsModel::rgb,!spec.get_int_attribute("oiio:UnassociatedAlpha",0));
             if(spec.get_int_attribute("oiio:UnassociatedAlpha",0) && order.size()==4)
                 check(iba::premult(working,working),working,"alpha_failed");
             working.specmod().attribute("oiio:UnassociatedAlpha",0);

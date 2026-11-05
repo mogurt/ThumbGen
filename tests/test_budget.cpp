@@ -22,6 +22,9 @@ int main() {
         require(small.total>small.source+small.working+small.output+small.codec,"worker/margin omitted");
         require(small.total==small.incremental+small.worker && small.incremental==small.source+small.working+small.output+small.codec+small.margin,"incremental buffers or fixed worker allowance counted incorrectly");
         require(small.codec>0,"JPEG encoded destination omitted");
+        auto cms=ImageFootprint{8,8,8,8,3,3,8,8,4};cms.cms_buffer_bytes=40ULL*1024*1024;
+        require(estimate_memory(cms).source==small.source+cms.cms_buffer_bytes,"CMS reservation omitted");
+        rejects<std::invalid_argument>([&]{auto invalid=cms;invalid.cms_buffer_bytes=65ULL*1024*1024;estimate_memory(invalid);});
         auto doubles=ImageFootprint{8,8,8,8,3,4,8,8,4,8};
         auto floats=doubles;floats.source_sample_bytes=4;
         require(estimate_memory(doubles).source==2*estimate_memory(floats).source,"native DOUBLE source bytes missing");
