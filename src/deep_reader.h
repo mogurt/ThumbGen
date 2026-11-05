@@ -20,7 +20,11 @@ struct DeepReadLimits {
     std::size_t bytes=512*1024*1024;
     std::size_t samples_per_pixel=4096;
     std::uint64_t samples_per_chunk=16*1024*1024,samples_per_image=64*1024*1024;
+    // Internal fault injection: reject this 1-based Core allocation (0 disables).
+    std::size_t fail_core_allocation=0;
 };
+// Runtime identity of the audited Core implementation, never a build option.
+bool bounded_deep_zstd_available() noexcept;
 enum class DeepOutputMode {components,associated_rgba,opaque_rgba};
 struct DeepReadOutput {
     DeepOutputMode mode=DeepOutputMode::components;
