@@ -13,6 +13,11 @@ import tarfile
 import tempfile
 import io
 import shutil
+import importlib.util
+
+_native_spec = importlib.util.spec_from_file_location('linux_runtime_native', Path(__file__).with_name('runtime_native.py'))
+_native = importlib.util.module_from_spec(_native_spec)
+_native_spec.loader.exec_module(_native)
 
 
 SYSTEM = ('libc.so.', 'libm.so.', 'libdl.so.', 'libpthread.so.', 'librt.so.',
@@ -38,6 +43,29 @@ def system_elf(path):
 def require(condition, message):
     if not condition:
         raise ValueError(message)
+
+
+def validate_component_inventory(manifest, repo):
+    """Complete component identities and verbatim notices are verifier inputs."""
+    repo = Path(repo)
+    lock = json.loads((repo / 'scripts/linux/sources-lock.json').read_text())
+    inventory = json.loads(Path(__file__).with_name('runtime-notice-inventory.json').read_text())['components']
+    expected = {x['package'] for x in lock['dependencies']} | {'OpenImageIO', 'nlohmann_json',
+        'GCC-runtime', 'GCC-C++-runtime', 'GCC-build-headers-nonshared', 'LittleCMS2-shared', 'JPEG-shared', 'OpenEXRCore-patched'}
+    require(set(inventory) == expected, 'Verifier notice catalog does not cover source lock')
+    locked = {x['package']: x for x in lock['dependencies']}
+    locked.update(OpenImageIO=dict(commit=lock['oiio_commit']), nlohmann_json=lock['nlohmann_json'])
+    for name, identity in locked.items():
+        require(all(inventory[name].get(k) == identity[k] for k in ('commit', 'version') if k in identity), 'Notice catalog source identity differs: ' + name)
+    components = manifest['dependency_components']
+    require(len(components) == len(expected) and {c['name'] for c in components} == expected,
+            'Component inventory differs from complete source lock')
+    for item in components:
+        approved = inventory[item['name']]
+        require(all(item.get(k) == approved[k] for k in ('commit', 'version') if approved.get(k) is not None),
+                'Component identity differs: ' + item['name'])
+        require(sorted(item['notices'], key=lambda n: n['file']) == approved['notices'],
+                'Component notice inventory differs: ' + item['name'])
 
 
 def cache_values(build):
@@ -102,10 +130,15 @@ def build_evidence(build, source, prefix, options):
 
 def installed_product(build, prefix, relative, receipt, evidence):
     path = prefix / relative
+    require(not Path(relative).is_absolute() and '..' not in Path(relative).parts and
+            path.resolve().is_relative_to(prefix.resolve()), 'Installed product escapes selected prefix')
     require(path.is_file() and sha(path) == receipt['installed_sha256'].get(relative), 'Installed digest differs: ' + relative)
-    require(str(path) in evidence['installed_paths'] or str(path.resolve()) in evidence['installed_paths'],
+    require((build / 'CMakeCache.txt').is_file(), 'Native build lacks configured source identity')
+    values = cache_values(build)
+    manifest = build / 'install_manifest.txt'
+    require(manifest.is_file() and str(Path(values['CMAKE_INSTALL_PREFIX']) / relative) in manifest.read_text().splitlines(),
             'Installed artifact absent from CMake manifest: ' + str(path))
-    candidates = [p for p in build.rglob(path.name) if p.is_file()]
+    candidate, native = _native.installed_origin(build, relative, values)
     def equivalent(candidate):
         if sha(candidate) == sha(path):
             return True
@@ -114,17 +147,17 @@ def installed_product(build, prefix, relative, receipt, evidence):
         pattern = r'\((?:RPATH|RUNPATH)\).*?\[(.*?)\]'
         old = re.search(pattern, run('readelf', '-d', candidate))
         new = re.search(pattern, run('readelf', '-d', path))
-        if not old or not new:
+        if not old:
             return False
         with tempfile.TemporaryDirectory(prefix='install-rpath-proof-') as directory:
             copy = Path(directory) / path.name
             shutil.copyfile(candidate, copy)
             script = Path(directory) / 'edit.cmake'
-            script.write_text(f'file(RPATH_CHANGE FILE "{copy}" OLD_RPATH "{old[1]}" NEW_RPATH "{new[1]}")\n')
-            run(evidence['options']['CMAKE_COMMAND'], '-P', script)
+            script.write_text(f'file(RPATH_CHANGE FILE "{copy}" OLD_RPATH "{old[1]}" NEW_RPATH "{new[1]}")\n' if new else f'file(RPATH_REMOVE FILE "{copy}")\n')
+            run(values['CMAKE_COMMAND'], '-P', script)
             return sha(copy) == sha(path)
-    require(any(equivalent(p) for p in candidates), 'Install is not the recorded build product: ' + relative)
-    return dict(path=str(path.resolve()), sha256=sha(path))
+    require(equivalent(candidate), 'Install is not the recorded build product: ' + relative)
+    return dict(path=str(path.resolve()), sha256=sha(path), native=native)
 
 
 def normalized_elf_sha(path, desired, cmake):
@@ -269,4 +302,36 @@ def audit_base(repo, cache):
         records[name] = {str(p): sha(p) for p in [log, build / 'CMakeCache.txt', build / 'install_manifest.txt']}
     records['OpenImageIO'] = {str(p): sha(p) for p in [cache / 'oiio-build/CMakeCache.txt', cache / 'oiio-build/build.ninja',
         cache / 'oiio-build/install_manifest.txt', *sorted((cache / 'logs').glob('oiio-*.log'))]}
-    return dict(source_trees=trees, builds=records, receipt_sha256=sha(cache / 'sdk-rebuild.json'))
+    # Installation authority comes from each configured native install graph,
+    # not the caller's installed_sha256 list. Header-only projects have no
+    # library rules; every actual base library must be accounted for below.
+    products = {}
+    specs = [(cache / 'oiio-build', cache / 'sdk')]
+    specs += [(cache / 'oiio-deps' / (item['package'] + '-build'), cache / 'oiio-deps/dist') for item in lock['dependencies']]
+    expected_paths = set()
+    for build, prefix in specs:
+        values = cache_values(build)
+        manifest = build / 'install_manifest.txt'
+        proof = dict(installed_paths=manifest.read_text().splitlines(), options=values)
+        for rule in _native.install_rules(build):
+            origin = Path(rule['origin'])
+            if origin.is_symlink():
+                continue  # SONAME alias; the real native output is mandatory.
+            path = prefix / rule['relative']
+            relative = path.relative_to(cache).as_posix()
+            expected_paths.add(str(path))
+            products[relative] = installed_product(build, prefix, rule['relative'],
+                dict(installed_sha256={r.removeprefix(prefix.relative_to(cache).as_posix() + '/'): h
+                    for r, h in old['installed_sha256'].items() if r.startswith(prefix.relative_to(cache).as_posix() + '/')}), proof)
+    for prefix in (cache / 'sdk', cache / 'oiio-deps/dist'):
+        for path in prefix.rglob('*'):
+            if path.is_file() and (path.suffix == '.a' or '.so' in path.name) and path.name == path.resolve().name:
+                require(str(path) in expected_paths, 'Unknown base library outside native install graph: ' + str(path))
+    allowed = {p['path'] for p in products.values()} | {p['native']['output'] for p in products.values()}
+    for product in products.values():
+        for linked in product['native']['link_inputs']:
+            path = Path(linked)
+            if path.suffix == '.a' or '.so' in path.name:
+                system_link = str(path.parent) in ('/usr/lib64', '/lib64') and re.fullmatch(r'lib(?:m|dl|pthread|rt|c|gcc_s|stdc\+\+)(?:\.so.*|-[0-9.]+\.so)', path.name)
+                require(linked in allowed or system_link, 'Unknown native link library: ' + linked)
+    return dict(source_trees=trees, builds=records, products=products, receipt_sha256=sha(cache / 'sdk-rebuild.json'))

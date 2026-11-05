@@ -10,7 +10,7 @@ import subprocess
 import tarfile
 import tempfile
 import zlib
-from runtime_overlays import system_elf
+from runtime_overlays import system_elf, validate_component_inventory
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--archive', required=True, type=Path)
@@ -103,6 +103,7 @@ if json.loads(command(str(root / 'thumbgen'), '--version', '--json')) != version
     raise SystemExit('Launcher and direct ELF identities differ')
 capabilities = json.loads(command(str(exe), 'capabilities', '--json'))
 manifest = json.loads((root / 'DEPENDENCIES.json').read_text())
+validate_component_inventory(manifest, repo)
 if version != manifest['identity']:
     raise SystemExit('Candidate identity mismatch')
 if manifest['redistribution_ready'] is not False:

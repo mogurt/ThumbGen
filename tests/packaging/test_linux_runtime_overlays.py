@@ -61,7 +61,7 @@ class Provenance(unittest.TestCase):
         (prefix / 'libCore.a').write_bytes(b'replacement archive')
         receipt = dict(installed_sha256={'libCore.a': m.sha(prefix / 'libCore.a')})
         proof = dict(installed_paths=[str(prefix / 'libCore.a')])
-        with self.assertRaisesRegex(ValueError, 'not the recorded build product'):
+        with self.assertRaisesRegex(ValueError, 'Native build lacks configured source identity'):
             m.installed_product(build, prefix, 'libCore.a', receipt, proof)
 
     def test_absent_install_manifest_entry_refused(self):
@@ -69,6 +69,7 @@ class Provenance(unittest.TestCase):
         build.mkdir(); prefix.mkdir()
         for root in (build, prefix):
             (root / 'libCore.a').write_bytes(b'same bytes')
+        (build / 'CMakeCache.txt').write_text('CMAKE_INSTALL_PREFIX:PATH=' + str(prefix) + '\n')
         receipt = dict(installed_sha256={'libCore.a': m.sha(prefix / 'libCore.a')})
         with self.assertRaisesRegex(ValueError, 'absent from CMake manifest'):
             m.installed_product(build, prefix, 'libCore.a', receipt, dict(installed_paths=[]))

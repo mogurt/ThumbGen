@@ -13,7 +13,7 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
-from runtime_overlays import audit as audit_overlays, audit_base, audit_stage, require
+from runtime_overlays import audit as audit_overlays, audit_base, audit_stage, require, validate_component_inventory
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--validation', required=True, type=Path)
@@ -36,6 +36,7 @@ output.mkdir(parents=True, exist_ok=True)
 git_command = '/opt/rh/rh-git227/root/usr/bin/git' if Path('/opt/rh/rh-git227/root/usr/bin/git').is_file() else 'git'
 evidence = json.loads((stage / 'build-evidence.json').read_text())
 lock = json.loads((repo / 'scripts/linux/sources-lock.json').read_text())
+require(evidence['source_dependencies'] == lock['dependencies'], 'Stage dependency inventory differs from source lock')
 overlays = audit_overlays(repo, args.color_root, args.core_root, args.product_build)
 require(overlays == evidence['overlays'], 'Overlay provenance changed since product freeze')
 require(audit_base(repo, cache) == evidence['original_sdk'], 'Original SDK evidence changed since freeze')
@@ -84,7 +85,9 @@ if identity['build']['revision'] == 'unknown':
                            embedded_revision='unknown', verification='Git archive bytes, full input map, frozen source tree and validated ELF SHA256')
 elif not revision.startswith(identity['build']['revision']):
     raise SystemExit('Embedded revision and frozen source evidence disagree')
-recipe_sha256 = hashlib.sha256(Path(__file__).read_bytes() + b'\0' + Path(__file__).with_name('runtime_overlays.py').read_bytes()).hexdigest()
+recipe_files = [Path(__file__).with_name(n) for n in ('package-runtime.py', 'runtime_overlays.py', 'runtime_native.py', 'runtime-notice-inventory.json')]
+recipe_inputs = {p.name: digest(p) for p in recipe_files}
+recipe_sha256 = hashlib.sha256(json.dumps(recipe_inputs, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 name = 'thumbgen-' + re.sub(r'[^A-Za-z0-9_.-]', '_', identity['version']) + '-linux-x86_64-glibc217-' + revision[:12] + '-' + digest(exe)[:12] + '-r' + recipe_sha256[:8]
 system = ('libc.so', 'libm.so', 'libdl.so', 'libpthread.so', 'librt.so', 'libutil.so',
           'libresolv.so', 'ld-linux-', 'libnss_', 'libanl.so', 'libcrypt.so', 'libnsl.so')
@@ -197,7 +200,7 @@ with tempfile.TemporaryDirectory(prefix='candidate-', dir=work) as temporary:
         raise SystemExit('OIIO license source identity mismatch')
     notices('OpenImageIO', oiio_source, dict(version='3.2.1.2', commit=lock['oiio_commit'],
             repository='https://github.com/AcademySoftwareFoundation/OpenImageIO', license='Apache-2.0 plus BSD and embedded third-party notices', linkage='shared; embedded notices retained'))
-    for dependency in evidence['source_dependencies']:
+    for dependency in lock['dependencies']:
         source = cache / 'oiio-deps' / dependency['package']
         if run(git_command, '-C', str(source), 'rev-parse', 'HEAD').strip() != dependency['commit']:
             raise SystemExit('Dependency license source mismatch: ' + dependency['package'])
@@ -227,6 +230,7 @@ with tempfile.TemporaryDirectory(prefix='candidate-', dir=work) as temporary:
                 review='GPL texts and GCC Runtime Library Exception 3.1 retained; eligible compilation and corresponding-source obligations need release review'))
     manifest = dict(kind='internal-evaluation-candidate', redistribution_ready=False, project_license='not selected; no project LICENSE supplied',
                     package_recipe_sha256=recipe_sha256,
+                    packaging_recipe_inputs=recipe_inputs,
                     overlay_auditor_sha256=digest(Path(__file__).with_name('runtime_overlays.py')),
                     linux_overlay_provenance=overlays, original_sdk_provenance=evidence['original_sdk'],
                     product_install_binding=evidence['product_install'],
@@ -240,6 +244,7 @@ with tempfile.TemporaryDirectory(prefix='candidate-', dir=work) as temporary:
                     outstanding_requirements=['Project license decision', 'GCC Runtime Library Exception applicability and any corresponding-source delivery requirements',
                                               'Final review of embedded/vendored component notices and distribution obligations',
                                               'Clean-machine, physical minimum OS and CPU validation not performed'])
+    validate_component_inventory(manifest, repo)
     embedded_groups = {
         'BSD-3-Clause': ['OIIO pre-July-2023 retained code', 'NVIDIA Gelato-derived code', 'Open Shading Language-derived code',
                         'OpenColorIO-derived code/configuration acknowledgments', 'OpenEXR/Imath-derived code', 'DPX reader/writer',
