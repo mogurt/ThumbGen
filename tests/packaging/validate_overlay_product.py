@@ -153,6 +153,7 @@ def validate(exe, color, deep, output):
     inputs.update(p for p in output.iterdir() if p.is_file())
     inputs.update(p for p in exe.parent.iterdir() if p.suffix.lower() in ('.dll', '.exe'))
     report = dict(schema_version=VERSION, kind='independent-windows-product-validation', passed=True,
+        fixtures=dict(color_evidence=str(color), deep_evidence=str(deep)),
         exe_sha256=sha(exe), tested_exe=str(exe), tested_runtime=runtime, validator=identity,
         loaded_modules=modules, module_index=record(output / 'modules.json'),
         command_index=record(output / 'commands.json'), cases=cases,

@@ -7,7 +7,7 @@ import re
 import subprocess
 
 from runtime_closure import audit, digest, overlays
-from product_validation import check_report, load as load_validation
+from product_validation import execute_for_freeze, load as load_validation
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--build', type=Path, required=True)
@@ -44,7 +44,9 @@ closure = audit(exe, sdk, Path(os.environ['SystemRoot']) / 'System32', args.colo
 if closure['sdk_profile'] != 'source':
     raise RuntimeError('Internal runtime candidate requires the minimal source SDK')
 if args.product_validation:
-    check_report(load_validation(args.product_validation), closure)
+    executed_validation = execute_for_freeze(load_validation(args.product_validation), closure,
+        args.output.resolve().parent / (args.output.stem + '.execution'))
+    ctest['validation_sha256'] = digest(executed_validation)
 environment = dict(SystemRoot=os.environ['SystemRoot'], PATH=str(sdk / 'sdk/bin') + os.pathsep + str(Path(os.environ['SystemRoot']) / 'System32'))
 identity = json.loads(subprocess.check_output([str(exe), '--version', '--json'], env=environment, text=True, timeout=30))
 capabilities = json.loads(subprocess.check_output([str(exe), 'capabilities', '--json'], env=environment, text=True, timeout=30))
@@ -79,7 +81,8 @@ report = dict(schema_version=1, kind='thumbgen-tested-windows-product', identity
               limitation='Collected after testing; file binding is local build evidence, not signed build attestation or minimum-platform acceptance.')
 report['validation_mode'] = 'independent-v2' if args.product_validation else 'full-ctest'
 if args.product_validation:
-    report['product_validation'] = dict(path=str(args.product_validation.resolve()), sha256=digest(args.product_validation))
+    report['submitted_validation'] = dict(path=str(args.product_validation.resolve()), sha256=digest(args.product_validation))
+    report['product_validation'] = dict(path=str(executed_validation), sha256=digest(executed_validation))
 args.output.parent.mkdir(parents=True, exist_ok=True)
 args.output.write_text(json.dumps(report, indent=2) + '\n', encoding='utf-8')
 print(json.dumps(dict(exe_sha256=report['exe_sha256'], closure_files=len(closure['files']), validation=ctest)))
