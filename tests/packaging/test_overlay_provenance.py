@@ -163,6 +163,29 @@ class ProvenanceBoundaries(unittest.TestCase):
             builder.build('color', cache / 'must-not-write', lcms_cache=cache)
         self.assertFalse((cache / 'must-not-write').exists())
 
+    def test_helper_path_is_archival_but_git_content_must_match(self):
+        self.git('init', '-q')
+        for relative in proof.recipe_paths('color'):
+            path = self.root / relative; path.parent.mkdir(parents=True, exist_ok=True); path.write_text('trusted\n')
+        self.commit()
+        producer = self.root / 'build-producer.json'
+        with patch.object(policy, 'REPO', self.root):
+            producer.write_text(json.dumps(proof.producer(policy, 'color')))
+            names = ['LittleCMS2', 'JPEG']
+            tool = str(Path(sys.executable).resolve())
+            rows = [dict(name='helper', args=[tool, 'C:/absent-producer/scripts/build-color-sdk.py', '--root', str(self.root)],
+                         executable=tool, executable_sha256=policy.sha(Path(tool)), exit=0)]
+            for name in names:
+                rows.append(dict(name=name + '-install', executable=tool, executable_sha256=policy.sha(Path(tool)), exit=0,
+                    args=['cmake', '-DCMAKE_INSTALL_CONFIG_NAME=Release', '--trace-expand', '--trace-format=json-v1',
+                          '--trace-redirect=' + str(self.root / (name + '-install-trace.jsonl')),
+                          '-P', str(self.root / (name + '-build/cmake_install.cmake'))]))
+            (self.root / 'build-commands.json').write_text(json.dumps(rows))
+            proof.build_commands(policy, 'color', self.root, names)
+            (self.root / 'scripts/build-color-sdk.py').write_text('different trusted recipe\n'); self.commit()
+            with self.assertRaisesRegex(ValueError, 'Unexpected overlay helper'):
+                proof.build_commands(policy, 'color', self.root, names)
+
 
 if __name__ == '__main__':
     unittest.main()
