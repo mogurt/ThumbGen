@@ -3,6 +3,7 @@ import copy
 import importlib.util
 from pathlib import Path
 import unittest
+import tempfile
 
 spec = importlib.util.spec_from_file_location('smoke', Path(__file__).resolve().parents[2] / 'scripts/ci/smoke_examples.py')
 smoke = importlib.util.module_from_spec(spec)
@@ -15,6 +16,24 @@ class Validator:
 
 
 class ExampleSmoke(unittest.TestCase):
+    def test_new_outputs_are_separate_from_protected_inputs(self):
+        with tempfile.TemporaryDirectory() as root:
+            deps = Path(root)
+            inputs = deps / 'public-inputs'
+            inputs.mkdir()
+            path = inputs / 'fixture.png'
+            path.write_bytes(b'input')
+            before = smoke.snapshot_inputs(deps)
+            outputs = deps / 'public-output'
+            outputs.mkdir()
+            (outputs / 'preview.png').write_bytes(b'output')
+            self.assertEqual(smoke.snapshot_inputs(deps), before)
+            path.write_bytes(b'changed')
+            self.assertNotEqual(smoke.snapshot_inputs(deps), before)
+            path.write_bytes(b'input')
+            (inputs / 'unexpected.png').write_bytes(b'added')
+            self.assertNotEqual(smoke.snapshot_inputs(deps), before)
+
     def setUp(self):
         self.manifest = dict(jobs=[dict(id='first', outputs=[dict(path='out.png')])])
         self.rows = [dict(type='result', id='first', ok=True, status='success', outputs=[dict(status='success')]),
