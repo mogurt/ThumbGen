@@ -330,6 +330,11 @@
       "code": "deep_workspace_limit_exceeded",
       "category": "input",
       "description": "Deep展平工作空间超限"
+    },
+    {
+      "code": "deep_depth_unsupported",
+      "category": "input",
+      "description": "有限起点无限终点的Deep体积深度政策尚未支持"
     }
   ]
 }

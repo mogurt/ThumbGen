@@ -4,6 +4,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <algorithm>
+#include <limits>
 namespace fs=std::filesystem;
 static void fixture(const fs::path& path,const std::string& kind) {
     if(kind=="flat") {
@@ -16,7 +17,7 @@ static void fixture(const fs::path& path,const std::string& kind) {
     if(kind=="coloured" || kind=="changed_alpha")names={"R","G","B","AR","AG","AB","Z","Zback"};
     if(kind=="beauty")names={"R","G","B","A","beauty.R","beauty.G","beauty.B","Z","Zback"};
     if(kind=="missing_alpha")names={"R","G","B","Z","Zback"};
-    if(kind=="no_zback")names.pop_back();
+    if(kind=="no_zback" || kind=="infinite_no_zback")names.pop_back();
     if(kind=="depth_collision")names={"beauty.R","beauty.G","beauty.B","A","Z","Zback","beauty.Z","beauty.Zback"};
     if(kind=="ancestor_alpha")names={"view.beauty.R","view.beauty.G","view.beauty.B","view.A","A","Z","Zback"};
     if(kind=="ancestor_alpha_shift")names={"view.beauty.R","view.beauty.G","view.beauty.B","A","Z","Zback"};
@@ -42,6 +43,9 @@ static void fixture(const fs::path& path,const std::string& kind) {
             if(kind=="coloured" && name=="AB")value=.75f;
             if(name=="Z" || name=="Zback")value=kind=="emission"?1.f:s==0?2.f:1.f;
             if(kind=="volumes" && name=="Zback")value+=1;
+            if((kind=="infinite_point" || kind=="infinite_reversed_point" || kind=="infinite_no_zback") && s==0 &&
+                (name=="Z" || (name=="Zback" && kind!="infinite_reversed_point")))value=std::numeric_limits<float>::infinity();
+            if(kind=="semi_infinite_volume" && s==1 && name=="Zback")value=std::numeric_limits<float>::infinity();
             if(kind=="depth_collision" && (name=="beauty.Z" || name=="beauty.Zback"))value=s==0?1.f:2.f;
             if(kind=="ancestor_alpha" || kind=="ancestor_alpha_shift") {
                 if(name=="view.beauty.R")value=.125f;if(name=="view.beauty.G")value=.0625f;if(name=="view.beauty.B")value=.1875f;
@@ -64,7 +68,7 @@ int main(int argc,char** argv) {
         if(argc!=2)throw std::runtime_error("expected new fixture directory");
         auto root=fs::absolute(fs::u8path(argv[1]));if(!fs::create_directory(root))throw std::runtime_error("fixture directory exists");
         nlohmann::json files=nlohmann::json::object();
-        for(const char* kind:{"scalar","tiled","coloured","changed_alpha","beauty","missing_alpha","no_zback","reordered","empty","window","nonlinear","emission","volumes","flat","depth_collision","ancestor_alpha","ancestor_alpha_shift","mixed_alpha","grey_alpha"}) {
+        for(const char* kind:{"scalar","tiled","coloured","changed_alpha","beauty","missing_alpha","no_zback","reordered","empty","window","nonlinear","emission","volumes","flat","depth_collision","ancestor_alpha","ancestor_alpha_shift","mixed_alpha","grey_alpha","infinite_point","infinite_reversed_point","infinite_no_zback","semi_infinite_volume"}) {
             auto path=root/(std::string(kind)+".exr");fixture(path,kind);files[kind]=path.u8string();
         }
         std::cout<<files.dump()<<'\n';return 0;

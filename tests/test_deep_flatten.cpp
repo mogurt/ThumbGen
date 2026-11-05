@@ -72,7 +72,7 @@ int main() {
         for(float value:{-1.0f,1.01f,std::numeric_limits<float>::infinity(),std::numeric_limits<float>::quiet_NaN()}) {
             invalid=two;invalid[1].alpha[0]=value;rejected("deep_value_invalid",[&]{kernel.flatten(invalid.data(),invalid.size());});
         }
-        for(float value:{-1.0f,std::numeric_limits<float>::infinity(),std::numeric_limits<float>::quiet_NaN()}) {
+        for(float value:{-1.0f,-std::numeric_limits<float>::infinity(),std::numeric_limits<float>::quiet_NaN()}) {
             invalid=two;invalid[1].z=value;rejected("deep_value_invalid",[&]{kernel.flatten(invalid.data(),invalid.size());});
         }
         auto retained=kernel.retained_workspace_bytes();kernel.flatten(nullptr,0);require(retained==kernel.retained_workspace_bytes() && retained<=8*1024*1024,"Deep workspace reuse is not bounded");

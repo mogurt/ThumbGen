@@ -138,7 +138,8 @@
             "deep_sample_limit_exceeded",
             "deep_transparency_unsupported",
             "deep_value_invalid",
-            "deep_workspace_limit_exceeded"
+            "deep_workspace_limit_exceeded",
+            "deep_depth_unsupported"
           ]
         },
         "message": {

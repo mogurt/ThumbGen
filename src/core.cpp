@@ -227,7 +227,8 @@ Json Engine::capabilities() {
         {"output_formats",output_formats},{"presets",{"fast","balanced","quality"}},
         {"defaults",{{"format","jpeg"},{"quality",90},{"size",{1024,1024}},
                      {"background","black"},{"preset","balanced"}}},
-        {"limitations",{"Deep flattening is opt-in for associated linear HALF/FLOAT colour with A or AR/AG/AB and Z; NONE/RLE/ZIPS only",
+        {"limitations",{"Deep flattening is opt-in for associated linear HALF/FLOAT colour with matching alpha and base-layer Z; NONE/RLE/ZIPS only",
+            "Deep positive-infinity points are supported; finite-front infinite-back volumes are refused",
             "batch defaults to one worker; explicit execution budgets enable a bounded process pool",
             "max_decode_mib limits decoded source buffer, not process RSS"}}};
 }
