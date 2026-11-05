@@ -1,0 +1,4 @@
+#pragma once
+inline constexpr const char* deep_reference_json_parts[]={
+@THUMBGEN_DEEP_REFERENCE_CHUNKS@
+};
