@@ -13,10 +13,22 @@ import traceback
 import xml.etree.ElementTree as ET
 
 
+def audit_capabilities(output, require_bounded_zstd=False):
+    records = [json.loads(line) for line in output.splitlines() if line.strip()]
+    if len(records) != 1 or records[0].get('type') != 'capabilities':
+        raise RuntimeError('Expected one release capabilities record')
+    compressions = records[0].get('deep_compressions')
+    if not isinstance(compressions, list) or not all(isinstance(c, str) for c in compressions):
+        raise RuntimeError('Missing release Deep compression capabilities')
+    if require_bounded_zstd and 'zstd' not in compressions:
+        raise RuntimeError('CI requires the bounded ZSTD runtime; selected SDK does not provide it')
+    return compressions
+
+
 def audit_tests(inventory, junit):
     names = [test['name'] for test in inventory['tests']]
     required = {'public_cli', 'public_protocol', 'public_interrupt', 'public_aov', 'public_color_input',
-                'public_cryptomatte', 'public_sampled_id', 'public_deep', 'core_deep_flatten', 'core_deep_reader', 'core_deep_output', 'core_deep_selection', 'core_deep_runtime', 'core_deep_infinite', 'core_deep_zstd', 'core_selected_input'}
+                'public_cryptomatte', 'public_sampled_id', 'public_deep', 'core_deep_flatten', 'core_deep_reader', 'core_deep_output', 'core_deep_selection', 'core_deep_runtime', 'core_deep_infinite', 'core_deep_zstd', 'core_selected_input', 'core_cms'}
     if not required.issubset(names) or len(set(names)) != len(names):
         raise RuntimeError('Incomplete or duplicate CTest registration')
     disabled = [test['name'] for test in inventory['tests']
@@ -134,6 +146,11 @@ def main():
         report['source'] = source_identity(repo)
         report['input_sha256'] = {path.relative_to(repo).as_posix(): digest(path)
                                   for path in (repo / 'CMakePresets.json', repo / 'scripts/linux/sources-lock.json',
+                                               repo / 'dependencies/color-sdk.json',
+                                               repo / 'dependencies/patches/openexr-bounded-zstd-v1.patch',
+                                               repo / 'scripts/build-color-sdk.py',
+                                               repo / 'scripts/dependencies/build_bounded_openexr.py',
+                                               repo / 'scripts/ci/product-deps.py',
                                                repo / 'dependencies/windows-sdk.explicit.txt')}
         if args.parallel < 1:
             raise RuntimeError('--parallel must be positive')
@@ -188,6 +205,9 @@ def execute(args, repo, logs, env, run):
     if args.platform == 'windows':
         runtime_env['PATH'] = os.pathsep.join(str(Path(p) / 'bin') for p in env['THUMBGEN_SDK_PREFIX'].split(';')) + os.pathsep + env['PATH']
     run('release-version', [binary, '--version', '--json'], runtime_env)
+    capabilities = run('release-capabilities', [binary, 'capabilities', '--json'], runtime_env)
+    require_bounded = env.get('THUMBGEN_REQUIRE_BOUNDED_ZSTD') == '1'
+    compressions = audit_capabilities(capabilities, require_bounded)
     run('public-example-runtime', [python, 'scripts/ci/smoke_examples.py', '--platform', args.platform,
                                   '--parallel', args.parallel], runtime_env)
     run('negative-no-python', ['cmake', '--preset', dev, '-B', logs / 'negative-no-python'],
@@ -206,6 +226,7 @@ def execute(args, repo, logs, env, run):
                   packaging_checks_checked=True,
                   public_example_runtime_checked=True,
                   release_targets=targets, release_test_python=False,
+                  release_deep_compressions=compressions, bounded_zstd_required=require_bounded,
                   full_test_guards=['no-python', 'no-protocol', 'no-jsonschema'])
     result['sha256'] = {path.relative_to(repo).as_posix(): digest(path)
                         for path in (binary, junit, logs / 'ctest-inventory.json',

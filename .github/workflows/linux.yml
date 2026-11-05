@@ -44,10 +44,19 @@ jobs:
       # No installed SDK, build tree, private path, or source cache is restored.
       - name: Rebuild SDK from public pinned sources
         run: bash scripts/ci/linux-sdk.sh
+      - name: Build isolated CMS and bounded Deep dependencies
+        run: |
+          python scripts/ci/product-deps.py --sdk .deps/ci-linux-sdk --output .deps/ci-product-deps 2>&1 | tee build/ci/product-deps.log
       - name: Set SDK paths
         run: |
-          echo "THUMBGEN_SDK_PREFIX=$GITHUB_WORKSPACE/.deps/ci-linux-sdk/sdk;$GITHUB_WORKSPACE/.deps/ci-linux-sdk/oiio-deps/dist" >> "$GITHUB_ENV"
-          echo "LD_LIBRARY_PATH=$GITHUB_WORKSPACE/.deps/ci-linux-sdk/sdk/lib:$GITHUB_WORKSPACE/.deps/ci-linux-sdk/oiio-deps/dist/lib" >> "$GITHUB_ENV"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          environment = json.loads(Path('.deps/ci-product-deps/environment.json').read_text())
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as stream:
+              for key, value in environment.items():
+                  stream.write(f'{key}={value}\n')
+          PY
       - name: Build and audit all current tests and product targets
         run: python scripts/ci/run.py --platform linux
       - name: Preserve diagnostics
@@ -80,3 +89,7 @@ jobs:
             .deps/ci-linux-sdk/logs/
             .deps/ci-linux-sdk/oiio-deps/*-build.log
             .deps/ci-linux-sdk/oiio-build/CMakeFiles/CMakeConfigureLog.yaml
+            .deps/ci-product-deps/*.json
+            .deps/ci-product-deps/*.log
+            .deps/ci-product-deps/*/receipt.json
+            .deps/ci-product-deps/*/*.log

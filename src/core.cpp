@@ -766,6 +766,11 @@ Json Engine::convert(const Job& job) {
                     std::vector<float> colour{value,value,value,1.0f};
                     check(iba::fill(background,colour),background,"alpha_failed");
                     check(iba::over(composite,preview,background),composite,"alpha_failed");preview=std::move(composite);
+                    // A fully opaque background has alpha=1 even when a
+                    // negative-lobe filter produced alpha outside [0,1].
+                    // Do not let that residual alpha reweight the subsequent
+                    // colour transform before RGB output discards it.
+                    check(iba::fill(preview,colour,OIIO::ROI(0,w,0,h,0,1,3,4),job.options.threads),preview,"alpha_failed");
                 }
                 if(!data) {
                     if(job.options.display.empty())
