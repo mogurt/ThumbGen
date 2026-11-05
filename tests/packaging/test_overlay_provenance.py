@@ -159,7 +159,8 @@ class ProvenanceBoundaries(unittest.TestCase):
         with patch.object(sys, 'path', [str(ROOT / 'scripts/dependencies'), *sys.path]):
             builder = module('builder', 'scripts/dependencies/build_verified_overlay.py')
         cache = self.root / 'shared-cache'; cache.mkdir()
-        with self.assertRaisesRegex(ValueError, 'overlaps a read-only input'):
+        with patch.object(builder, 'os', SimpleNamespace(name='nt')), \
+                self.assertRaisesRegex(ValueError, 'overlaps a read-only input'):
             builder.build('color', cache / 'must-not-write', lcms_cache=cache)
         self.assertFalse((cache / 'must-not-write').exists())
 
@@ -173,7 +174,9 @@ class ProvenanceBoundaries(unittest.TestCase):
             producer.write_text(json.dumps(proof.producer(policy, 'color')))
             names = ['LittleCMS2', 'JPEG']
             tool = str(Path(sys.executable).resolve())
-            rows = [dict(name='helper', args=[tool, 'C:/absent-producer/scripts/build-color-sdk.py', '--root', str(self.root)],
+            archived_helper = self.root / 'absent-producer/scripts/build-color-sdk.py'
+            self.assertFalse(archived_helper.exists())
+            rows = [dict(name='helper', args=[tool, str(archived_helper), '--root', str(self.root)],
                          executable=tool, executable_sha256=policy.sha(Path(tool)), exit=0)]
             for name in names:
                 rows.append(dict(name=name + '-install', executable=tool, executable_sha256=policy.sha(Path(tool)), exit=0,
