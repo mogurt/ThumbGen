@@ -51,6 +51,8 @@ def check_report(report, closure):
     if (type(report.get('schema_version')) is not int or report.get('schema_version') != VERSION or report.get('kind') != 'independent-windows-product-validation'
             or report.get('passed') is not True):
         raise ValueError('Expected complete independent validation v2 report')
+    deep = any(item['kind'] == 'bounded' for item in closure.get('overlays', []))
+    required_cases = {name: layout for name, layout in CASES.items() if deep or not name.startswith('deep-')}
     artifacts = {}
     for entry in report['artifacts']:
         path = Path(entry['path'])
@@ -103,7 +105,7 @@ def check_report(report, closure):
     if observed != set(expected):
         raise ValueError('Missing loaded runtime coverage: ' + str(set(expected) - observed))
     cases = report['cases']
-    if len(cases) != len(CASES) or {case['name'] for case in cases} != set(CASES):
+    if len(cases) != len(required_cases) or {case['name'] for case in cases} != set(required_cases):
         raise ValueError('Required validation case coverage differs')
     if load(bound(report['command_index'])) != cases:
         raise ValueError('Validation command index differs')
@@ -112,10 +114,12 @@ def check_report(report, closure):
             raise ValueError('Validation command failed or used another EXE')
         stdout = bound(case['stdout']); bound(case['stderr'])
         rows = [json.loads(line) for line in stdout.read_bytes().splitlines() if line.strip()]
-        layout = CASES[case['name']]
+        layout = required_cases[case['name']]
         if layout is None:
             if len(rows) != 1 or rows[0].get('type') != 'capabilities':
                 raise ValueError('Missing capabilities output')
+            if ('zstd' in rows[0].get('deep_compressions', [])) != deep:
+                raise ValueError('Validation capability differs from selected bounded Core')
             continue
         target = bound(case['output']).resolve()
         if ('--output' not in case['command'] or
@@ -133,7 +137,8 @@ def check_report(report, closure):
                 raise ValueError('Validation output dimensions differ')
         if case['pixels'] != layout[0] * layout[1] or not 0 <= case['max_lsb'] <= layout[2]:
             raise ValueError('Validation pixel coverage/result differs')
-    return dict(schema_version=VERSION, cases=len(cases), runtime_files=len(runtime), pixels=2706)
+    return dict(schema_version=VERSION, cases=len(cases), runtime_files=len(runtime),
+                pixels=sum(layout[0] * layout[1] for layout in required_cases.values() if layout))
 
 
 def check_frozen(evidence, closure, require_independent=True):

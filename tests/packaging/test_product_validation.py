@@ -19,7 +19,7 @@ class ExecutionEvidence(unittest.TestCase):
         for name in ('thumbgen.exe', 'lcms2.dll'):
             (binary / name).write_bytes(name.encode())
         self.exe = binary / 'thumbgen.exe'
-        self.closure = dict(exe_sha256=validation.sha(self.exe), files=[dict(name=p.name, sha256=validation.sha(p)) for p in binary.iterdir()])
+        self.closure = dict(exe_sha256=validation.sha(self.exe), overlays=[{'kind': 'bounded'}], files=[dict(name=p.name, sha256=validation.sha(p)) for p in binary.iterdir()])
         recipe = self.root / 'trusted-validator.py'; recipe.write_bytes(b'trusted validator fixture\n')
         self.identity = {'fixture': dict(path=str(recipe), sha256=validation.sha(recipe), lf_sha256=validation.sha(recipe))}
         self.report = dict(schema_version=2, kind='independent-windows-product-validation', passed=True,
@@ -30,7 +30,7 @@ class ExecutionEvidence(unittest.TestCase):
             stdout, stderr = self.root / (name + '.stdout'), self.root / (name + '.stderr')
             stderr.write_bytes(b'')
             case = dict(name=name, exit=0, command=[str(self.exe), 'capabilities' if layout is None else 'convert'])
-            row = dict(type='capabilities')
+            row = dict(type='capabilities', deep_compressions=['zstd'])
             if layout:
                 target = self.root / (name + '.output.png'); Image.new('RGB', layout[:2]).save(target)
                 case.update(output=self.entry(target), pixels=layout[0] * layout[1], max_lsb=0)
@@ -56,6 +56,14 @@ class ExecutionEvidence(unittest.TestCase):
 
     def test_complete_evidence(self):
         self.assertEqual(self.check()['cases'], 9)
+
+    def test_optional_unpatched_core_requires_all_seven_color_cases(self):
+        self.closure['overlays'] = []
+        self.report['cases'] = [c for c in self.report['cases'] if not c['name'].startswith('deep-')]
+        case = self.report['cases'][0]; path = Path(case['stdout']['path'])
+        path.write_text(json.dumps(dict(type='capabilities', deep_compressions=[])))
+        case['stdout'] = self.entry(path); self.seal()
+        self.assertEqual(self.check()['pixels'], 384)
 
     def test_four_field_boolean_only_report_rejected(self):
         with self.assertRaisesRegex(ValueError, 'complete independent'):
