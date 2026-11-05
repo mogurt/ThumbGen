@@ -13,7 +13,7 @@ import xml.etree.ElementTree as ET
 def audit_tests(inventory, junit):
     names = [test['name'] for test in inventory['tests']]
     required = {'public_cli', 'public_protocol', 'public_interrupt', 'public_aov',
-                'public_cryptomatte', 'public_sampled_id', 'public_deep', 'core_deep_flatten', 'core_deep_reader', 'core_deep_output', 'core_deep_selection'}
+                'public_cryptomatte', 'public_sampled_id', 'public_deep', 'core_deep_flatten', 'core_deep_reader', 'core_deep_output', 'core_deep_selection', 'core_deep_runtime'}
     if not required.issubset(names) or len(set(names)) != len(names):
         raise RuntimeError('Incomplete or duplicate CTest registration')
     cases = ET.fromstring(junit).findall('.//testcase')

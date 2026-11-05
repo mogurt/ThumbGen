@@ -238,6 +238,14 @@ if(BUILD_TESTING)
         "PATH=path_list_prepend:$<TARGET_FILE_DIR:OpenImageIO::OpenImageIO>;LD_LIBRARY_PATH=path_list_prepend:$<TARGET_FILE_DIR:OpenImageIO::OpenImageIO>")
     add_executable(thumbgen_deep_cli_fixtures tests/deep_cli_fixtures.cpp)
     target_link_libraries(thumbgen_deep_cli_fixtures PRIVATE OpenImageIO::OpenImageIO nlohmann_json::nlohmann_json)
+    add_executable(thumbgen_deep_runtime_tests tests/test_deep_runtime.cpp)
+    target_link_libraries(thumbgen_deep_runtime_tests PRIVATE thumbgen_runtime OpenImageIO::OpenImageIO)
+    add_test(NAME core_deep_runtime COMMAND thumbgen_deep_runtime_tests)
+    set_tests_properties(core_deep_runtime PROPERTIES TIMEOUT 30 LABELS "scheduler;deep" ENVIRONMENT_MODIFICATION
+        "PATH=path_list_prepend:$<TARGET_FILE_DIR:OpenImageIO::OpenImageIO>;LD_LIBRARY_PATH=path_list_prepend:$<TARGET_FILE_DIR:OpenImageIO::OpenImageIO>")
+    if(MSVC)
+        target_compile_options(thumbgen_deep_runtime_tests PRIVATE /W4 /utf-8 /permissive-)
+    endif()
     add_executable(thumbgen_sampled_id_tests tests/test_sampled_id.cpp)
     target_include_directories(thumbgen_sampled_id_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
     target_link_libraries(thumbgen_sampled_id_tests PRIVATE thumbgen_core OpenImageIO::OpenImageIO Imath::Imath)
@@ -350,6 +358,7 @@ if(BUILD_TESTING)
                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_protocol.py --exe $<TARGET_FILE:thumbgen>
                 --matrix-exe $<TARGET_FILE:thumbgen_image_matrix> --schema-dir ${CMAKE_CURRENT_SOURCE_DIR}/schemas
                 --control-exe $<TARGET_FILE:thumbgen_control_tests> --isolated-exe $<TARGET_FILE:thumbgen_isolated_tests>
+                --deep-runtime-exe $<TARGET_FILE:thumbgen_deep_runtime_tests>
                 --runtime-dir $<TARGET_FILE_DIR:OpenImageIO::OpenImageIO>)
             set_tests_properties(public_protocol PROPERTIES TIMEOUT 120 LABELS "protocol")
             add_test(NAME public_interrupt COMMAND ${Python3_EXECUTABLE}
