@@ -13,6 +13,14 @@ static int emit(const nlohmann::json& result) {
 }
 int main(int argc,char** argv) {
     if(argc<2)return 2;
+    if(argc==3 && std::string(argv[1])=="--write-webp") {
+        auto out=OIIO::ImageOutput::create(argv[2]);if(!out)return 1;
+        OIIO::ImageSpec spec(8,8,4,OIIO::TypeDesc::UINT8);spec.attribute("compression","lossless");
+        spec.attribute("oiio:UnassociatedAlpha",1);
+        std::vector<unsigned char> values;for(int i=0;i<64;++i)for(auto v:{64,128,192,128})values.push_back(static_cast<unsigned char>(v));
+        if(!out->open(argv[2],spec) || !out->write_image(OIIO::TypeDesc::UINT8,values.data()) || !out->close())return 1;
+        return emit({{"written",true}});
+    }
     if(argc==3 && std::string(argv[1])=="--presence") {
         return emit({{"icc",thumbgen::detail::container_has_icc(argv[2])}});
     }

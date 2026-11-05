@@ -1,0 +1,24 @@
+{
+  "LittleCMS2": {
+    "repository": "https://github.com/mm2/Little-CMS.git",
+    "commit": "7717fce0d85447ef3b2df0cca2e99207c15eeecd",
+    "version": "2.20",
+    "license": "MIT",
+    "license_file": "LICENSE",
+    "notice": "notices/LittleCMS2-2.20.txt",
+    "notice_sha256": "bc1ba06a8fdf54466daa2b9a927fdca7c4d626a598045b2da62494a556491af6",
+    "options": ["LCMS2_BUILD_SHARED=ON", "LCMS2_BUILD_STATIC=OFF", "LCMS2_BUILD_TOOLS=OFF", "LCMS2_BUILD_TESTS=OFF", "LCMS2_WITH_FASTFLOAT=OFF", "LCMS2_WITH_THREADED_PLUGIN=OFF"]
+  },
+  "JPEG": {
+    "repository": "https://github.com/libjpeg-turbo/libjpeg-turbo.git",
+    "commit": "4e151a4ad91001b3aa8c2ece2205c15f487ce320",
+    "version": "3.1.2",
+    "license": "BSD-3-Clause / IJG / Zlib",
+    "license_file": "LICENSE.md",
+    "notices": [
+      {"path": "notices/libjpeg-turbo-3.1.2-LICENSE.md", "sha256": "afe0ddf5998ff197639390ee1cb0bd6b9c1a996f63c3742f0c9c3d1117155d07"},
+      {"path": "notices/libjpeg-turbo-3.1.2-README.ijg", "sha256": "db16a04128171879c60708d171b88d97345a2dd20f9bfc173680a4497c73f704"}
+    ],
+    "options": ["ENABLE_SHARED=ON", "ENABLE_STATIC=OFF", "WITH_TURBOJPEG=OFF", "WITH_SIMD=OFF", "WITH_JPEG8=ON"]
+  }
+}

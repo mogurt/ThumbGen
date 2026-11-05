@@ -17,6 +17,7 @@ struct ImageFootprint {
     std::uint64_t source_pixel_bytes=0; // 0 retains the old span-based estimate for internal callers.
     std::uint64_t source_buffer_bytes=0; // Sample grid + one read block; 0 uses the full-source estimate.
     std::uint64_t deep_buffer_bytes=0; // Explicit combined Deep reader ceiling, charged before decoding.
+    std::uint64_t cms_buffer_bytes=0; // ICC bytes + request CMS allocator + block scratch.
 };
 struct MemoryEstimate {
     // incremental is charged per active task; worker is already reserved by the pool.
