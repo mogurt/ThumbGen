@@ -43,7 +43,7 @@ using Clock = std::chrono::steady_clock;
 using Failure=detail::FileFailure;
 // OIIO's IOFile does not propagate fflush/fclose errors. Keep ownership of
 // the stream, and latch short writes even when a codec ignores their result.
-static void write_preview(const OIIO::ImageBuf& source,const fs::path& path,int threads) {
+static void write_preview(const OIIO::ImageBuf& source,const fs::path& path,int threads,bool canonical_rgba) {
     const auto& original=source.spec();
     if(original.format!=OIIO::TypeDesc::FLOAT || original.depth!=1 || original.deep ||
        (original.nchannels!=3 && original.nchannels!=4) || !source.localpixels() || !source.contiguous())
@@ -54,9 +54,12 @@ static void write_preview(const OIIO::ImageBuf& source,const fs::path& path,int 
     if(!image.localpixels() || !image.contiguous())throw Failure("encode_failed","cannot allocate UINT8 preview");
     const auto* input=static_cast<const float*>(source.localpixels());
     auto* output=static_cast<std::uint8_t*>(image.localpixels());
-    const auto count=original.image_bytes()/sizeof(float);
+    const auto stride=canonical_rgba?4:1;
+    const auto count=original.image_bytes()/sizeof(float)/stride;
     OIIO::parallel_for_chunked(0,static_cast<int64_t>(count),0,[&](int64_t begin,int64_t end) {
-        detail::quantize_u8(input+begin,output+begin,static_cast<size_t>(end-begin));
+        if(canonical_rgba)
+            detail::quantize_rgba8(input+begin*4,output+begin*4,static_cast<size_t>(end-begin));
+        else detail::quantize_u8(input+begin,output+begin,static_cast<size_t>(end-begin));
     },OIIO::paropt(threads,OIIO::paropt::SplitDir::Y,65536));
     struct CheckedFile final : OIIO::Filesystem::IOFile {
         int failure=0;
@@ -741,7 +744,8 @@ Json Engine::convert(const Job& job) {
                 } else {
                     temp=std::make_unique<detail::TemporaryOutput>(dest,out.format);temporary=temp->path();
                 }
-                write_preview(preview,temporary,job.options.threads);
+                write_preview(preview,temporary,job.options.threads,
+                    !data && job.options.background=="transparent" && preview.nchannels()==4);
                 if(impl_->observer)impl_->observer("encoded",job);
                 verify_source();
                 bool committed;
