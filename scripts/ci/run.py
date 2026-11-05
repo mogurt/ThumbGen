@@ -93,6 +93,7 @@ def main():
     run('test-python', [python, '-c', 'import jsonschema; print(jsonschema.__file__)'])
     run('public-examples', [python, 'scripts/public/validate_examples.py'])
     run('public-example-checks', [python, '-m', 'unittest', 'discover', '-s', 'tests/public', '-v'])
+    run('packaging-checks', [python, '-m', 'unittest', 'discover', '-s', 'tests/packaging', '-v'])
     run('configure-dev', ['cmake', '--preset', dev])
     run('build-dev', ['cmake', '--build', '--preset', dev])
     inventory = run('ctest-inventory', ['ctest', '--preset', dev, '--show-only=json-v1'], quiet=True)
@@ -127,6 +128,7 @@ def main():
         failure='Protocol tests require tests/requirements.txt')
     result = dict(platform=args.platform, registered_tests=count, executed_tests=count,
                   public_examples_checked=True,
+                  packaging_checks_checked=True,
                   release_targets=targets, release_test_python=False,
                   full_test_guards=['no-python', 'no-protocol', 'no-jsonschema'])
     (logs / 'result.json').write_text(json.dumps(result, indent=2) + '\n', encoding='utf-8')

@@ -98,6 +98,33 @@ def imports(path):
     return result
 
 
+def source_lock_identity(source, raw):
+    """Accept exact bytes or deterministic LF/CRLF representations only.
+
+    Keep the SDK's original byte digest authoritative. JSON equality alone is
+    insufficient: a differently formatted or modified lock must not pass.
+    """
+    expected = source.get('source_lock_sha256')
+    if (source.get('kind') != 'thumbgen-windows-source-sdk' or
+            not isinstance(expected, str) or not re.fullmatch('[0-9a-f]{64}', expected)):
+        raise ValueError('Source SDK profile/lock differs')
+    parsed = json.loads(raw.decode('utf-8-sig'))
+    canonical = lambda value: json.dumps(value, sort_keys=True, separators=(',', ':'), allow_nan=False)
+    if canonical(source.get('source_lock')) != canonical(parsed):
+        raise ValueError('Source SDK profile/lock differs')
+    current = hashlib.sha256(raw).hexdigest()
+    lf = raw.replace(b'\r\n', b'\n')
+    lf_digest = hashlib.sha256(lf).hexdigest()
+    if current == expected:
+        match = 'exact'
+    elif b'\r' not in lf and expected in (lf_digest, hashlib.sha256(lf.replace(b'\n', b'\r\n')).hexdigest()):
+        match = 'lf-crlf-equivalent'
+    else:
+        raise ValueError('Source SDK profile/lock differs')
+    return dict(match=match, current_raw_sha256=current, sdk_recorded_sha256=expected,
+                lf_sha256=lf_digest)
+
+
 def audit(exe, sdk, system):
     repo = Path(__file__).resolve().parents[2]
     source_receipt = sdk / 'sdk/thumbgen-sdk.json'
@@ -105,9 +132,7 @@ def audit(exe, sdk, system):
     if source_receipt.is_file():
         source = json.loads(source_receipt.read_text(encoding='utf-8'))
         lock = repo / 'dependencies/windows-source-sdk.json'
-        if (source.get('kind') != 'thumbgen-windows-source-sdk' or source['source_lock_sha256'] != digest(lock)
-                or source['source_lock'] != json.loads(lock.read_text(encoding='utf-8-sig'))):
-            raise ValueError('Source SDK profile/lock differs')
+        lock_identity = source_lock_identity(source, lock.read_bytes())
         versions = {item['package']: item.get('version') for item in source['source_lock']['dependencies']}
         versions.update(OpenImageIO=source['source_lock']['oiio_tag'].lstrip('v'),
                         nlohmann_json=source['source_lock']['nlohmann_json']['version'])
@@ -144,6 +169,8 @@ def audit(exe, sdk, system):
                   limitations=['Declared normal/delay imports only; runtime LoadLibrary/plugins and export forwarders require separate execution validation.',
                                'System32 availability is checked on the current development host, not the minimum target OS.',
                                'Component metadata is an index, not complete license/notice or corresponding-source compliance.'])
+    if profile == 'source':
+        report['source_lock_identity'] = lock_identity
     return report
 
 
