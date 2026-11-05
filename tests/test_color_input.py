@@ -13,6 +13,7 @@ import struct
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 import zlib
 from jsonschema import Draft202012Validator
 
@@ -143,9 +144,14 @@ class ColourInput(unittest.TestCase):
     def fixture(self,name,data):
         path=self.root/name;path.write_bytes(data);return path
     def run_json(self,exe,command,exit=0):
-        run=subprocess.run([str(exe),*map(str,command)],env=env,capture_output=True,text=True,encoding='utf-8',timeout=45)
-        self.assertEqual(run.returncode,exit,run.stdout+run.stderr)
-        return [json.loads(line) for line in run.stdout.splitlines() if line.strip()]
+        command=[str(exe),*map(str,command)]
+        run=subprocess.run(command,env=env,capture_output=True,text=True,encoding='utf-8',timeout=45)
+        diagnostic=f'command={command!r}\nreturncode={run.returncode}\nstdout={run.stdout!r}\nstderr={run.stderr!r}'
+        self.assertEqual(run.returncode,exit,diagnostic)
+        try:rows=[json.loads(line) for line in run.stdout.splitlines() if line.strip()]
+        except json.JSONDecodeError as error:self.fail(f'invalid JSON: {error}\n{diagnostic}')
+        self.assertTrue(rows,f'no JSON records\n{diagnostic}')
+        return rows
     def convert(self,path,space=None,exit=0):
         before=hashlib.sha256(path.read_bytes()).digest()
         command=['convert',path,'--output',self.target,'--format','png','--size','8x8',
@@ -242,5 +248,21 @@ class ColourInput(unittest.TestCase):
             with self.subTest(data=data[:12]):
                 path=self.fixture('container.bin',data)
                 self.assertEqual(self.run_json(args.probe_exe,['--presence',path])[0]['icc'],expected)
+    def test_presence_probe_repeated(self):
+        # Every launch must succeed: these are independent assertions, not
+        # retries that discard a missing response. Exercise exit-time flushing.
+        path=self.fixture('empty.bin',b'')
+        for index in range(50):
+            with self.subTest(index=index):
+                self.assertEqual(self.run_json(args.probe_exe,['--presence',path]),[{'icc':False}])
+    def test_subprocess_diagnostics(self):
+        for code,stdout,reason in [(0,'','no JSON records'),(0,'not-json','invalid JSON'),(7,'','7 != 0')]:
+            with self.subTest(code=code,stdout=stdout):
+                response=subprocess.CompletedProcess([],code,stdout,'diagnostic stderr')
+                with mock.patch.object(subprocess,'run',return_value=response):
+                    with self.assertRaises(AssertionError) as caught:self.run_json('fake-probe',['--presence','empty.bin'])
+                message=str(caught.exception)
+                for text in (reason,'fake-probe','--presence','empty.bin',f'returncode={code}',f'stdout={stdout!r}',"stderr='diagnostic stderr'"):
+                    self.assertIn(text,message)
 
 if __name__=='__main__':unittest.main(argv=[__file__,*remaining])
