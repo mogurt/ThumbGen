@@ -246,9 +246,10 @@ def native_build(policy, source, build, prefix, options, trace, dependency_files
         raise ValueError('Missing native Release tracking logs')
     for path in tlogs:
         bind(path)
-        if path.name.lower() not in ('cl.read.1.tlog', 'cl.write.1.tlog', 'link.read.1.tlog', 'link.write.1.tlog',
+        tracking_name = re.sub(r'^cl\.\d+\.', 'cl.', path.name.lower())
+        if tracking_name not in ('cl.read.1.tlog', 'cl.write.1.tlog', 'link.read.1.tlog', 'link.write.1.tlog',
                                      'lib.read.1.tlog', 'lib.write.1.tlog', 'rc.read.1.tlog', 'rc.write.1.tlog'):
-            if path.name.lower() not in ('lib-link.read.1.tlog', 'lib-link.write.1.tlog'):
+            if tracking_name not in ('lib-link.read.1.tlog', 'lib-link.write.1.tlog'):
                 continue
         groups = tlog_records(path)
         reading = '.read.' in path.name.lower()
@@ -262,9 +263,9 @@ def native_build(policy, source, build, prefix, options, trace, dependency_files
                         (dependency_files or {}).get(str(resolved_file).casefold()) != native_sha(file)):
                     raise ValueError('Native dependency outside source/build/toolchain: ' + item)
                 (inputs if reading else products)[str(file)] = native_sha(file)
-                if path.name.lower() == 'cl.read.1.tlog' and file.suffix.lower() in ('.c', '.cpp', '.cxx'):
+                if tracking_name == 'cl.read.1.tlog' and file.suffix.lower() in ('.c', '.cpp', '.cxx'):
                     compile_sources.add(str(file))
-                if path.name.lower() == 'cl.write.1.tlog' and item in records and file.suffix.lower() == '.obj':
+                if tracking_name == 'cl.write.1.tlog' and item in records and file.suffix.lower() == '.obj':
                     compiled_objects.add(file.resolve())
                 if path.name.lower() in ('link.read.1.tlog', 'lib-link.read.1.tlog') and file.suffix.lower() == '.obj':
                     linked_objects.add(file.resolve())
