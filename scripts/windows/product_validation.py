@@ -9,6 +9,8 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import shutil
+import sys
 
 REPO = Path(__file__).resolve().parents[2]
 VERSION = 2
@@ -76,6 +78,8 @@ def check_report(report, closure):
         if (recorded['lf_sha256'] != current['lf_sha256'] or
                 hashlib.sha256(path.read_bytes().replace(b'\r\n', b'\n')).hexdigest() != current['lf_sha256']):
             raise ValueError('Validation recipe content differs: ' + relative)
+    reference = Path(report['fixtures']['color_evidence']) / 'report.json'
+    bound(dict(path=str(reference), sha256=sha(reference)))
     expected = {entry['name'].casefold(): entry['sha256'] for entry in closure['files']}
     runtime = report['tested_runtime']
     if set(runtime) != set(expected) or report['exe_sha256'] != closure['exe_sha256']:
@@ -154,3 +158,31 @@ def check_frozen(evidence, closure, require_independent=True):
             raise ValueError('Incomplete full CTest evidence')
         return None
     raise ValueError('Missing/unknown frozen validation mode; re-freeze with the trusted tools')
+
+
+def execute_for_freeze(submitted, closure, destination):
+    """Run trusted code on a new exact closure copy; never import a success claim."""
+    check_report(submitted, closure)
+    validator_identity()
+    destination = Path(destination).resolve()
+    destination.mkdir(parents=True, exist_ok=False)
+    binary = destination / 'bin'; binary.mkdir()
+    for entry in closure['files']:
+        source = Path(entry['source_path'])
+        if sha(source) != entry['sha256']:
+            raise ValueError('Runtime changed before independent execution')
+        shutil.copyfile(source, binary / entry['name'])
+    # The known AMD64 CLI name is also part of the audited report, not a caller's
+    # alternate executable or arbitrary command/validator path.
+    exe = binary / Path(submitted['tested_exe']).name
+    command = [sys.executable, str(REPO / FILES[0]), '--exe', str(exe),
+        '--color-evidence', submitted['fixtures']['color_evidence'],
+        '--deep-evidence', submitted['fixtures']['deep_evidence'], '--output', str(destination / 'results')]
+    with (destination / 'validator.stdout').open('xb') as stdout, (destination / 'validator.stderr').open('xb') as stderr:
+        result = subprocess.run(command, cwd=destination, stdout=stdout, stderr=stderr, timeout=180)
+    (destination / 'invocation.json').write_text(json.dumps(dict(command=command, exit=result.returncode), indent=2), encoding='utf-8')
+    if result.returncode:
+        raise ValueError('Trusted independent validator execution failed; original logs retained in ' + str(destination))
+    report = destination / 'results/report.json'
+    check_report(load(report), closure)
+    return report
