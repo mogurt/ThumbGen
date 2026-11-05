@@ -11,10 +11,14 @@ import os
 from pathlib import Path
 import subprocess
 import time
+import sys
 
 from PIL import Image
 import psutil
 from jsonschema import Draft202012Validator
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'scripts/windows'))
+from product_validation import validator_identity, VERSION
 
 
 def sha(path):
@@ -34,7 +38,13 @@ def validate(exe, color, deep, output):
     repo = Path(__file__).resolve().parents[2]
     schema = repo / 'schemas/protocol-v1.schema.json'
     validator = Draft202012Validator(json.loads(schema.read_text(encoding='utf-8')))
-    modules, cases, inputs = {}, [], {schema, Path(__file__).resolve()}
+    identity = validator_identity()
+    modules, cases, inputs = {}, [], {Path(entry['path']) for entry in identity.values()}
+    runtime = {p.name.casefold(): dict(path=str(p.resolve()), sha256=sha(p)) for p in exe.parent.iterdir()
+               if p.suffix.lower() in ('.exe', '.dll')}
+
+    def record(path):
+        return dict(path=str(path.resolve()), sha256=sha(path))
     color_report = color / 'report.json'
     inputs.add(color_report)
     reference = json.loads(color_report.read_text(encoding='utf-8'))
@@ -75,7 +85,8 @@ def validate(exe, color, deep, output):
         rows = [json.loads(line) for line in (output / (name + '.stdout')).read_bytes().splitlines() if line.strip()]
         for row in rows:
             validator.validate(row)
-        cases.append(dict(name=name, command=command, exit=code))
+        cases.append(dict(name=name, command=command, exit=code,
+                          stdout=record(output / (name + '.stdout')), stderr=record(output / (name + '.stderr'))))
         (output / 'commands.json').write_text(json.dumps(cases, indent=2), encoding='utf-8')
         if code:
             raise RuntimeError('Packaged command failed: ' + name + '; raw output retained')
@@ -103,7 +114,7 @@ def validate(exe, color, deep, output):
             delta = max(abs(a - b) for pixel in image.convert('RGB').getdata() for a, b in zip(pixel, expected))
         if delta > 2:
             raise ValueError('ICC calibration pixels differ: ' + item['name'])
-        cases[-1].update(max_lsb=delta, pixels=64, expected=expected)
+        cases[-1].update(max_lsb=delta, pixels=64, expected=expected, output=record(target))
     source = output / 'ordinary-rgb.png'
     Image.new('RGB', (8, 8), (64, 128, 192)).save(source)
     target = output / 'ordinary-rgb-output.png'
@@ -113,7 +124,7 @@ def validate(exe, color, deep, output):
         delta = max(abs(a - b) for pixel in image.convert('RGB').getdata() for a, b in zip(pixel, (64, 128, 192)))
     if delta > 1:
         raise ValueError('Ordinary RGB pixels differ')
-    cases[-1].update(max_lsb=delta, pixels=64)
+    cases[-1].update(max_lsb=delta, pixels=64, output=record(target))
     for layout in ('scan', 'tile'):
         source, reviewed = deep / (layout + '.exr'), deep / (layout + '.png')
         inputs.update((source, reviewed))
@@ -133,8 +144,8 @@ def validate(exe, color, deep, output):
                     delta = max(delta, *(abs(a - b) for a, b in zip(image.getpixel((x, y)), expected)))
             if delta > 1:
                 raise ValueError('Independent Deep formula differs')
-        cases[-1].update(max_lsb=delta, pixels=1161)
-    required = {'jpeg8.dll', 'lcms2.dll', 'thumbgen.exe'}
+        cases[-1].update(max_lsb=delta, pixels=1161, output=record(target))
+    required = set(runtime)
     observed = {Path(path).name.lower() for path in modules if Path(path).is_relative_to(exe.parent)}
     if not required <= observed:
         raise ValueError('Missing loaded-module observations: ' + str(required - observed))
@@ -142,7 +153,10 @@ def validate(exe, color, deep, output):
     (output / 'modules.json').write_text(json.dumps(modules, indent=2), encoding='utf-8')
     inputs.update(p for p in output.iterdir() if p.is_file())
     inputs.update(p for p in exe.parent.iterdir() if p.suffix.lower() in ('.dll', '.exe'))
-    report = dict(kind='independent-windows-product-validation', passed=True, exe_sha256=sha(exe), cases=cases,
+    report = dict(schema_version=VERSION, kind='independent-windows-product-validation', passed=True,
+        exe_sha256=sha(exe), tested_exe=str(exe), tested_runtime=runtime, validator=identity,
+        loaded_modules=modules, module_index=record(output / 'modules.json'),
+        command_index=record(output / 'commands.json'), cases=cases,
         scope='Synthetic calibration and bounded Deep formula; no production ICC or minimum-machine acceptance',
         artifacts=[dict(path=str(p), sha256=sha(p)) for p in sorted(inputs)],
         environment=env, module_observations=len(modules))

@@ -10,6 +10,7 @@ import tempfile
 import zipfile
 
 from runtime_closure import audit, digest, overlays
+from product_validation import check_frozen
 
 
 def encode(value):
@@ -32,6 +33,7 @@ def pack(exe, sdk, evidence_file, output, runtime_notices, color_overlay=None, b
     if (closure['files'] != evidence['closure']['files'] or closure['sdk_profile'] != 'source'
             or closure.get('overlays', []) != evidence['closure'].get('overlays', [])):
         raise ValueError('Runtime closure differs from frozen validation evidence')
+    check_frozen(evidence, closure, require_independent=bool(color_overlay or bounded_overlay))
     payload, components = {}, []
 
     def add(relative, value):
@@ -46,6 +48,11 @@ def pack(exe, sdk, evidence_file, output, runtime_notices, color_overlay=None, b
         if digest(original) != item['sha256']:
             raise ValueError('Runtime file changed: ' + item['name'])
         add('bin/' + item['name'], original)
+    if evidence['validation_mode'] == 'independent-v2':
+        original = Path(evidence['product_validation']['path'])
+        if digest(original) != evidence['product_validation']['sha256']:
+            raise ValueError('Independent validation changed during packaging')
+        add('provenance/product-validation.json', original.read_bytes())
     for component in sdk_receipt['sources']:
         source = sdk / component['destination']
         actual = subprocess.check_output(['git', '-C', str(source), 'rev-parse', 'HEAD'], text=True).strip()
@@ -143,6 +150,7 @@ def pack(exe, sdk, evidence_file, output, runtime_notices, color_overlay=None, b
         tests=evidence['ctest'], sdk_receipt_sha256=evidence['sdk_receipt_sha256'],
         overlays=closure.get('overlays', []), build_provenance=evidence.get('build_provenance'))))
     recipes = {name: digest(Path(__file__).parent / name) for name in ('package_runtime.py', 'runtime_closure.py', 'freeze_product.py')}
+    recipes['product_validation.py'] = digest(Path(__file__).parent / 'product_validation.py')
     recipes['dependencies/windows_overlays.py'] = digest(Path(overlays.__file__))
     for name in ('overlay_provenance.py', 'build_verified_overlay.py'):
         recipes['dependencies/' + name] = digest(Path(overlays.__file__).parent / name)
