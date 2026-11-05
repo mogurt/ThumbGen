@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "defaults": {"visualization": "cryptomatte", "channels": "Object", "existing": "error"},
+  "jobs": [
+    {"id": "synthetic-coverage", "input": "../../.deps/public-crypto/valid.exr", "outputs": [{"path": "../../.deps/public-output/coverage.png"}]}
+  ]
+}

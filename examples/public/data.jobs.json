@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "defaults": {"existing": "error", "invalid_values": "magenta"},
+  "jobs": [
+    {"id": "depth", "input": "../../.deps/public-aov/depth.exr", "options": {"visualization": "depth", "channels": "Z", "data_range": [0, 10]}, "outputs": [{"path": "../../.deps/public-output/depth.png"}]},
+    {"id": "normal", "input": "../../.deps/public-aov/normal.exr", "options": {"visualization": "normal", "channels": "N"}, "outputs": [{"path": "../../.deps/public-output/normal.png"}]},
+    {"id": "vector", "input": "../../.deps/public-aov/vector.exr", "options": {"visualization": "vector", "channels": "motion", "data_range": [-2, 2]}, "outputs": [{"path": "../../.deps/public-output/vector.png"}]},
+    {"id": "integer-id", "input": "../../.deps/public-aov/ids.exr", "options": {"visualization": "id", "channels": "object_id"}, "outputs": [{"path": "../../.deps/public-output/ids.png", "size": 4}]},
+    {"id": "rgb-label", "input": "../../.deps/public-aov/labels.exr", "options": {"visualization": "id_rgb", "channels": "matID", "data_range": [0, 1]}, "outputs": [{"path": "../../.deps/public-output/labels.png"}]}
+  ]
+}

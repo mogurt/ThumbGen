@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "defaults": {"channels": "RGB", "ocio_config": "ocio://default", "existing": "error"},
+  "jobs": [
+    {"id": "demo-frame-1", "sequence_id": "synthetic-view", "input": "../../.deps/public-inputs/synthetic.exr", "outputs": [{"path": "../../.deps/public-output/sequence-1.png"}]},
+    {"id": "demo-frame-2", "sequence_id": "synthetic-view", "input": "../../.deps/public-inputs/synthetic.exr", "outputs": [{"path": "../../.deps/public-output/sequence-2.png"}]}
+  ]
+}
