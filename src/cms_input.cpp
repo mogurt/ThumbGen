@@ -7,28 +7,44 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <mutex>
+#include <thread>
+#include <new>
 
 static_assert(LCMS_VERSION==2200,"LittleCMS 2.20 headers required");
 namespace thumbgen::detail {
 namespace {
-struct Ledger {CmsStats& stats;std::size_t limit;};
+struct Ledger {
+    CmsStats& stats;std::size_t limit;
+    unsigned char* bootstrap=nullptr;std::size_t bootstrap_used=0;
+    bool initializing=true;
+    std::recursive_mutex mutex;
+    std::thread::id thread=std::this_thread::get_id();
+};
 thread_local Ledger* active=nullptr;
 struct Scope {Ledger* old;explicit Scope(Ledger& l):old(active){active=&l;}~Scope(){active=old;}};
-struct alignas(std::max_align_t) Header {Ledger* owner;std::size_t bytes;};
+struct alignas(std::max_align_t) Header {Ledger* owner;std::size_t bytes;bool bootstrap;};
 void* allocate(cmsContext,cmsUInt32Number bytes) {
     // cmsCreateContext/cmsDeleteContext pass unregistered stack fakeContext.
     // Never dereference it or look it up through cmsGetContextUserData.
     if(!active)return nullptr;
     const auto size=sizeof(Header)+std::size_t(bytes);
     auto& s=active->stats;
+    if(active->initializing) {
+        const auto offset=(active->bootstrap_used+alignof(Header)-1)/alignof(Header)*alignof(Header);
+        if(size>cms_bootstrap_bytes-offset){++s.denied;return nullptr;}
+        auto* p=new(active->bootstrap+offset) Header{active,size,true};
+        active->bootstrap_used=offset+size;++s.allocations;return p+1;
+    }
     if(size>active->limit || s.live>active->limit-size){++s.denied;return nullptr;}
     auto* p=static_cast<Header*>(std::malloc(size));if(!p){++s.denied;return nullptr;}
-    p->owner=active;p->bytes=size;s.live+=size;s.peak=std::max(s.peak,s.live);++s.allocations;
+    new(p) Header{active,size,false};s.live+=size;s.peak=std::max(s.peak,s.live);++s.allocations;
     return p+1;
 }
 void release(cmsContext,void* ptr) {
     if(!ptr)return;
-    auto* h=static_cast<Header*>(ptr)-1;h->owner->stats.live-=h->bytes;std::free(h);
+    auto* h=static_cast<Header*>(ptr)-1;
+    if(!h->bootstrap){h->owner->stats.live-=h->bytes;std::free(h);}
 }
 void* reallocate(cmsContext context,void* ptr,cmsUInt32Number bytes) {
     if(!ptr)return allocate(context,bytes);
@@ -41,6 +57,13 @@ void* reallocate(cmsContext context,void* ptr,cmsUInt32Number bytes) {
     release(context,ptr);return out;
 }
 void log_error(cmsContext,cmsUInt32Number,const char*) {} // Never allocate in callbacks.
+// One recursive lock per request, allocated before entering C. 2.20's default
+// POSIX mutex destructor dereferences NULL after an allocation-denied profile
+// construction. Avoid that failure mode without changing global callbacks.
+void* mutex_create(cmsContext){return active?&active->mutex:nullptr;}
+void mutex_destroy(cmsContext,void*){}
+cmsBool mutex_lock(cmsContext,void* p){if(!p)return FALSE;try{static_cast<std::recursive_mutex*>(p)->lock();return TRUE;}catch(...){return FALSE;}}
+void mutex_unlock(cmsContext,void* p){if(p)static_cast<std::recursive_mutex*>(p)->unlock();}
 }
 struct CmsInput::Impl {
     Ledger ledger;
@@ -48,13 +71,21 @@ struct CmsInput::Impl {
     cmsHPROFILE input=nullptr,output=nullptr;
     cmsHTRANSFORM transform=nullptr;
     CmsModel model;
-    Impl(CmsStats& stats,std::size_t limit,CmsModel m):ledger{stats,limit},model(m){}
+    Impl(CmsStats& stats,std::size_t limit,CmsModel m):ledger{stats,limit},model(m){
+        // No quota failures may interrupt 2.20's non-transactional plugin-chunk
+        // initialization (a missing chunk falls back to process-global state).
+        if(limit<cms_bootstrap_bytes){++stats.denied;throw CmsFailure("CMS budget is below the 64 KiB context bootstrap minimum");}
+        ledger.bootstrap=static_cast<unsigned char*>(std::malloc(cms_bootstrap_bytes));
+        if(!ledger.bootstrap)throw CmsFailure("CMS context bootstrap allocation failed");
+        stats.live+=cms_bootstrap_bytes;stats.peak=std::max(stats.peak,stats.live);++stats.allocations;
+    }
     ~Impl(){
         Scope scope(ledger);
         if(transform)cmsDeleteTransform(transform);
         if(output)cmsCloseProfile(output);
         if(input)cmsCloseProfile(input);
         if(context)cmsDeleteContext(context);
+        if(ledger.bootstrap){ledger.stats.live-=cms_bootstrap_bytes;std::free(ledger.bootstrap);}
     }
 };
 CmsInput::CmsInput(const void* data,std::size_t bytes,CmsModel model,CmsStats& stats,std::size_t limit)
@@ -66,9 +97,13 @@ CmsInput::CmsInput(const void* data,std::size_t bytes,CmsModel model,CmsStats& s
     if(declared!=bytes)throw CmsFailure("ICC profile declared size mismatch");
     Scope scope(impl_->ledger);
     cmsPluginMemHandler memory{};
-    memory.base={cmsPluginMagicNumber,LCMS_VERSION,cmsPluginMemHandlerSig,nullptr};
+    cmsPluginMutex mutex{};
+    mutex.base={cmsPluginMagicNumber,LCMS_VERSION,cmsPluginMutexSig,nullptr};
+    mutex.CreateMutexPtr=mutex_create;mutex.DestroyMutexPtr=mutex_destroy;mutex.LockMutexPtr=mutex_lock;mutex.UnlockMutexPtr=mutex_unlock;
+    memory.base={cmsPluginMagicNumber,LCMS_VERSION,cmsPluginMemHandlerSig,&mutex.base};
     memory.MallocPtr=allocate;memory.FreePtr=release;memory.ReallocPtr=reallocate;
     impl_->context=cmsCreateContext(&memory,nullptr);
+    impl_->ledger.initializing=false;
     if(!impl_->context)throw CmsFailure("CMS context allocation limit exceeded");
     cmsSetLogErrorHandlerTHR(impl_->context,log_error);
     cmsSetAdaptationStateTHR(impl_->context,1.0);
@@ -87,6 +122,7 @@ CmsInput::CmsInput(const void* data,std::size_t bytes,CmsModel model,CmsStats& s
 }
 CmsInput::~CmsInput()=default;
 void CmsInput::apply(float* pixels,std::size_t count,int channels,bool associated) {
+    if(std::this_thread::get_id()!=impl_->ledger.thread)throw CmsFailure("CMS request processing must stay on its owning thread");
     if(!pixels || (channels!=3 && channels!=4))throw CmsFailure("unsupported CMS pixel layout");
     Scope scope(impl_->ledger);
     const int components=impl_->model==CmsModel::grey?1:impl_->model==CmsModel::cmyk?4:3;

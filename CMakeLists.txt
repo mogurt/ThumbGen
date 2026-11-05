@@ -55,6 +55,7 @@ install(FILES dependencies/notices/libjpeg-turbo-3.1.2-LICENSE.md dependencies/n
 add_executable(thumbgen src/main.cpp)
 target_link_libraries(thumbgen PRIVATE thumbgen_core)
 find_package(Threads REQUIRED)
+target_link_libraries(thumbgen_core PRIVATE Threads::Threads)
 add_library(thumbgen_schedule STATIC src/budget.cpp src/child_process.cpp src/worker_protocol.cpp)
 target_compile_features(thumbgen_schedule PUBLIC cxx_std_17)
 target_include_directories(thumbgen_schedule PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
