@@ -4,11 +4,17 @@
 #include <nlohmann/json.hpp>
 #include <iostream>
 #include <vector>
+static int emit(const nlohmann::json& result) {
+    // Complete the protocol write before DLL/CRT teardown. With the locked
+    // Conda DLL closure, relying on exit-time flushing can silently lose it.
+    std::cout<<result.dump()<<'\n'<<std::flush;
+    if(!std::cout){std::cerr<<"could not flush probe JSON to stdout\n";return 1;}
+    return 0;
+}
 int main(int argc,char** argv) {
     if(argc<2)return 2;
     if(argc==3 && std::string(argv[1])=="--presence") {
-        std::cout<<nlohmann::json({{"icc",thumbgen::detail::container_has_icc(argv[2])}}).dump()<<'\n';
-        return 0;
+        return emit({{"icc",thumbgen::detail::container_has_icc(argv[2])}});
     }
     OIIO::ImageSpec config;
     config.attribute("oiio:RawColor",argc>2?1:0);
@@ -23,5 +29,5 @@ int main(int argc,char** argv) {
         {"space",std::string(spec.get_string_attribute("oiio:ColorSpace"))},
         {"first",std::vector<float>(pixels.begin(),pixels.begin()+spec.nchannels)}};
     if(!in->close())return 1;
-    std::cout<<result.dump()<<'\n';
+    return emit(result);
 }
