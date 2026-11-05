@@ -15,8 +15,10 @@ std::size_t checked_mul(std::size_t a,std::size_t b) {
 }
 std::size_t leaves(std::size_t n) {std::size_t result=1;while(result<n)result=checked_mul(result,2);return result;}
 void validate(const DeepSample& s) {
-    if(!std::isfinite(s.z) || !std::isfinite(s.zback) || s.z<0 || s.zback<0)
-        throw DeepFailure("deep_value_invalid","Deep depths must be finite and nonnegative");
+    if(std::isnan(s.z) || std::isnan(s.zback) || s.z<0 || s.zback<0)
+        throw DeepFailure("deep_value_invalid","Deep depths must be nonnegative and cannot be NaN");
+    if(std::isfinite(s.z) && std::isinf(s.zback))
+        throw DeepFailure("deep_depth_unsupported","Finite-front, infinite-back Deep volumes require a separately defined density policy");
     for(int c=0;c<3;++c)if(!std::isfinite(s.colour[c]) || !std::isfinite(s.alpha[c]) || s.alpha[c]<0 || s.alpha[c]>1)
         throw DeepFailure("deep_value_invalid","Deep colour must be finite and alpha must be in [0,1]");
 }
@@ -94,7 +96,10 @@ FlatDeepPixel DeepFlattener::flatten(const DeepSample* source,std::size_t count)
     auto& transmission=result.transmission;
     for(std::size_t i=0;i<events_.size();) {
         float depth=events_[i].depth;
-        if(depth>previous)composite(result,transmission,tree_[1],double(depth)-previous);
+        // Infinite points sort after every finite event. All allowed volumes
+        // have already ended, so the final infinite gap is empty; integrating
+        // zero density over infinity would manufacture NaN (0 * infinity).
+        if(depth>previous && std::isfinite(depth))composite(result,transmission,tree_[1],double(depth)-previous);
         Node points;bool has_points=false;
         do {
             const auto& event=events_[i];

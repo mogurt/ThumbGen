@@ -110,6 +110,19 @@ class DeepCLI(unittest.TestCase):
         self.assertEqual([r['status'] for r in results],['success','failed','success'])
         self.assertEqual(results[1]['error']['code'],'sequence_selection_changed')
         self.assertEqual(results[2]['selection']['locked']['deep']['alpha'],['view.A']*3)
+    def test_positive_infinite_points_with_and_without_back(self):
+        for kind in ('infinite_point','infinite_reversed_point','infinite_no_zback'):
+            self.output=self.directory/(kind+'.png');self.convert(kind);self.pixels((srgb(.5),0,srgb(.25)))
+        self.output=self.directory/'infinite-transparent.png';self.convert('infinite_point','--background','transparent');self.pixels((srgb(2/3),0,srgb(1/3),191))
+    def test_infinite_volume_failure_keeps_sequence_identity(self):
+        kinds=['scalar','infinite_point','semi_infinite_volume','infinite_reversed_point','scalar']
+        jobs=[dict(id=str(i),sequence_id='depth-shot',input=self.inputs[k],outputs=[dict(path=str(self.directory/(str(i)+'.png')))]) for i,k in enumerate(kinds)]
+        manifest=dict(schema_version=1,defaults=dict(deep_mode='flatten',ocio_config='ocio://default',input_space='linear',threads=1),jobs=jobs)
+        jobs_validator.validate(manifest);path=self.directory/'infinite.json';path.write_text(json.dumps(manifest),encoding='utf-8')
+        rows=self.invoke('batch','--manifest',path,exit=3);results=[r for r in rows if r['type']=='result']
+        self.assertEqual([r['status'] for r in results],['success','success','failed','success','success'])
+        self.assertEqual(results[2]['error']['code'],'deep_depth_unsupported')
+        self.assertEqual(len({json.dumps(r['selection']['locked'],sort_keys=True) for r in results}),1)
     def test_missing_mapping_and_nonlinear_fail(self):
         self.assertEqual(self.convert('missing_alpha',exit=4)['error']['code'],'deep_channel_mapping_invalid')
         self.assertEqual(self.convert('scalar','--input-space','sRGB',exit=4)['error']['code'],'deep_colour_unsupported')
