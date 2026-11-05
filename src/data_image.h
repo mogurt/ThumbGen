@@ -13,6 +13,9 @@ struct DataImage {
     OIIO::ImageBuf image;
     DataStats statistics;
     std::size_t decoded_bytes=0;
+    // Internal read_data_image diagnostic, excluding codec/row/map storage.
+    // decoded_bytes remains the logical selected source volume.
+    std::size_t native_buffer_bytes=0;
     double decode_ms=0,mapping_ms=0;
     // Categorical modes retain native samples and allocate RGBA only at output size.
     std::vector<unsigned char> native;
