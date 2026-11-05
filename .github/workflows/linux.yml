@@ -1,0 +1,75 @@
+name: Linux modern-host build and tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    # This host validates CI, not CentOS 7 / glibc 2.17 distribution compatibility.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+    env:
+      CMAKE_BUILD_PARALLEL_LEVEL: '4'
+      GIT_TERMINAL_PROMPT: '0'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Provision host build tools
+        run: |
+          mkdir -p build/ci
+          sudo apt-get update 2>&1 | tee build/ci/apt-update.log
+          sudo apt-get install --no-install-recommends -y build-essential cmake ninja-build nasm git 2>&1 | tee build/ci/apt-install.log
+      - name: Install test dependencies
+        run: |
+          python -m pip install -r tests/requirements.txt 2>&1 | tee build/ci/test-dependencies.log
+          echo "THUMBGEN_TEST_PYTHON=$(command -v python)" >> "$GITHUB_ENV"
+      - name: Check CI audits
+        run: python -m unittest discover -s tests/ci -v 2>&1 | tee build/ci/audits.log
+      # No installed SDK, build tree, private path, or source cache is restored.
+      - name: Rebuild SDK from public pinned sources
+        run: bash scripts/ci/linux-sdk.sh
+      - name: Set SDK paths
+        run: |
+          echo "THUMBGEN_SDK_PREFIX=$GITHUB_WORKSPACE/.deps/ci-linux-sdk/sdk;$GITHUB_WORKSPACE/.deps/ci-linux-sdk/oiio-deps/dist" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$GITHUB_WORKSPACE/.deps/ci-linux-sdk/sdk/lib:$GITHUB_WORKSPACE/.deps/ci-linux-sdk/oiio-deps/dist/lib" >> "$GITHUB_ENV"
+      - name: Build and audit all current tests and product targets
+        run: python scripts/ci/run.py --platform linux
+      - name: Preserve diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: linux-build-diagnostics
+          retention-days: 14
+          if-no-files-found: warn
+          include-hidden-files: true
+          path: |
+            build/ci/*.log
+            build/ci/*.json
+            build/ci/linux/*.json
+            build/ci/linux/*.log
+            build/linux-dev/ci-tests.xml
+            build/linux-dev/Testing/Temporary/
+            build/linux-dev/CMakeFiles/CMakeConfigureLog.yaml
+            build/linux-release/CMakeFiles/CMakeConfigureLog.yaml
+            .deps/ci-linux-seed/public-sources.json
+            .deps/ci-linux-sdk/source-seed.json
+            .deps/ci-linux-sdk/sdk-rebuild.json
+            .deps/ci-linux-sdk/logs/
+            .deps/ci-linux-sdk/oiio-deps/*-build.log
+            .deps/ci-linux-sdk/oiio-build/CMakeFiles/CMakeConfigureLog.yaml

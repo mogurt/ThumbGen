@@ -1,0 +1,20 @@
+{
+  "pip": {
+    "version": "26.3",
+    "filename": "pip-26.3-py3-none-any.whl",
+    "url": "https://files.pythonhosted.org/packages/07/25/ee8c38ae72d66b844ce8eb9711ba905dba21ca1a8a0c960057c41cd23337/pip-26.3-py3-none-any.whl",
+    "sha256": "f3b60b20ffaadd4415ed7957212a38ac63fa4c5fa375bd0f4a797777940fad13"
+  },
+  "ninja": {
+    "version": "1.13.1",
+    "filename": "ninja-linux.zip",
+    "url": "https://github.com/ninja-build/ninja/releases/download/v1.13.1/ninja-linux.zip",
+    "sha256": "0830252db77884957a1a4b87b05a1e2d9b5f658b8367f82999a941884cbe0238"
+  },
+  "nasm": {
+    "version": "2.16.03",
+    "filename": "nasm-2.16.03.tar.xz",
+    "url": "https://www.nasm.us/pub/nasm/releasebuilds/2.16.03/nasm-2.16.03.tar.xz",
+    "sha256": "1412a1c760bbd05db026b6c0d1657affd6631cd0a63cddb6f73cc6d4aa616148"
+  }
+}
