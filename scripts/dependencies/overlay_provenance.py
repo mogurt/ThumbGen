@@ -341,8 +341,13 @@ def build_commands(policy, kind, root, names):
         if row.get('exit') != 0 or policy.sha(executable) != row['executable_sha256']:
             raise ValueError('Failed command or changed local build tool')
     args = rows[0]['args']
-    helper = policy.REPO / ('scripts/build-color-sdk.py' if kind == 'color' else 'scripts/dependencies/build_bounded_openexr.py')
-    if Path(args[0]).resolve() != Path(rows[0]['executable']).resolve() or Path(args[1]).resolve() != helper.resolve():
+    relative = 'scripts/build-color-sdk.py' if kind == 'color' else 'scripts/dependencies/build_bounded_openexr.py'
+    helper = Path(args[1])
+    archived = verify_producer(policy, kind, policy.load(root / 'build-producer.json'))
+    current = policy.git(policy.REPO, 'show', 'HEAD:' + relative).replace(b'\r\n', b'\n')
+    if (Path(args[0]).resolve() != Path(rows[0]['executable']).resolve() or not helper.is_absolute() or
+            helper.parts[-len(Path(relative).parts):] != Path(relative).parts or
+            archived['files_lf_sha256'][relative] != hashlib.sha256(current).hexdigest()):
         raise ValueError('Unexpected overlay helper executable')
     if len(args[2:]) % 2:
         raise ValueError('Invalid helper argument pairs')
