@@ -7,6 +7,7 @@ import re
 import subprocess
 
 from runtime_closure import audit, digest, overlays
+from product_validation import check_report, load as load_validation
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--build', type=Path, required=True)
@@ -22,13 +23,8 @@ build, sdk = args.build.resolve(), args.sdk.resolve()
 exe = build / 'Release/thumbgen.exe'
 log = args.ctest_log.read_text(encoding='utf-8-sig')
 if args.product_validation:
-    validation = json.loads(args.product_validation.read_text(encoding='utf-8'))
-    if (validation.get('kind') != 'independent-windows-product-validation' or
-            validation.get('exe_sha256') != digest(exe) or validation.get('passed') is not True):
-        raise RuntimeError('Independent product validation differs or failed')
-    for item in validation['artifacts']:
-        if digest(Path(item['path'])) != item['sha256']:
-            raise RuntimeError('Product validation artifact differs: ' + item['path'])
+    if not log.strip():
+        raise RuntimeError('Independent product build log is empty')
     cache = (build / 'CMakeCache.txt').read_text(encoding='utf-8')
     if 'BUILD_TESTING:BOOL=OFF' not in cache or re.search(r'^Python3_EXECUTABLE:', cache, re.M):
         raise RuntimeError('Independent product must have tests OFF and no test Python')
@@ -47,6 +43,8 @@ else:
 closure = audit(exe, sdk, Path(os.environ['SystemRoot']) / 'System32', args.color_overlay, args.bounded_overlay)
 if closure['sdk_profile'] != 'source':
     raise RuntimeError('Internal runtime candidate requires the minimal source SDK')
+if args.product_validation:
+    check_report(load_validation(args.product_validation), closure)
 environment = dict(SystemRoot=os.environ['SystemRoot'], PATH=str(sdk / 'sdk/bin') + os.pathsep + str(Path(os.environ['SystemRoot']) / 'System32'))
 identity = json.loads(subprocess.check_output([str(exe), '--version', '--json'], env=environment, text=True, timeout=30))
 capabilities = json.loads(subprocess.check_output([str(exe), 'capabilities', '--json'], env=environment, text=True, timeout=30))
@@ -79,6 +77,9 @@ report = dict(schema_version=1, kind='thumbgen-tested-windows-product', identity
               sdk_receipt_sha256=digest(sdk / 'sdk/thumbgen-sdk.json'),
               source_commit_at_collection=subprocess.check_output(['git', '-C', str(repo), 'rev-parse', 'HEAD'], text=True).strip(),
               limitation='Collected after testing; file binding is local build evidence, not signed build attestation or minimum-platform acceptance.')
+report['validation_mode'] = 'independent-v2' if args.product_validation else 'full-ctest'
+if args.product_validation:
+    report['product_validation'] = dict(path=str(args.product_validation.resolve()), sha256=digest(args.product_validation))
 args.output.parent.mkdir(parents=True, exist_ok=True)
 args.output.write_text(json.dumps(report, indent=2) + '\n', encoding='utf-8')
 print(json.dumps(dict(exe_sha256=report['exe_sha256'], closure_files=len(closure['files']), validation=ctest)))
