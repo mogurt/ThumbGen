@@ -100,6 +100,17 @@ class ProvenanceBoundaries(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'injection'):
             proof.cache_check(dict(values, CMAKE_C_COMPILER_LAUNCHER='injected.exe'), self.root, self.root, {})
 
+    def test_global_compile_and_link_flags_cannot_inject_code_or_libraries(self):
+        values = dict(CMAKE_HOME_DIRECTORY=self.root.as_posix(), CMAKE_INSTALL_PREFIX=self.root.as_posix(),
+                      CMAKE_GENERATOR='Visual Studio 17 2022', CMAKE_GENERATOR_PLATFORM='x64',
+                      CMAKE_C_FLAGS='/DWIN32 /D_WINDOWS', CMAKE_C_FLAGS_RELEASE='/MD /O2 /Ob2 /DNDEBUG')
+        proof.cache_check(values, self.root, self.root, {})
+        for extra in ('/FIinjected.h', '/arch:AVX2', '/DEVIL_DEFINE'):
+            with self.subTest(extra=extra), self.assertRaisesRegex(ValueError, 'compiler flags'):
+                proof.cache_check(dict(values, CMAKE_C_FLAGS=values['CMAKE_C_FLAGS'] + ' ' + extra), self.root, self.root, {})
+        with self.assertRaisesRegex(ValueError, 'linker flags'):
+            proof.cache_check(dict(values, CMAKE_SHARED_LINKER_FLAGS='/LIBPATH:C:/injected'), self.root, self.root, {})
+
     def install_fixture(self):
         source, build, prefix = [self.root / n for n in ('source', 'build', 'sdk')]
         for path in (source, build, prefix / 'bin'):
