@@ -22,9 +22,11 @@ def build(kind, root, lcms_cache=None, jpeg_cache=None, source_cache=None, sdk=N
     root = root.resolve()
     if root.exists():
         raise ValueError('Output must be a new private directory; prior failures are never overwritten')
-    for path in (lcms_cache, jpeg_cache, source_cache, sdk, policy.REPO):
-        if path and (path.resolve() == root or root in path.resolve().parents):
-            raise ValueError('Output must not contain a read-only input')
+    for path in (lcms_cache, jpeg_cache, source_cache, sdk):
+        if path and (path.resolve() == root or root in path.resolve().parents or path.resolve() in root.parents):
+            raise ValueError('Output overlaps a read-only input')
+    if root == policy.REPO.resolve() or root in policy.REPO.resolve().parents:
+        raise ValueError('Output must not contain the trusted repository')
     provenance.trusted_recipes(policy, kind)
     producer = provenance.producer(policy, kind)
     helper = policy.REPO / ('scripts/build-color-sdk.py' if kind == 'color' else 'scripts/dependencies/build_bounded_openexr.py')

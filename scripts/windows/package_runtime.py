@@ -140,6 +140,8 @@ def pack(exe, sdk, evidence_file, output, runtime_notices, color_overlay=None, b
         overlays=closure.get('overlays', []), build_provenance=evidence.get('build_provenance'))))
     recipes = {name: digest(Path(__file__).parent / name) for name in ('package_runtime.py', 'runtime_closure.py', 'freeze_product.py')}
     recipes['dependencies/windows_overlays.py'] = digest(Path(overlays.__file__))
+    for name in ('overlay_provenance.py', 'build_verified_overlay.py'):
+        recipes['dependencies/' + name] = digest(Path(overlays.__file__).parent / name)
     manifest = dict(kind='internal-evaluation-candidate', redistribution_ready=False, project_license='not selected',
                     identity=evidence['identity'], executable_sha256=digest(exe), runtime_files=closure['files'],
                     system_dependencies=closure['system_dependencies'], components=components, package_recipes_sha256=recipes,

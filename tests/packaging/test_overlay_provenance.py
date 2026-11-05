@@ -3,6 +3,7 @@ import importlib.util
 import json
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -142,6 +143,14 @@ class ProvenanceBoundaries(unittest.TestCase):
         file = self.root / 'CL.read.1.tlog'; file.write_text('unowned-input.h\n', encoding='utf-16')
         with self.assertRaisesRegex(ValueError, 'Malformed native'):
             proof.tlog_records(file)
+
+    def test_fresh_output_must_not_be_inside_read_only_cache(self):
+        with patch.object(sys, 'path', [str(ROOT / 'scripts/dependencies'), *sys.path]):
+            builder = module('builder', 'scripts/dependencies/build_verified_overlay.py')
+        cache = self.root / 'shared-cache'; cache.mkdir()
+        with self.assertRaisesRegex(ValueError, 'overlaps a read-only input'):
+            builder.build('color', cache / 'must-not-write', lcms_cache=cache)
+        self.assertFalse((cache / 'must-not-write').exists())
 
 
 if __name__ == '__main__':
