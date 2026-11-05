@@ -19,6 +19,7 @@ def encode(value):
 def pack(exe, sdk, evidence_file, output, runtime_notices, color_overlay=None, bounded_overlay=None):
     repo = Path(__file__).resolve().parents[2]
     evidence = json.loads(evidence_file.read_text(encoding='utf-8'))
+    overlays.require_bounded_selection(evidence['capabilities'], bounded_overlay)
     sdk_receipt_file = sdk / 'sdk/thumbgen-sdk.json'
     sdk_receipt = json.loads(sdk_receipt_file.read_text(encoding='utf-8'))
     versions = {item['package']: item['version'] for item in sdk_receipt['source_lock']['dependencies']}

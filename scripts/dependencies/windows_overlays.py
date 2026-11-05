@@ -85,6 +85,11 @@ def recipe(relative, expected):
     return dict(file=relative, lf_sha256=expected, raw_sha256=sha(path))
 
 
+def require_bounded_selection(capabilities, bounded_prefix):
+    if ('zstd' in capabilities.get('deep_compressions', [])) != bool(bounded_prefix):
+        raise ValueError('Runtime ZSTD capability differs from explicit bounded Core selection')
+
+
 def verify(kind, prefix):
     prefix = prefix.resolve(strict=True)
     root = prefix.parent

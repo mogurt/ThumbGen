@@ -71,6 +71,14 @@ class OverlayBoundaries(unittest.TestCase):
         with self.assertRaises(OSError):
             overlay.verify('color', self.root / 'missing')
 
+    def test_static_runtime_capability_requires_matching_selection(self):
+        overlay.require_bounded_selection({'deep_compressions': ['none']}, None)
+        overlay.require_bounded_selection({'deep_compressions': ['none', 'zstd']}, self.root)
+        with self.assertRaisesRegex(ValueError, 'capability differs'):
+            overlay.require_bounded_selection({'deep_compressions': ['zstd']}, None)
+        with self.assertRaisesRegex(ValueError, 'capability differs'):
+            overlay.require_bounded_selection({'deep_compressions': ['none']}, self.root)
+
     def test_recipe_tampering_fails(self):
         with self.assertRaisesRegex(ValueError, 'recipe/lock digest'):
             overlay.recipe('dependencies/color-sdk.json', '0' * 64)
