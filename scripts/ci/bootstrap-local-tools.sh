@@ -4,6 +4,7 @@ set -euo pipefail
 repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 cd "$repo"
 root="$repo/.deps/ci-linux-tools"
+test ! -e .deps/ci-linux-python
 mkdir -p build/ci
 python3 scripts/ci/fetch-local-tools.py | tee build/ci/local-tools-hashes.log
 test ! -e "$root/nasm-source"

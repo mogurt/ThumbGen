@@ -13,7 +13,7 @@ spec.loader.exec_module(ci)
 class Audits(unittest.TestCase):
     def setUp(self):
         self.names = ['public_cli', 'public_protocol', 'public_interrupt', 'public_aov',
-                      'public_cryptomatte', 'public_sampled_id', 'core_deep_flatten', 'future_test']
+                      'public_cryptomatte', 'public_sampled_id', 'core_deep_flatten', 'core_deep_reader', 'future_test']
         self.inventory = {'tests': [dict(name=name) for name in self.names]}
 
     def xml(self, names=None, status=''):
@@ -38,6 +38,17 @@ class Audits(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'registration'):
             ci.audit_tests({'tests': self.inventory['tests'][1:]}, self.xml(self.names[1:]))
 
+    def test_reader_cannot_be_omitted_from_inventory_and_results(self):
+        names = [name for name in self.names if name != 'core_deep_reader']
+        with self.assertRaisesRegex(RuntimeError, 'registration'):
+            ci.audit_tests({'tests': [dict(name=name) for name in names]}, self.xml(names))
+
+    def test_disabled_junit_attributes_are_rejected(self):
+        for status in ('notrun', 'disabled'):
+            junit = self.xml().replace('<testcase ', '<testcase status="' + status + '" ', 1)
+            with self.subTest(status=status), self.assertRaisesRegex(RuntimeError, 'disabled'):
+                ci.audit_tests(self.inventory, junit)
+
     def test_release_scope_and_python_contamination(self):
         with tempfile.TemporaryDirectory() as root:
             directory = Path(root)
@@ -55,9 +66,10 @@ class Audits(unittest.TestCase):
             (reply / 'index-1.json').write_text(json.dumps({'reply': {'codemodel-v2': {'jsonFile': 'model.json'}}}))
             (reply / 'model.json').write_text(json.dumps(dict(configurations=[dict(targets=targets)])))
             self.assertEqual(ci.audit_release(directory), expected)
-            (directory / 'CMakeCache.txt').write_text(cache + '\n_Python3_EXECUTABLE:INTERNAL=unexpected')
-            with self.assertRaisesRegex(RuntimeError, 'Python'):
-                ci.audit_release(directory)
+            for variable in ('_Python3_EXECUTABLE', 'PYTHON_EXECUTABLE'):
+                (directory / 'CMakeCache.txt').write_text(cache + '\n' + variable + ':INTERNAL=unexpected')
+                with self.subTest(variable=variable), self.assertRaisesRegex(RuntimeError, 'Python'):
+                    ci.audit_release(directory)
             (directory / 'CMakeCache.txt').write_text(cache)
             (reply / 'thumbgen.json').write_text(json.dumps(dict(name='thumbgen_test', type='EXECUTABLE')))
             with self.assertRaisesRegex(RuntimeError, 'scope'):
