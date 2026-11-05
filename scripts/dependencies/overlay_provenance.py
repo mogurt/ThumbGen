@@ -195,7 +195,16 @@ def native_build(policy, source, build, prefix, options, trace, dependency_files
     compiler = Path(compiler[1])
     tools = {str(compiler.parent / name): policy.sha(compiler.parent / name) for name in ('cl.exe', 'link.exe', 'lib.exe')}
     vs = Path(cache['CMAKE_GENERATOR_INSTANCE'])
-    allowed = (source, build, vs, Path(os.environ.get('ProgramFiles(x86)', 'C:/Program Files (x86)')) / 'Windows Kits')
+    windows = Path(os.environ.get('SystemRoot', 'C:/Windows'))
+    allowed = (source, build, vs, Path(os.environ.get('ProgramFiles(x86)', 'C:/Program Files (x86)')) / 'Windows Kits',
+               windows / 'System32', windows / 'Globalization')
+    allowed = tuple(base.resolve() for base in allowed)
+    file_hashes = {}
+    def native_sha(file):
+        key = str(file).casefold()
+        if key not in file_hashes:
+            file_hashes[key] = policy.sha(file)
+        return file_hashes[key]
     # Exact native tracking inputs/outputs, rather than accepting a DLL digest
     # invented by a caller. The selected local compiler/toolchain is a trust input.
     inputs, products, compile_sources = {}, {}, set()
@@ -216,10 +225,11 @@ def native_build(policy, source, build, prefix, options, trace, dependency_files
                 file = Path(item)
                 if not file.is_absolute() or not file.is_file():
                     raise ValueError('Missing/unsafe native input or output: ' + item)
-                if (not any(file.resolve().is_relative_to(base.resolve()) for base in allowed) and
-                        (dependency_files or {}).get(str(file.resolve()).casefold()) != policy.sha(file)):
+                resolved_file = file.resolve()
+                if (not any(resolved_file.is_relative_to(base) for base in allowed) and
+                        (dependency_files or {}).get(str(resolved_file).casefold()) != native_sha(file)):
                     raise ValueError('Native dependency outside source/build/toolchain: ' + item)
-                (inputs if reading else products)[str(file)] = policy.sha(file)
+                (inputs if reading else products)[str(file)] = native_sha(file)
                 if path.name.lower() == 'cl.read.1.tlog' and file.suffix.lower() in ('.c', '.cpp', '.cxx'):
                     compile_sources.add(str(file))
                 if path.name.lower() == 'cl.write.1.tlog' and item in records and file.suffix.lower() == '.obj':
@@ -235,8 +245,28 @@ def native_build(policy, source, build, prefix, options, trace, dependency_files
         raise ValueError('Missing native compiler commands')
     for path in commands:
         data = path.read_text(encoding='utf-16')
+        link_command = path.parent / 'link.command.1.tlog'
+        # Upstream JPEG's standalone utilities use /MT; they are audited as
+        # local helper outputs, never linked into or copied into the product.
+        if link_command.is_file() and re.search(r'/OUT:"[^"]+\.EXE"', link_command.read_text(encoding='utf-16'), re.I):
+            continue
         if re.search(r'(?i)(?:^|\s)/MT(?:d)?(?:\s|$)', data) or not re.search(r'(?i)(?:^|\s)/MD(?:\s|$)', data):
-            raise ValueError('Overlay requires the Release shared MSVC runtime')
+            raise ValueError('Overlay library requires the Release shared MSVC runtime: ' + str(path))
+    # MSBuild's link.write log omits some /IMPLIB products. Accept those only
+    # when the same real linker command's /OUT DLL is an observed write, and
+    # bind the import library's bytes as a product of that command.
+    for path in tlogs:
+        if path.name.lower() != 'link.command.1.tlog':
+            continue
+        for lines in tlog_records(path).values():
+            switches = {m[1].upper(): Path(m[2] or m[3]) for m in
+                        re.finditer(r'/(OUT|IMPLIB):(?:"([^"]+)"|(\S+))', '\n'.join(lines), re.I)}
+            output, implib = switches.get('OUT'), switches.get('IMPLIB')
+            if output and output.suffix.lower() == '.dll' and implib:
+                if (str(output) not in products or not implib.resolve().is_relative_to(build.resolve()) or
+                        not implib.is_file()):
+                    raise ValueError('Import library lacks associated native DLL output')
+                products[str(implib)] = policy.sha(implib)
     for path in build.rglob('*'):
         if path.is_file() and (path.suffix in ('.vcxproj', '.props', '.targets') or path.name == 'cmake_install.cmake'
                               or path.name == 'install_manifest.txt'):
