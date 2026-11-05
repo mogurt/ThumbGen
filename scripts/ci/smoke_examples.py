@@ -19,6 +19,14 @@ def sha256(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def snapshot_inputs(deps):
+    # Output files are also under .deps in the published layout. Protect only
+    # the fixture trees, including additions/removals, so new outputs are valid.
+    return {path.relative_to(deps).as_posix(): sha256(path)
+            for name in ('public-inputs', 'public-aov', 'public-crypto')
+            for path in (deps / name).rglob('*') if path.is_file()}
+
+
 def audit_rows(manifest, rows, validator):
     for row in rows:
         validator.validate(row)
@@ -87,7 +95,7 @@ def main():
         dev = repo / 'build' / (args.platform + '-dev')
         run('aov-fixtures', [exe(dev, 'thumbgen_aov_tests'), '--fixtures', deps / 'public-aov'])
         run('crypto-fixtures', [exe(dev, 'thumbgen_cryptomatte_tests'), '--fixtures', deps / 'public-crypto'])
-        before = {str(path.relative_to(deps)): sha256(path) for path in deps.rglob('*') if path.is_file()}
+        before = snapshot_inputs(deps)
         examples = sandbox / 'examples/public'
         examples.mkdir(parents=True)
         validator = Draft202012Validator(json.loads((repo / 'schemas/protocol-v1.schema.json').read_text(encoding='utf-8')))
@@ -109,7 +117,7 @@ def main():
                     path = Path(output['path'])
                     run(source.stem + '-' + row['id'] + '-' + str(index),
                         [exe(build, 'read_preview'), path, output['width'], output['height']])
-                    outputs[str(path.relative_to(sandbox))] = sha256(path)
+                    outputs[path.relative_to(sandbox).as_posix()] = sha256(path)
             if source.name == 'sequence.jobs.json':
                 if [row['selection']['lock_status'] for row in results] != ['created', 'reused']:
                     raise RuntimeError('Sequence example did not create/reuse its selection lock')
@@ -118,7 +126,7 @@ def main():
             report['manifests'][source.name] = dict(sha256=sha256(source), jobs=len(results), outputs=outputs)
         if not report['manifests']:
             raise RuntimeError('No public examples executed')
-        after = {str(path.relative_to(deps)): sha256(path) for path in deps.rglob('*') if path.is_file()}
+        after = snapshot_inputs(deps)
         if before != after:
             raise RuntimeError('Public example inputs changed')
         report.update(status='passed', inputs_sha256=before)
