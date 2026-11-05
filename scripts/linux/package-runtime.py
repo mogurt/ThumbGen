@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+from runtime_overlays import audit as audit_overlays, audit_base, audit_stage, require
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--validation', required=True, type=Path)
@@ -24,6 +25,9 @@ parser.add_argument('--archive-receipt', type=Path)
 parser.add_argument('--tools-cache', type=Path)
 parser.add_argument('--notice-materials', type=Path)
 parser.add_argument('--work', type=Path)
+parser.add_argument('--color-root', required=True, type=Path)
+parser.add_argument('--core-root', required=True, type=Path)
+parser.add_argument('--product-build', required=True, type=Path)
 args = parser.parse_args()
 repo = (args.source or Path(__file__).resolve().parents[2]).resolve()
 stage, cache = args.validation.resolve(), args.cache.resolve()
@@ -32,6 +36,14 @@ output.mkdir(parents=True, exist_ok=True)
 git_command = '/opt/rh/rh-git227/root/usr/bin/git' if Path('/opt/rh/rh-git227/root/usr/bin/git').is_file() else 'git'
 evidence = json.loads((stage / 'build-evidence.json').read_text())
 lock = json.loads((repo / 'scripts/linux/sources-lock.json').read_text())
+overlays = audit_overlays(repo, args.color_root, args.core_root, args.product_build)
+require(overlays == evidence['overlays'], 'Overlay provenance changed since product freeze')
+require(audit_base(repo, cache) == evidence['original_sdk'], 'Original SDK evidence changed since freeze')
+audit_stage(stage, args.product_build, cache, overlays, (args.tools_cache or cache) / 'tools/cmake-3.31.8-linux-x86_64/bin/cmake')
+for item in evidence['copied']:
+    require(hashlib.sha256(Path(item['source']).read_bytes()).hexdigest() == item['sha256'], 'Original linked library changed')
+for filename, expected in evidence['product_install']['files'].items():
+    require(hashlib.sha256(Path(filename).read_bytes()).hexdigest() == expected, 'Product build/install evidence changed')
 def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 def run(*command):
@@ -72,7 +84,7 @@ if identity['build']['revision'] == 'unknown':
                            embedded_revision='unknown', verification='Git archive bytes, full input map, frozen source tree and validated ELF SHA256')
 elif not revision.startswith(identity['build']['revision']):
     raise SystemExit('Embedded revision and frozen source evidence disagree')
-recipe_sha256 = digest(Path(__file__).resolve())
+recipe_sha256 = hashlib.sha256(Path(__file__).read_bytes() + b'\0' + Path(__file__).with_name('runtime_overlays.py').read_bytes()).hexdigest()
 name = 'thumbgen-' + re.sub(r'[^A-Za-z0-9_.-]', '_', identity['version']) + '-linux-x86_64-glibc217-' + revision[:12] + '-' + digest(exe)[:12] + '-r' + recipe_sha256[:8]
 system = ('libc.so', 'libm.so', 'libdl.so', 'libpthread.so', 'librt.so', 'libutil.so',
           'libresolv.so', 'ld-linux-', 'libnss_', 'libanl.so', 'libcrypt.so', 'libnsl.so')
@@ -195,6 +207,16 @@ with tempfile.TemporaryDirectory(prefix='candidate-', dir=work) as temporary:
     if run(git_command, '-C', str(json_source), 'rev-parse', 'HEAD').strip() != lock['nlohmann_json']['commit']:
         raise SystemExit('JSON license source mismatch')
     notices('nlohmann_json', json_source, dict(**lock['nlohmann_json'], repository='https://github.com/nlohmann/json', license='MIT', linkage='header-only'))
+    for item in overlays['components']:
+        metadata = dict(item)
+        component, source = metadata.pop('name'), Path(metadata.pop('source'))
+        patch = metadata.pop('patch', None)
+        notices(component, source, metadata)
+        if patch:
+            target = root / 'licenses' / component / Path(patch).name
+            shutil.copyfile(patch, target)
+            components[-1]['notices'].append(dict(file=target.relative_to(root).as_posix(), sha256=digest(target)))
+            components[-1]['modification_notice'] = 'Request-owned bounded ZSTD decoding; public patch retained verbatim alongside upstream notices'
     for component, rpm_name in (('GCC-runtime', 'libgcc'), ('GCC-C++-runtime', 'libstdc++'), ('GCC-build-headers-nonshared', 'devtoolset-11-libstdc++-devel')):
         metadata = run('rpm', '-q', '--qf', '%{NAME}|%{VERSION}-%{RELEASE}|%{SOURCERPM}|%{LICENSE}', rpm_name).strip().split('|')
         notice_source = notice_materials / 'usr/share/doc/libgcc-4.8.5'
@@ -205,6 +227,9 @@ with tempfile.TemporaryDirectory(prefix='candidate-', dir=work) as temporary:
                 review='GPL texts and GCC Runtime Library Exception 3.1 retained; eligible compilation and corresponding-source obligations need release review'))
     manifest = dict(kind='internal-evaluation-candidate', redistribution_ready=False, project_license='not selected; no project LICENSE supplied',
                     package_recipe_sha256=recipe_sha256,
+                    overlay_auditor_sha256=digest(Path(__file__).with_name('runtime_overlays.py')),
+                    linux_overlay_provenance=overlays, original_sdk_provenance=evidence['original_sdk'],
+                    product_install_binding=evidence['product_install'],
                     identity=identity, frozen_product_commit=revision, validated_executable_sha256=digest(exe),
                     packaged_executable_sha256=digest(root / 'bin/thumbgen'), archive_binding=archive_binding,
                     notice_material_receipt_sha256=digest(materials_receipt) if materials else None,
