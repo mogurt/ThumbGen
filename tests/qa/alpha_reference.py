@@ -208,6 +208,16 @@ def reference(fixture, scale, preset, background):
     return w, h, result
 
 
+def storage_reference(target):
+    """RGBA8 zero-alpha-rgb-zero-v1; mathematical filtering stays untouched.
+
+    Decide from the independent expected Alpha, never the product Alpha byte.
+    """
+    if len(target) == 4 and int(max(ZERO, min(ONE, target[3]))*255 + D('.5')) == 0:
+        return (ZERO, ZERO, ZERO, target[3])
+    return target
+
+
 def compare(path, expected):
     w, h, ref = expected
     aw, ah, bands, pixels = read_png(path)
@@ -216,6 +226,7 @@ def compare(path, expected):
     max_rgb, max_alpha, squared, bad, worst = ZERO, ZERO, ZERO, 0, None
     max_visible_rgb, zero_alpha_rgb_failures = ZERO, 0
     for index, (p, target) in enumerate(zip(pixels, ref)):
+        target = storage_reference(target)
         for c, (actual, desired) in enumerate(zip(p, target)):
             error = abs(D(actual)/255-desired)
             squared += error*error
@@ -231,7 +242,9 @@ def compare(path, expected):
                 worst = dict(x=index % w, y=index//w, channel='RGBA'[c], actual_code=actual,
                              actual_alpha_code=p[3] if bands == 4 else 255,
                              expected_normalized=str(desired), error=str(error))
-            bad += error > (RGB_TOL if c < 3 else ALPHA_TOL)
+            # Canonical storage is exact, not an extra tolerance exemption.
+            bad += (error > (RGB_TOL if c < 3 else ALPHA_TOL) or
+                    (c < 3 and bands == 4 and p[3] == 0 and actual != 0))
     return dict(passed=bad == 0, failed_components=bad, max_rgb_error=float(max_rgb),
                 max_alpha_error=float(max_alpha), max_visible_rgb_error=float(max_visible_rgb),
                 zero_alpha_rgb_failed_components=zero_alpha_rgb_failures,
@@ -263,6 +276,16 @@ def self_test():
         assert not compare(path, expected)['passed']
         write_png(path, [(51, 102, 204, 65)], 1, 1)
         assert not compare(path, expected)['passed']
+        below = (D('.8'), D('.4'), D('.2'), D('.4999')/255)
+        above = (D('.8'), D('.4'), D('.2'), D('.5')/255)
+        assert storage_reference(below) == (ZERO, ZERO, ZERO, below[3])
+        assert storage_reference(above) == above
+        write_png(path, [(0, 0, 0, 0)], 1, 1)
+        assert compare(path, (1, 1, [below]))['passed']
+        write_png(path, [(1, 0, 0, 0)], 1, 1)
+        assert not compare(path, (1, 1, [below]))['passed']
+        write_png(path, [(0, 0, 0, 0)], 1, 1)
+        assert not compare(path, (1, 1, [above]))['passed']
     print('Independent oracle self-test passed (transfer, kernels, negative canvas, PNG, failure detection).')
 
 
@@ -325,6 +348,7 @@ def main():
                      if p.is_file() and (p.suffix.lower() == '.dll' or '.so' in p.name or p.suffix == '.dylib')}
     report = dict(schema_version=1, kind='synthetic-flat-alpha-reference', passed=False,
                   exe_source=str(source), exe_frozen=str(exe), exe_sha256=original_sha,
+                  storage_policy='rgba8-zero-alpha-rgb-zero-v1',
                   reference_sha256=sha(output/'reference-tool.py'), python=sys.executable, python_version=platform.python_version(),
                   worktree_head=subprocess.check_output(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'], text=True).strip(),
                   runtime_dirs=list(map(str, runtime_dirs)), runtime_sha256=runtime_files, environment_overrides=overrides,
@@ -362,7 +386,9 @@ def main():
                             '--ocio-config', 'ocio://default', '--threads', 1, '--thread-budget', 1], env, output, label)
                         # Keep every expected pixel: a failure remains a small inspectable repro.
                         save(output/(label+'.reference.json'), dict(width=expected[0], height=expected[1],
-                             pixels=[[str(v) for v in p] for p in expected[2]]))
+                             pixels=[[str(v) for v in p] for p in expected[2]],
+                             storage_pixels=[[str(v) for v in storage_reference(p)] for p in expected[2]],
+                             storage_policy=report['storage_policy']))
                         metrics = compare(target, expected)
                         entry = dict(name=label, command=command, cli_result=rows, output_sha256=sha(target), **metrics)
                         report['cases'].append(entry)
