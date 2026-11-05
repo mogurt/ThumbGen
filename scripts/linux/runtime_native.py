@@ -77,8 +77,8 @@ def install_rules(build):
         for included in re.findall(r'include\("([^"\n]*cmake_install\.cmake)"\)', text):
             require('$' not in included, 'Unresolved install include')
             queue.append(Path(included))
-        for match in re.finditer(r'file\(INSTALL\s+DESTINATION\s+"([^"]+)"\s+TYPE\s+(STATIC_LIBRARY|SHARED_LIBRARY)\s+(?:MESSAGE_(?:NEVER|LAZY|ALWAYS)\s+)?FILES\s+(.*?)\)', text, re.S):
-            destination, kind, files = match.groups()
+        for match in re.finditer(r'file\(INSTALL\s+DESTINATION\s+"([^"]+)"\s+TYPE\s+(STATIC_LIBRARY|SHARED_LIBRARY|EXECUTABLE|PROGRAM)\s+(?:RENAME\s+"([^"]+)"\s+)?(?:MESSAGE_(?:NEVER|LAZY|ALWAYS)\s+)?FILES\s+(.*?)\)', text, re.S):
+            destination, kind, renamed, files = match.groups()
             if destination.startswith('${CMAKE_INSTALL_PREFIX}/'):
                 relative_directory = destination[len('${CMAKE_INSTALL_PREFIX}/'):]
             else:
@@ -91,7 +91,8 @@ def install_rules(build):
                 # SONAME aliases are ordinary CMake install inputs, but only
                 # their resolved real target may establish a native origin.
                 require(origin.resolve().is_relative_to(build), 'Install origin escapes native build')
-                result.append(dict(relative=(Path(relative_directory) / origin.name).as_posix(),
+                require(not renamed or (Path(renamed).name == renamed and renamed not in ('.', '..')), 'Unsafe install rename')
+                result.append(dict(relative=(Path(relative_directory) / (renamed or origin.name)).as_posix(),
                     origin=str(origin), kind=kind, script=str(script), script_sha256=sha(script)))
     unique = {}
     for rule in result:
@@ -111,14 +112,14 @@ def query(build, name):
     return match[1], inputs, text
 
 
-def target_proof(build, origin, source):
+def target_proof(build, origin, source, kind='STATIC_LIBRARY'):
     build, origin, source = map(lambda p: Path(p).resolve(), (build, origin, source))
     local_file(origin, build)
     objects, sources, links, recipes = [], {}, {}, {}
     if (build / 'build.ninja').is_file():
         name = origin.relative_to(build).as_posix()
         rule, inputs, text = query(build, name)
-        require('_STATIC_LIBRARY_LINKER' in rule or '_SHARED_LIBRARY_LINKER' in rule,
+        require(('_EXECUTABLE_LINKER' in rule) if kind in ('EXECUTABLE', 'PROGRAM') else ('_STATIC_LIBRARY_LINKER' in rule or '_SHARED_LIBRARY_LINKER' in rule),
                 'Install source is not a configured native library target: ' + name)
         recipes['native_query_sha256'] = hashlib.sha256(text.encode()).hexdigest()
         recipes['commands_sha256'] = hashlib.sha256(output('ninja', '-C', build, '-t', 'commands', name).encode()).hexdigest()
@@ -193,12 +194,12 @@ def target_proof(build, origin, source):
                 for recipe in (info, directory / 'build.make', directory / 'flags.make'):
                     recipes[str(local_file(recipe, build))] = sha(recipe)
         require(linked_objects == {o.resolve() for o in objects}, 'Native object/compile graph mismatch: ' + str(link))
-        for value in tokens:
+        for value in tokens[1:]:  # the compiler/ar executable is a tool, not a library input
             path = Path(value) if Path(value).is_absolute() else cwd / value
             if path.is_file() and path.resolve() not in linked_objects and path.resolve() != origin:
                 links[str(path.resolve())] = sha(path)
     require(objects and sources, 'Native library has no compiled object/source inputs')
-    if origin.suffix == '.a':
+    if kind == 'STATIC_LIBRARY':
         require(archive_objects(origin) == Counter((obj.name, sha(obj)) for obj in objects),
                 'Native archive object differs from configured compiler output: ' + str(origin))
     return dict(output=str(origin), output_sha256=sha(origin), objects={str(o): sha(o) for o in objects},
@@ -222,6 +223,6 @@ def installed_origin(build, relative, values):
         root = Path(git.stdout.strip()).resolve()
         require(source.is_relative_to(root), 'Configured source escapes its Git tree')
         source = root
-    proof = target_proof(build, origin, source)
+    proof = target_proof(build, origin, source, rule['kind'])
     proof['install_rule'] = rule
     return origin, proof
