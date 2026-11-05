@@ -49,7 +49,8 @@ def build(kind, root, lcms_cache=None, jpeg_cache=None, source_cache=None, sdk=N
         arguments += ['--output', str(root), '--source-cache', str(source_cache.resolve(strict=True)),
                       '--deps-prefix', str(sdk.resolve() / 'oiio-deps/dist')]
     allowed = {'SYSTEMROOT', 'WINDIR', 'PATH', 'TEMP', 'TMP', 'COMSPEC', 'SYSTEMDRIVE', 'PROGRAMFILES',
-               'PROGRAMFILES(X86)', 'PROGRAMW6432', 'APPDATA', 'LOCALAPPDATA', 'USERPROFILE', 'NUMBER_OF_PROCESSORS'}
+               'PROGRAMFILES(X86)', 'PROGRAMW6432', 'APPDATA', 'LOCALAPPDATA', 'USERPROFILE', 'NUMBER_OF_PROCESSORS',
+               'PROCESSOR_ARCHITECTURE', 'PROCESSOR_ARCHITEW6432', 'PROCESSOR_IDENTIFIER', 'PROCESSOR_LEVEL', 'PROCESSOR_REVISION'}
     environment = {k: v for k, v in os.environ.items() if k.upper() in allowed}
     environment.update(GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL='NUL')
     commands = []
