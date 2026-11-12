@@ -26,8 +26,8 @@ class PublicValidationTests(unittest.TestCase):
                         self.root / "tests/data/deep-reference-v1.json")
         shutil.copyfile(ROOT / "CHANGELOG.md", self.root / "CHANGELOG.md")
         shutil.copyfile(ROOT / "README.md", self.root / "README.md")
-        shutil.copyfile(ROOT / "README.zh-CN.md", self.root / "README.zh-CN.md")
-        for name in ('CMakeLists.txt', 'CMakePresets.json'):
+        shutil.copyfile(ROOT / "README.en.md", self.root / "README.en.md")
+        for name in ('CMakeLists.txt', 'CMakePresets.json', 'LICENSE'):
             shutil.copyfile(ROOT / name, self.root / name)
         for summary in (ROOT / 'benchmarks/results').glob('*/SUMMARY.md'):
             target = self.root / summary.relative_to(ROOT)
@@ -58,7 +58,7 @@ class PublicValidationTests(unittest.TestCase):
         self.assertIn("Missing link target", result.stderr)
 
     def test_root_readme_and_new_documents_are_checked(self):
-        for path in ('README.md', 'README.zh-CN.md', 'docs/future-feature.md', 'benchmarks/results/new-summary/SUMMARY.md'):
+        for path in ('README.md', 'README.en.md', 'docs/future-feature.md', 'benchmarks/results/new-summary/SUMMARY.md'):
             with self.subTest(path=path):
                 target = self.root / path
                 original = target.read_bytes() if target.exists() else None
