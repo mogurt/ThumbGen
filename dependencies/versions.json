@@ -13,5 +13,22 @@
     "revision": "703100c5f8a0b75b4861e401db567f1d82d545b8",
     "header_sha256": "b04df6aa2fdd476ebcddcafd8e634014e34d29f89f6b648b137f2efa66f3bd47",
     "license": "MIT"
+  },
+  "skcms": {
+    "repository": "https://skia.googlesource.com/skcms",
+    "revision": "074a8d439d75df5bff2746458306f7760ee74dd8",
+    "license": "BSD-3-Clause",
+    "files": {
+      "LICENSE": "5fad7f1a5143034fc76c976e9d34694663764808df7b777943048674a4c87ff1",
+      "skcms.cc": "07e26b99a9cb26cf3ab6cd1d31461fed656c7c09b05ccd5b3c50c456b9bb4f64",
+      "skcms.h": "475b8d7bf1f9f357d045784f7fe99c69edea813231cfa7627fd1aa61a523dca8",
+      "src/Transform_inl.h": "6843cdf5f78adc0d76bae1781dc252c737c003db0addaa2c9b2eda3bbd271b2a",
+      "src/skcms_Transform.h": "ed5baed5c159940cb8753fc622edbd25b91f7262f17d2d8cae408f3bb61edbf2",
+      "src/skcms_TransformBaseline.cc": "16a3bc6246fb107abd3cefca8a7257c3b4ae79b92799ba4331e676210c0ad22f",
+      "src/skcms_TransformHsw.cc": "f75a62262276c0e99390b2140c64b08c042d68fa5e3562e5d3b4360e032c6677",
+      "src/skcms_TransformSkx.cc": "1ccc8d917d6f41e0de7dad96fd3121793af440894477499128626e671d4f8f9e",
+      "src/skcms_internals.h": "0cbc2ca5d795bbeecf4d8daf577f0f495f70613bd6cd5295034736bb30a7bb12",
+      "src/skcms_public.h": "bae2083ed3a8ec9c76e5a3b4293d74d7345112c9361df45fd3f4e9bb64ea51d1"
+    }
   }
 }

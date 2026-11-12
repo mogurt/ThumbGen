@@ -136,6 +136,18 @@ def pack(exe, sdk, evidence_file, output, runtime_notices, color_overlay=None, b
     components.append(dict(name='MSVC-runtime', version=Path(sdk_receipt['runtime']['source']).name,
                            source='Selected Visual Studio 2022 redistributable', notices=notices,
                            review='Original installed VS materials retained; they may be link pointers, not complete terms. File counts do not establish MSVC redistribution eligibility or completed license review.'))
+    skcms = json.loads((repo / 'dependencies/versions.json').read_text())['skcms']
+    for relative, expected in skcms['files'].items():
+        if digest(repo / 'third_party/skcms' / relative) != expected:
+            raise ValueError('Vendored skcms source differs: ' + relative)
+    notice = (repo / 'dependencies/notices/skcms-BSD-3-Clause.txt').read_bytes()
+    if hashlib.sha256(notice).hexdigest() != skcms['files']['LICENSE']:
+        raise ValueError('skcms notice differs')
+    destination = 'licenses/skcms/LICENSE'
+    add(destination, notice)
+    components.append(dict(name='skcms', commit=skcms['revision'], repository=skcms['repository'],
+        license=skcms['license'], linkage='static; x64 baseline with runtime AVX2/F16C; AVX-512 disabled',
+        notices=[dict(file=destination, sha256=hashlib.sha256(notice).hexdigest())]))
     stb = json.loads((repo / 'dependencies/versions.json').read_text())['stb_image_resize']
     if digest(repo / 'third_party/stb/stb_image_resize2.h') != stb['header_sha256']:
         raise ValueError('Vendored resizer differs from dependency lock')

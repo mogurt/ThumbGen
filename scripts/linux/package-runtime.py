@@ -171,6 +171,18 @@ with tempfile.TemporaryDirectory(prefix='candidate-', dir=work) as temporary:
     edit_script.write_text('\n'.join(edits) + '\n')
     subprocess.check_call([str(cmake), '-P', str(edit_script)])
     components = []
+    skcms = json.loads((repo / 'dependencies/versions.json').read_text())['skcms']
+    for relative, expected in skcms['files'].items():
+        if digest(repo / 'third_party/skcms' / relative) != expected:
+            raise SystemExit('Vendored skcms source differs: ' + relative)
+    skcms_notice = root / 'licenses/skcms/LICENSE'
+    skcms_notice.parent.mkdir(parents=True)
+    shutil.copyfile(repo / 'dependencies/notices/skcms-BSD-3-Clause.txt', skcms_notice)
+    if digest(skcms_notice) != skcms['files']['LICENSE']:
+        raise SystemExit('skcms notice differs')
+    components.append(dict(name='skcms', commit=skcms['revision'], repository=skcms['repository'],
+        license=skcms['license'], linkage='static; x64 baseline with runtime AVX2/F16C; AVX-512 disabled',
+        notices=[dict(file=skcms_notice.relative_to(root).as_posix(), sha256=digest(skcms_notice))]))
     stb = json.loads((repo / 'dependencies/versions.json').read_text())['stb_image_resize']
     if digest(repo / 'third_party/stb/stb_image_resize2.h') != stb['header_sha256']:
         raise SystemExit('Vendored resizer differs from dependency lock')
