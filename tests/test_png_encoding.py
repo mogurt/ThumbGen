@@ -8,7 +8,7 @@ import subprocess
 import tempfile
 import unittest
 import zlib
-from PIL import Image
+from qa.alpha_reference import read_png
 from jsonschema import Draft202012Validator
 
 p=argparse.ArgumentParser();p.add_argument('--exe',type=Path,required=True);p.add_argument('--runtime-dir',type=Path,required=True);p.add_argument('--schema-dir',type=Path,required=True)
@@ -52,10 +52,9 @@ class Encoding(unittest.TestCase):
                     self.assertEqual(payload[1]>>6,hint,preset)
                     scan=zlib.decompress(payload);filters=scan[::1+width*nc]
                     self.assertEqual(len(filters),height);self.assertTrue(any(f!=0 for f in filters),'adaptive filtering was overridden')
-                    with Image.open(target) as image:
-                        self.assertEqual(image.size,(width,height))
-                        if rgba:
-                            actual=image.getchannel('A').tobytes();self.assertEqual(actual,pixels[3::4])
-                            self.assertTrue(all(pixel[:3]==(0,0,0) for pixel in image.getdata() if pixel[3]==0))
+                    w,h,bands,decoded=read_png(target);self.assertEqual((w,h,bands),(width,height,nc))
+                    if rgba:
+                        self.assertEqual(bytes(pixel[3] for pixel in decoded),pixels[3::4])
+                        self.assertTrue(all(pixel[:3]==(0,0,0) for pixel in decoded if pixel[3]==0))
 
 if __name__=='__main__':unittest.main(argv=[__file__,*remaining])

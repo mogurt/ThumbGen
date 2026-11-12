@@ -41,11 +41,18 @@ static void image(const fs::path& path,bool beauty=false,int canvas=0) {
     require(output->open(path.u8string(),spec),output->geterror());require(output->write_image(OIIO::TypeDesc::FLOAT,pixels.data()),output->geterror());require(output->close(),output->geterror());
 }
 static std::string bytes(const fs::path& path){std::ifstream input(path,std::ios::binary);return {std::istreambuf_iterator<char>(input),{}};}
+#ifndef _WIN32
+static bool live_proc_stat(const std::string& stat) {
+    auto end=stat.rfind(')');
+    if(end==std::string::npos || end+2>=stat.size())return false;
+    const auto state=stat[end+2];return state!='Z' && state!='X' && state!='x';
+}
+#endif
 static bool running(unsigned long pid) {
 #ifdef _WIN32
     HANDLE process=OpenProcess(SYNCHRONIZE,FALSE,DWORD(pid));if(!process)return false;bool alive=WaitForSingleObject(process,0)==WAIT_TIMEOUT;CloseHandle(process);return alive;
 #else
-    std::string stat;std::ifstream file("/proc/"+std::to_string(pid)+"/stat");std::getline(file,stat);auto end=stat.rfind(')');return end!=std::string::npos && end+2<stat.size() && stat[end+2]!='Z';
+    std::string stat;std::ifstream file("/proc/"+std::to_string(pid)+"/stat");std::getline(file,stat);return live_proc_stat(stat);
 #endif
 }
 static int test_main(const std::vector<std::string>& args) {
@@ -53,6 +60,11 @@ static int test_main(const std::vector<std::string>& args) {
     SetErrorMode(SEM_FAILCRITICALERRORS|SEM_NOGPFAULTERRORBOX);
 #else
     struct rlimit no_core{0,0};setrlimit(RLIMIT_CORE,&no_core);
+    // /proc can transition from Z to X between the loop and final assertion.
+    // Dead states cannot execute; all runnable, sleeping and stopped states
+    // must still fail the worker ownership check.
+    for(char state:std::string("RSDTtPIKW"))require(live_proc_stat(std::string("123 (worker ) helper) ")+state+" 1 123"),"live worker misclassified");
+    for(char state:std::string("ZXx"))require(!live_proc_stat(std::string("123 (worker ) helper) ")+state+" 1 123"),"dead worker misclassified");
 #endif
     if(args.size()==3 && args[1]=="--orphan-parent") {
         std::ifstream input(fs::u8path(args[2]));Json wire;input>>wire;
