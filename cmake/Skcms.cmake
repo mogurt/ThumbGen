@@ -32,7 +32,7 @@ if(MSVC)
         endif()
         add_custom_command(OUTPUT "${_object}"
             COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/skcms/$<CONFIG>"
-            COMMAND "${THUMBGEN_CLANG_CL}" /nologo /c /O2 /MD /std:c++17 /DSKCMS_DISABLE_SKX=1
+            COMMAND "${THUMBGEN_CLANG_CL}" /nologo /c /O2 "/MD$<$<CONFIG:Debug>:d>" /std:c++17 /DSKCMS_DISABLE_SKX=1
                 /clang:-march=x86-64 ${_simd} "${_skcms_root}/${_source}" "/Fo${_object}"
             DEPENDS ${_skcms_inputs} VERBATIM)
         list(APPEND _objects "${_object}")

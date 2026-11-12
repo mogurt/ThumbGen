@@ -56,7 +56,7 @@ if capabilities['cpu']['oiio_simd'] != 'sse2':
 source_files = ['CMakeLists.txt', 'CMakePresets.json']
 source_files += [str(path.relative_to(repo)).replace('\\', '/') for directory in ('src', 'include', 'tests', 'schemas', 'cmake', 'scripts', 'dependencies', 'third_party')
                  for path in sorted((repo / directory).rglob('*'))
-                 if path.is_file() and path.suffix in ('.cpp', '.h', '.in', '.py', '.json', '.txt', '.patch', '.cmake', '.ps1', '.md')]
+                 if path.is_file() and path.suffix in ('.cpp', '.cc', '.h', '.in', '.py', '.json', '.txt', '.patch', '.cmake', '.ps1', '.md')]
 build_provenance = dict(cache_sha256=digest(build / 'CMakeCache.txt'),
                         projects={p.name: digest(p) for p in sorted(build.glob('thumbgen*.vcxproj'))})
 link = build / 'thumbgen.dir/Release/thumbgen.tlog/link.command.1.tlog'

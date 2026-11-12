@@ -147,6 +147,13 @@ if(BUILD_TESTING)
     add_executable(thumbgen_skcms_tests tests/test_skcms.cpp)
     target_link_libraries(thumbgen_skcms_tests PRIVATE thumbgen_skcms)
     add_test(NAME core_skcms COMMAND thumbgen_skcms_tests)
+    add_test(NAME core_skcms_baseline COMMAND thumbgen_skcms_tests --baseline)
+    add_executable(thumbgen_lut_colour_tests tests/test_lut_colour.cpp)
+    target_include_directories(thumbgen_lut_colour_tests PRIVATE src)
+    target_link_libraries(thumbgen_lut_colour_tests PRIVATE thumbgen_core thumbgen_skcms OpenImageIO::OpenImageIO LittleCMS2::LittleCMS2)
+    add_test(NAME core_lut_colour COMMAND thumbgen_lut_colour_tests)
+    set_tests_properties(core_lut_colour PROPERTIES TIMEOUT 120 ENVIRONMENT_MODIFICATION
+        "PATH=path_list_prepend:$<TARGET_FILE_DIR:OpenImageIO::OpenImageIO>;LD_LIBRARY_PATH=path_list_prepend:$<TARGET_FILE_DIR:OpenImageIO::OpenImageIO>")
     add_executable(thumbgen_integer_colour_tests tests/test_integer_colour.cpp)
     target_link_libraries(thumbgen_integer_colour_tests PRIVATE thumbgen_core OpenImageIO::OpenImageIO LittleCMS2::LittleCMS2)
     add_test(NAME core_integer_colour COMMAND thumbgen_integer_colour_tests)
@@ -452,6 +459,13 @@ if(BUILD_TESTING)
             set_tests_properties(public_interrupt PROPERTIES TIMEOUT 90 LABELS "protocol;scheduler")
         endif()
     endif()
+endif()
+
+
+option(THUMBGEN_BUILD_COLOUR_PROBE "Build the product API colour acceptance probe" OFF)
+if(THUMBGEN_BUILD_COLOUR_PROBE)
+    add_executable(thumbgen_colour_probe benchmarks/colour_study/product_probe.cpp)
+    target_link_libraries(thumbgen_colour_probe PRIVATE thumbgen_core)
 endif()
 
 # Each executable may have its own configuration/output directory. Preserve

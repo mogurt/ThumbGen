@@ -2,7 +2,8 @@
 #include <cmath>
 #include <iostream>
 #include <cstdint>
-int main() {
+int main(int argc,char**) {
+    if(argc>1)skcms_DisableRuntimeCPUDetection();
     auto linear=*skcms_sRGB_profile();
     skcms_SetTransferFunction(&linear,skcms_Identity_TransferFunction());
     const std::uint16_t source[]{0,32768,65535,32768};float result[4]{};

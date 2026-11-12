@@ -618,7 +618,7 @@
               "enum": [
                 "reference",
                 "srgb8-linear-v1",
-                  "integer-linear-v1"
+                "integer-linear-v1"
               ]
             }
           },

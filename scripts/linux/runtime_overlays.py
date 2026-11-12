@@ -65,6 +65,15 @@ def validate_component_inventory(manifest, repo):
     locked.update(OpenImageIO=dict(commit=lock['oiio_commit']), nlohmann_json=lock['nlohmann_json'])
     for name, identity in locked.items():
         require(all(inventory[name].get(k) == identity[k] for k in ('commit', 'version') if k in identity), 'Notice catalog source identity differs: ' + name)
+    # Vendored static components are versioned by the product source lock,
+    # independently of the externally built SDK notice catalog.
+    product_lock = json.loads((repo / 'dependencies/versions.json').read_text())
+    for name, notice, expected_sha in (
+        ('skcms', 'licenses/skcms/LICENSE', product_lock['skcms']['files']['LICENSE']),
+        ('stb_image_resize', 'licenses/stb_image_resize/LICENSE', sha(repo / 'dependencies/notices/stb-image-resize-2.50.txt'))):
+        expected.add(name)
+        inventory[name] = dict(commit=product_lock[name]['revision'],
+            notices=[dict(file=notice, sha256=expected_sha)])
     components = manifest['dependency_components']
     require(len(components) == len(expected) and {c['name'] for c in components} == expected,
             'Component inventory differs from complete source lock')
