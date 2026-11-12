@@ -18,6 +18,7 @@ int main(){try {
         if((ext=="jpeg" && (bits==16 || nc==4)) || (ext=="webp" && bits==16))continue;
         if((ext=="tga" || ext=="bmp") && (bits==16 || transfer!=0 || (ext=="bmp" && nc==4)))continue;
         auto name=std::to_string(id++);OIIO::ImageSpec s(127,65,nc,bits==16?OIIO::TypeDesc::UINT16:OIIO::TypeDesc::UINT8);s.alpha_channel=nc==4?3:-1;s.attribute("oiio:UnassociatedAlpha",1);
+        if(ext=="jpeg")s.attribute("jpeg:subsampling","4:4:4");
         if(ext=="tif")s.attribute("Orientation",1+(id%8));
         if(ext=="tga")s.attribute("compression","rle");
         if(transfer==3) {
@@ -32,10 +33,16 @@ int main(){try {
         for(const std::string background:{"black","white","transparent"}) {
             thumbgen::Job j;j.input=path.u8string();j.options.threads=1;j.options.background=background;j.options.input_space=transfer==1?"g22_rec709_scene":transfer>=2?"auto":"sRGB";
             j.outputs={{(root/(name+background+"-a.png")).u8string(),"png",32,32,90},{(root/(name+background+"-small-a.png")).u8string(),"png",13,11,90}};
+            const bool jpeg_check=ext=="jpeg" && transfer>=2 && background!="transparent";
+            if(jpeg_check)j.outputs.push_back({(root/(name+background+"-a.jpg")).u8string(),"jpeg",32,32,90});
             auto a=fast.convert(j);require(a.value("ok",false),a.dump());
             require(a["colour"]["processing"]==(bits==8 && transfer==0?"srgb8-linear-v1":"integer-linear-v1"),a.dump());
             if(transfer>=2)require(a["colour"]["icc"]["engine"]=="skcms",a.dump());
-            j.outputs[0].path=(root/(name+background+"-b.png")).u8string();j.outputs[1].path=(root/(name+background+"-small-b.png")).u8string();auto b=reference.convert(j);require(b.value("ok",false),b.dump());
+            j.outputs[0].path=(root/(name+background+"-b.png")).u8string();j.outputs[1].path=(root/(name+background+"-small-b.png")).u8string();if(jpeg_check)j.outputs[2].path=(root/(name+background+"-b.jpg")).u8string();auto b=reference.convert(j);require(b.value("ok",false),b.dump());
+            if(jpeg_check) {
+                auto x=OIIO::ImageInput::open(a["outputs"][2]["path"].get<std::string>()),y=OIIO::ImageInput::open(b["outputs"][2]["path"].get<std::string>());
+                require(x && y && x->spec().get_string_attribute("jpeg:subsampling")=="4:4:4" && x->spec().get_string_attribute("jpeg:subsampling")==y->spec().get_string_attribute("jpeg:subsampling"),"JPEG sampling changed");x->close();y->close();
+            }
             for(int out=0;out<2;++out) {
                 OIIO::ImageBuf x(a["outputs"][out]["path"].get<std::string>()),y(b["outputs"][out]["path"].get<std::string>());require(x.read(0,0,true,OIIO::TypeDesc::UINT8) && y.read(0,0,true,OIIO::TypeDesc::UINT8),"readback");
                 require(x.spec().image_bytes()==y.spec().image_bytes(),"size mismatch");OIIO::ImageSpec read_config;read_config.attribute("oiio:UnassociatedAlpha",1);

@@ -35,7 +35,12 @@ OIIO::ImageBuf resize_linear(const OIIO::ImageBuf& source,int width,int height) 
     if(source.spec().format!=OIIO::TypeDesc::FLOAT || !source.contiguous() ||
        !source.localpixels() || (channels!=3 && channels!=4) || width<1 || height<1)
         throw FileFailure("resize_failed","expected contiguous linear FLOAT RGB or RGBA input");
-    OIIO::ImageSpec spec(width,height,channels,OIIO::TypeDesc::FLOAT);spec.alpha_channel=channels==4?3:-1;
+    // Match ImageBufAlgo::resize metadata propagation. In particular an ICC
+    // JPEG's sampling configuration must survive the new linear resizer.
+    auto spec=source.spec();
+    spec.x=spec.y=spec.z=spec.full_x=spec.full_y=spec.full_z=0;
+    spec.width=spec.full_width=width;spec.height=spec.full_height=height;
+    spec.depth=spec.full_depth=1;spec.alpha_channel=channels==4?3:-1;
     OIIO::ImageBuf output(spec);
     if(!output.localpixels() || !stbir_resize(source.localpixels(),source.spec().width,source.spec().height,0,
         output.localpixels(),width,height,0,channels==4?STBIR_RGBA_PM:STBIR_RGB,
