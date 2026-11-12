@@ -1,2 +1,7 @@
+* text=auto eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+# Preserve pinned third-party notice bytes (including original whitespace).
+dependencies/notices/* -text -whitespace
 # Preserve pinned upstream source bytes, including upstream whitespace.
 third_party/stb/* -text -whitespace
