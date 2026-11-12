@@ -2,6 +2,7 @@
 #include "selection.h"
 #include "color_input.h"
 #include "cms_input.h"
+#include "colour_plan.h"
 #include "cmyk_jpeg.h"
 #include "build_info.h"
 #include "files.h"
@@ -497,13 +498,12 @@ Json Engine::convert(const Job& job) {
         const bool plain_rgba=spec.nchannels==4 && spec.alpha_channel==3 &&
             spec.get_int_attribute("oiio:UnassociatedAlpha",0)==1 &&
             spec.channelnames==std::vector<std::string>({"R","G","B","A"}) && channels==std::vector<int>({0,1,2,3});
-        const bool fast_srgb=!impl_->control.reference_colour && !data && !deep && !cmyk &&
-            !container_icc && !spec.find_attribute("ICCProfile") && icc_format &&
-            job.options.preset=="balanced" && requested_config=="ocio://default" &&
-            job.options.display.empty() && (requested_input=="sRGB" || requested_input=="srgb_rec709_scene" || requested_input=="sRGB Encoded Rec.709 (sRGB)") &&
-            spec.format==OIIO::TypeDesc::UINT8 && spec.channelformats.empty() && (plain_rgb || plain_rgba) &&
-            spec.depth==1 && spec.x==0 && spec.y==0 && spec.full_x==0 && spec.full_y==0 &&
-            spec.width==spec.full_width && spec.height==spec.full_height;
+        const auto colour_plan=detail::colour_plan(spec,input_format,
+            !impl_->control.reference_colour && !data && !deep && !cmyk &&
+            job.options.preset=="balanced" && requested_config=="ocio://default" && job.options.display.empty(),
+            plain_rgb || plain_rgba,container_icc || spec.find_attribute("ICCProfile"),use_icc,requested_input);
+        const bool fast_srgb=colour_plan.route==detail::ColourPlan::Route::srgb8;
+        const bool integer_linear=colour_plan.route==detail::ColourPlan::Route::integer_linear;
         if(impl_->control.planned) {
             auto span=std::minmax_element(channels.begin(),channels.end());
             int display_width=spec.full_width,display_height=spec.full_height;
@@ -521,11 +521,11 @@ Json Engine::convert(const Job& job) {
                 {"footprint",{{"data_width",spec.width},{"data_height",spec.height},
                     {"display_width",display_width},{"display_height",display_height},
                     {"channel_span",cmyk?4:*span.second-*span.first+1},{"selected_channels",data || deep?4:channels.size()},
-                    {"source_sample_bytes",fast_srgb?1:input_plan.sample_bytes},{"source_pixel_bytes",fast_srgb?channels.size():input_plan.pixel_bytes},
+                    {"source_sample_bytes",colour_plan.linear()?colour_plan.sample_bytes:input_plan.sample_bytes},{"source_pixel_bytes",colour_plan.linear()?channels.size()*colour_plan.sample_bytes:input_plan.pixel_bytes},
                     {"source_buffer_bytes",sampled?sampled->peak_bytes:0},
                     {"deep_buffer_bytes",deep?job.options.max_decode_mib*1024ULL*1024ULL:0},
                     {"cms_buffer_bytes",use_icc?detail::cms_reservation:0},
-                    {"native_categorical",categorical},{"srgb8",fast_srgb},
+                    {"native_categorical",categorical},{"srgb8",fast_srgb},{"integer_linear",integer_linear},
                     {"output_width",largest_w},{"output_height",largest_h},{"threads",job.options.threads}}},
                 {"sequence_pin",sequence_lock(job.sequence_id)}};
             impl_->control.planned(job,plan);
@@ -597,8 +597,8 @@ Json Engine::convert(const Job& job) {
             // The standard scene-sRGB bridge has linear Rec.709 primaries.
             // Custom configs, ICC, cropped windows and non-colour inputs keep
             // the reference path. Selection is already settled above.
-            if(fast_srgb) {
-                if(config_name!="ocio://default" || config->get_color_interop_id(input_space)!="srgb_rec709_scene" ||
+            if(colour_plan.linear()) {
+                if(config_name!="ocio://default" || (!integer_linear && config->get_color_interop_id(input_space)!="srgb_rec709_scene") ||
                    config->get_color_interop_id(output_space)!="srgb_rec709_scene")
                     throw Failure("colour_failed","standard sRGB fast-path colour contract changed");
                 bool found=false;
@@ -611,7 +611,8 @@ Json Engine::convert(const Job& job) {
                 if(!found)throw Failure("colour_space_not_found","standard linear Rec.709 space is unavailable");
             }
             r["colour"]["working_space"]=working_space;
-            r["colour"]["processing"]=fast_srgb?"srgb8-linear-v1":"reference";
+            r["colour"]["processing"]=colour_plan.processing();
+            if(!colour_plan.fallback.empty())r["colour"]["fallback_reason"]=colour_plan.fallback;
             if(use_icc)r["colour"]["icc"]={{"engine","LittleCMS2 2.20"},{"intent","relative_colorimetric"},{"black_point_compensation",false},
                 {"model",cmyk?"CMYK":chosen.candidate.kind=="grey"?"Gray":"RGB"},
                 {"bridge","srgb_rec709_scene"},{"profile_limit_bytes",detail::icc_profile_limit},{"cms_limit_bytes",detail::cms_memory_limit},
@@ -629,7 +630,38 @@ Json Engine::convert(const Job& job) {
         // throughout all outputs, as in the original colour conversion path.
         std::vector<float> pixels;
         detail::DeepImage deep_image;
-        if(fast_srgb) {
+        if(integer_linear) {
+            stage="decode";tick=Clock::now();
+            const std::size_t budget=job.options.max_decode_mib*1024ULL*1024ULL;
+            const std::size_t reservation=use_icc?detail::cms_reservation:0;
+            // Reserve native + complete linear image + possible orientation copy
+            // before allocation. Reference ICC validation fits the same reserve.
+            const std::size_t per_pixel=channels.size()*(colour_plan.sample_bytes+2*sizeof(float));
+            std::size_t count=std::size_t(spec.width);
+            if(reservation>budget || count>(budget-reservation)/per_pixel/std::size_t(spec.height))
+                throw Failure("decode_limit_exceeded","native colour source and linear buffers exceed decode budget");
+            count*=std::size_t(spec.height);
+            if(use_icc) {
+                const auto* profile=spec.find_attribute("ICCProfile");detail::CmsStats stats;
+                try {{detail::CmsInput validate(profile->data(),std::size_t(profile->datasize()),detail::CmsModel::rgb,stats);}
+                    if(stats.live)throw detail::CmsFailure("CMS allocation ledger did not return to zero");}
+                catch(const detail::CmsFailure& e){throw Failure("colour_input_unsupported",e.what());}
+                r["colour"]["icc"]["engine"]="skcms";r["colour"]["icc"]["peak_bytes"]=stats.peak;
+            }
+            std::vector<std::uint16_t> native16(colour_plan.sample_bytes==2?count*channels.size():0);
+            std::vector<std::uint8_t> native8(colour_plan.sample_bytes==1?count*channels.size():0);
+            void* native=colour_plan.sample_bytes==2?static_cast<void*>(native16.data()):static_cast<void*>(native8.data());
+            if(!in->read_image(part,0,0,spec.nchannels,spec.format,native))throw Failure("decode_failed",in->geterror());
+            in->close();if(impl_->observer)impl_->observer("decoded",job);verify_source();
+            r["timings_ms"]["decode"]=ms(tick);tick=Clock::now();
+            auto linear=spec;linear.set_format(OIIO::TypeDesc::FLOAT);linear.erase_attribute("ICCProfile");linear.attribute("oiio:UnassociatedAlpha",0);
+            working.reset(linear);order=channels;
+            if(!working.localpixels())throw Failure("decode_failed","cannot allocate linear colour image");
+            try {colour_plan.transform(native,static_cast<float*>(working.localpixels()),count,spec.nchannels);}
+            catch(const detail::CmsFailure& e){throw Failure("colour_input_unsupported",e.what());}
+            r["timings_ms"]["input_colour"]=ms(tick);
+            r["decoded_mib"]=double(count*channels.size()*colour_plan.sample_bytes)/1048576;
+        } else if(fast_srgb) {
             stage="decode";tick=Clock::now();
             const size_t count=size_t(spec.width)*size_t(spec.height)*channels.size();
             if(count>job.options.max_decode_mib*1024ULL*1024ULL)
@@ -781,7 +813,7 @@ Json Engine::convert(const Job& job) {
             check(iba::reorient(oriented,working),oriented,"orientation_failed");working=std::move(oriented);
         }
         stage="colour";tick=Clock::now();
-        if(!data && !fast_srgb && input_space!=working_space)
+        if(!data && !colour_plan.linear() && input_space!=working_space)
             check(iba::colorconvert(working,working,input_space,working_space,true,"","",config),working,"colour_failed");
         r["timings_ms"]["working_colour"]=ms(tick);
         const std::string filter=categorical?"nearest":job.options.preset=="fast"?"box":job.options.preset=="quality"?"lanczos3":"triangle";
@@ -809,6 +841,8 @@ Json Engine::convert(const Job& job) {
                 tick=Clock::now();
                 if(fast_srgb)
                     preview=detail::resize_srgb8(working,w,h);
+                else if(integer_linear)
+                    preview=detail::resize_linear(working,w,h);
                 else if(crypto && w==display_width && h==display_height)
                     check(preview.copy(working),preview,"resize_failed");
                 else if(categorical)

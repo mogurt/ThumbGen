@@ -30,4 +30,18 @@ OIIO::ImageBuf resize_srgb8(const OIIO::ImageBuf& source,int width,int height) {
     if(!stbir_resize_extended(&resize))throw FileFailure("resize_failed","sRGB resize failed");
     return output;
 }
+OIIO::ImageBuf resize_linear(const OIIO::ImageBuf& source,int width,int height) {
+    const int channels=source.nchannels();
+    if(source.spec().format!=OIIO::TypeDesc::FLOAT || !source.contiguous() ||
+       !source.localpixels() || (channels!=3 && channels!=4) || width<1 || height<1)
+        throw FileFailure("resize_failed","expected contiguous linear FLOAT RGB or RGBA input");
+    OIIO::ImageSpec spec(width,height,channels,OIIO::TypeDesc::FLOAT);spec.alpha_channel=channels==4?3:-1;
+    OIIO::ImageBuf output(spec);
+    if(!output.localpixels() || !stbir_resize(source.localpixels(),source.spec().width,source.spec().height,0,
+        output.localpixels(),width,height,0,channels==4?STBIR_RGBA_PM:STBIR_RGB,
+        STBIR_TYPE_FLOAT,STBIR_EDGE_CLAMP,STBIR_FILTER_TRIANGLE))
+        throw FileFailure("resize_failed","linear float resize failed");
+    return output;
+}
+
 }
