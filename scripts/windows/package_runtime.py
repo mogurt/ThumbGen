@@ -145,12 +145,13 @@ def pack(exe, sdk, evidence_file, output, runtime_notices, color_overlay=None, b
     components.append(dict(name='stb_image_resize', version=stb['version'], commit=stb['revision'],
                            repository=stb['repository'], license=stb['license'], linkage='static/header-only',
                            notices=[dict(file=destination, sha256=hashlib.sha256(notice).hexdigest())]))
-    notice_index = ['INTERNAL EVALUATION CANDIDATE - project license not selected.',
+    notice_index = ['INTERNAL EVALUATION CANDIDATE - ThumbGen is Apache-2.0.',
                     'This index preserves upstream notices; redistribution review remains open.', '']
     for component in components:
         notice_index.append(component['name'] + ' (' + str(component.get('version', '')) + ')')
         for notice in component['notices']:
             notice_index.append('  ' + notice['file'] + '  sha256=' + notice['sha256'])
+    add('LICENSE', (repo / 'LICENSE').read_bytes())
     add('NOTICE.txt', ('\n'.join(notice_index) + '\n').encode('utf-8'))
     add('SOURCE-PROVENANCE.json', encode(dict(source_lock=sdk_receipt['source_lock'],
         source_lock_sha256=sdk_receipt['source_lock_sha256'], build_scripts_sha256=sdk_receipt['build_scripts_sha256'],
@@ -163,14 +164,14 @@ def pack(exe, sdk, evidence_file, output, runtime_notices, color_overlay=None, b
     recipes['dependencies/windows_overlays.py'] = digest(Path(overlays.__file__))
     for name in ('overlay_provenance.py', 'build_verified_overlay.py'):
         recipes['dependencies/' + name] = digest(Path(overlays.__file__).parent / name)
-    manifest = dict(kind='internal-evaluation-candidate', redistribution_ready=False, project_license='not selected',
+    manifest = dict(kind='internal-evaluation-candidate', redistribution_ready=False, project_license='Apache-2.0',
                     identity=evidence['identity'], executable_sha256=digest(exe), runtime_files=closure['files'],
                     system_dependencies=closure['system_dependencies'], components=components, package_recipes_sha256=recipes,
                     limitations=closure['limitations'], outstanding_requirements=[
-                        'Project license decision', 'Final static/embedded notice and MSVC runtime distribution review',
+                        'Final static/embedded notice and MSVC runtime distribution review',
                         'Minimum Windows 10 20H2/CPU validation and clean target-machine acceptance'])
     add('DEPENDENCIES.json', encode(manifest))
-    add('README.txt', b'INTERNAL EVALUATION CANDIDATE\n\nRun bin/thumbgen.exe --version --json or bin/thumbgen.exe capabilities --json.\nProject license not selected. Redistribution is not approved.\nSee DEPENDENCIES.json and SOURCE-PROVENANCE.json for scope and outstanding gates.\nNo Python, compiler or SDK is required to run the packaged program.\n')
+    add('README.txt', b'INTERNAL EVALUATION CANDIDATE\n\nRun bin/thumbgen.exe --version --json or bin/thumbgen.exe capabilities --json.\nThumbGen is Apache-2.0. Third-party licenses and remaining validation requirements are listed below.\nSee DEPENDENCIES.json and SOURCE-PROVENANCE.json for scope and outstanding gates.\nNo Python, compiler or SDK is required to run the packaged program.\n')
     hashes = {name: digest(value) if isinstance(value, Path) else hashlib.sha256(value).hexdigest() for name, value in payload.items()}
     add('SHA256SUMS', ''.join(hashes[name] + '  ' + name + '\n' for name in sorted(hashes)).encode())
     fingerprint = hashlib.sha256(encode(hashes)).hexdigest()

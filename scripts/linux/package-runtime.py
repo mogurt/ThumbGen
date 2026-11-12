@@ -241,7 +241,7 @@ with tempfile.TemporaryDirectory(prefix='candidate-', dir=work) as temporary:
                 notice_source='CentOS libgcc-4.8.5-44.el7.x86_64.rpm, signature verified; GPL texts and exception 3.1',
                 notice_rpm_sha256='cb1967fba485ad3da345e33018c0e8b367359f251c6b1a8847a4976579d74ffa',
                 review='GPL texts and GCC Runtime Library Exception 3.1 retained; eligible compilation and corresponding-source obligations need release review'))
-    manifest = dict(kind='internal-evaluation-candidate', redistribution_ready=False, project_license='not selected; no project LICENSE supplied',
+    manifest = dict(kind='internal-evaluation-candidate', redistribution_ready=False, project_license='Apache-2.0',
                     package_recipe_sha256=recipe_sha256,
                     packaging_recipe_inputs=recipe_inputs,
                     overlay_auditor_sha256=digest(Path(__file__).with_name('runtime_overlays.py')),
@@ -254,7 +254,7 @@ with tempfile.TemporaryDirectory(prefix='candidate-', dir=work) as temporary:
                     dependency_components=components, target_os_libraries=external,
                     validation_closure_objects=len(json.loads((stage / 'runtime-provenance.json').read_text())['audit']['objects']),
                     executable_closure_objects=len(seen), bundled_elf_objects=len(abi),
-                    outstanding_requirements=['Project license decision', 'GCC Runtime Library Exception applicability and any corresponding-source delivery requirements',
+                    outstanding_requirements=['GCC Runtime Library Exception applicability and any corresponding-source delivery requirements',
                                               'Final review of embedded/vendored component notices and distribution obligations',
                                               'Clean-machine, physical minimum OS and CPU validation not performed'])
     validate_component_inventory(manifest, repo)
@@ -276,8 +276,9 @@ with tempfile.TemporaryDirectory(prefix='candidate-', dir=work) as temporary:
     manifest['payload_symlinks'] = {str(path.relative_to(root)): os.readlink(path) for path in root.rglob('*') if path.is_symlink()}
     (root / 'DEPENDENCIES.json').write_text(json.dumps(manifest, indent=2, sort_keys=True) + '\n')
     (root / 'ABI_REQUIREMENTS.json').write_text(json.dumps(abi, indent=2, sort_keys=True) + '\n')
-    (root / 'NOTICE').write_text('INTERNAL CANDIDATE ONLY. ThumbGen project license has not been selected.\n'
-        'This notice does not grant a project license or certify redistribution readiness.\n'
+    shutil.copyfile(repo / 'LICENSE', root / 'LICENSE')
+    (root / 'NOTICE').write_text('INTERNAL CANDIDATE ONLY. ThumbGen is Apache-2.0.\n'
+        'Upstream licenses and validation scope are recorded in DEPENDENCIES.json.\n'
         'OpenImageIO and static/header dependencies are attributed in DEPENDENCIES.json.\n'
         'Verbatim upstream notices, licenses, copyright statements and patent texts are in licenses/.\n'
         'OpenImageIO THIRD-PARTY.md includes embedded components; additional nested notices are retained conservatively.\n'
