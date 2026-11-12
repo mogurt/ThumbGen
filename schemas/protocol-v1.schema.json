@@ -1331,6 +1331,20 @@
         "quantization": {
           "const": "unorm8-half-up-v1"
         },
+        "png_encoding": {
+          "type": "object",
+          "properties": {
+            "compression_levels": {
+              "type": "object",
+              "properties": {"fast": {"const": 1}, "balanced": {"const": 3}, "quality": {"const": 6}},
+              "required": ["fast", "balanced", "quality"],
+              "additionalProperties": false
+            },
+            "filter": {"const": "adaptive"}
+          },
+          "required": ["compression_levels", "filter"],
+          "additionalProperties": false
+        },
         "input_plugins": {
           "type": "string"
         },

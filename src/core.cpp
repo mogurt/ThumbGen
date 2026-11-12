@@ -228,6 +228,7 @@ Json Engine::capabilities() {
         {"cpu",{{"runtime_simd",OIIO::get_string_attribute("hw:simd")},{"oiio_simd",OIIO::get_string_attribute("build:simd")}}},
         {"selection_policy","v2"},
         {"quantization","unorm8-half-up-v1"},
+        {"png_encoding",{{"compression_levels",{{"fast",1},{"balanced",3},{"quality",6}}},{"filter","adaptive"}}},
         {"colour_processing",{"reference","srgb8-linear-v1","integer-linear-v1"}},
         {"icc_engines",{"LittleCMS2 2.20","skcms"}},
         {"visualization_modes",{"colour","depth","normal","vector","id","id_rgb","cryptomatte"}},
@@ -891,6 +892,10 @@ Json Engine::convert(const Job& job) {
                 // (EXR zip, TIFF lzw, WebP lossless, or codec:quality) must not
                 // override the requested output codec and quality.
                 preview.specmod().erase_attribute("compression");
+                if(out.format=="png") {
+                    preview.specmod().attribute("png:compressionLevel",job.options.preset=="fast"?1:job.options.preset=="quality"?6:3);
+                    preview.specmod().attribute("png:filter",248); // PNG_ALL_FILTERS, explicit adaptive filtering.
+                }
                 if(out.format=="jpeg" || out.format=="webp")
                     preview.specmod().attribute("compression",out.format+":"+std::to_string(out.quality));
                 preview.specmod().attribute("CompressionQuality",out.quality);

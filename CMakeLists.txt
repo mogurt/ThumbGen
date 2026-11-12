@@ -445,6 +445,10 @@ if(BUILD_TESTING)
             if(NOT THUMBGEN_SCHEMA_IMPORT EQUAL 0)
                 message(FATAL_ERROR "Protocol tests require tests/requirements.txt in Python3_EXECUTABLE; or explicitly set THUMBGEN_TEST_PROTOCOL=OFF")
             endif()
+            add_test(NAME public_png_encoding COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_png_encoding.py --exe $<TARGET_FILE:thumbgen>
+                --runtime-dir $<TARGET_FILE_DIR:OpenImageIO::OpenImageIO> --schema-dir ${CMAKE_CURRENT_SOURCE_DIR}/schemas)
+            set_tests_properties(public_png_encoding PROPERTIES TIMEOUT 120 LABELS "protocol")
             add_test(NAME public_protocol COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_protocol.py --exe $<TARGET_FILE:thumbgen>
                 --matrix-exe $<TARGET_FILE:thumbgen_image_matrix> --schema-dir ${CMAKE_CURRENT_SOURCE_DIR}/schemas
