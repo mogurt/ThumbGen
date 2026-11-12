@@ -1,7 +1,17 @@
 {
   "schema_version": 1,
   "OpenImageIO": "3.2.1.2",
-  "nlohmann_json": {"Windows": "3.12.0", "Linux": "3.11.3"},
+  "nlohmann_json": {
+    "Windows": "3.12.0",
+    "Linux": "3.11.3"
+  },
   "windows_sdk": "windows-sdk.explicit.txt",
-  "linux_sources": "../scripts/linux/sources-lock.json"
+  "linux_sources": "../scripts/linux/sources-lock.json",
+  "stb_image_resize": {
+    "version": "2.50",
+    "repository": "https://github.com/nothings/stb_image_resize",
+    "revision": "703100c5f8a0b75b4861e401db567f1d82d545b8",
+    "header_sha256": "b04df6aa2fdd476ebcddcafd8e634014e34d29f89f6b648b137f2efa66f3bd47",
+    "license": "MIT"
+  }
 }
