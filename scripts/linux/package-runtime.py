@@ -171,6 +171,15 @@ with tempfile.TemporaryDirectory(prefix='candidate-', dir=work) as temporary:
     edit_script.write_text('\n'.join(edits) + '\n')
     subprocess.check_call([str(cmake), '-P', str(edit_script)])
     components = []
+    stb = json.loads((repo / 'dependencies/versions.json').read_text())['stb_image_resize']
+    if digest(repo / 'third_party/stb/stb_image_resize2.h') != stb['header_sha256']:
+        raise SystemExit('Vendored resizer differs from dependency lock')
+    stb_notice = root / 'licenses/stb_image_resize/LICENSE'
+    stb_notice.parent.mkdir(parents=True)
+    shutil.copyfile(repo / 'dependencies/notices/stb-image-resize-2.50.txt', stb_notice)
+    components.append(dict(name='stb_image_resize', version=stb['version'], commit=stb['revision'],
+        repository=stb['repository'], license=stb['license'], linkage='static/header-only',
+        notices=[dict(file=stb_notice.relative_to(root).as_posix(), sha256=digest(stb_notice))]))
     def notices(component, source, metadata):
         found = []
         if not source.is_dir():

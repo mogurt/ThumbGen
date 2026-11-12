@@ -136,6 +136,15 @@ def pack(exe, sdk, evidence_file, output, runtime_notices, color_overlay=None, b
     components.append(dict(name='MSVC-runtime', version=Path(sdk_receipt['runtime']['source']).name,
                            source='Selected Visual Studio 2022 redistributable', notices=notices,
                            review='Original installed VS materials retained; they may be link pointers, not complete terms. File counts do not establish MSVC redistribution eligibility or completed license review.'))
+    stb = json.loads((repo / 'dependencies/versions.json').read_text())['stb_image_resize']
+    if digest(repo / 'third_party/stb/stb_image_resize2.h') != stb['header_sha256']:
+        raise ValueError('Vendored resizer differs from dependency lock')
+    notice = (repo / 'dependencies/notices/stb-image-resize-2.50.txt').read_bytes()
+    destination = 'licenses/stb_image_resize/LICENSE'
+    add(destination, notice)
+    components.append(dict(name='stb_image_resize', version=stb['version'], commit=stb['revision'],
+                           repository=stb['repository'], license=stb['license'], linkage='static/header-only',
+                           notices=[dict(file=destination, sha256=hashlib.sha256(notice).hexdigest())]))
     notice_index = ['INTERNAL EVALUATION CANDIDATE - project license not selected.',
                     'This index preserves upstream notices; redistribution review remains open.', '']
     for component in components:

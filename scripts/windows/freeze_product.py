@@ -54,7 +54,7 @@ overlays.require_bounded_selection(capabilities, args.bounded_overlay)
 if capabilities['cpu']['oiio_simd'] != 'sse2':
     raise RuntimeError('Candidate does not meet requested OIIO SSE2 profile')
 source_files = ['CMakeLists.txt', 'CMakePresets.json']
-source_files += [str(path.relative_to(repo)).replace('\\', '/') for directory in ('src', 'include', 'tests', 'schemas', 'cmake', 'scripts', 'dependencies')
+source_files += [str(path.relative_to(repo)).replace('\\', '/') for directory in ('src', 'include', 'tests', 'schemas', 'cmake', 'scripts', 'dependencies', 'third_party')
                  for path in sorted((repo / directory).rglob('*'))
                  if path.is_file() and path.suffix in ('.cpp', '.h', '.in', '.py', '.json', '.txt', '.patch', '.cmake', '.ps1', '.md')]
 build_provenance = dict(cache_sha256=digest(build / 'CMakeCache.txt'),
