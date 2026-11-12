@@ -33,6 +33,8 @@ public:
     // Internal phase observer; used by native integration tests and future scheduling.
     using Observer = std::function<void(const std::string&,const Job&)>;
     struct Control {
+        // Internal reference switch for paired processing tests, not a CLI option.
+        bool reference_colour=false;
         // Called after metadata selection, before colour/pixel allocation.
         std::function<void(const Job&,const Json&)> planned;
         // The controller owns the returned absolute, nonexistent temporary path.

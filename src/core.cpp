@@ -6,6 +6,7 @@
 #include "build_info.h"
 #include "files.h"
 #include "quantize.h"
+#include "resize_srgb.h"
 #include "data_image.h"
 #include "selected_input.h"
 #include "cryptomatte.h"
@@ -510,6 +511,7 @@ Json Engine::convert(const Job& job) {
         }
         OIIO::ColorConfig* config=nullptr;
         std::string working_space,input_space,output_space;
+        bool fast_srgb=false;
         if(!data) {
             stage="colour";
             const bool embedded_icc=container_icc || spec.find_attribute("ICCProfile");
@@ -571,6 +573,30 @@ Json Engine::convert(const Job& job) {
             r["colour"]={{"input_space",input_space},{"input_requested",from},{"basis",basis},
                 {"working_space",working_space},{"output_space",output_space},{"ocio_config",config->configname()},
                 {"config_basis",config_basis},{"display",job.options.display},{"view",job.options.view}};
+            // The standard scene-sRGB bridge has linear Rec.709 primaries.
+            // Custom configs, ICC, cropped windows and non-colour inputs keep
+            // the reference path. Selection is already settled above.
+            const bool plain_layout=(spec.nchannels==3 || spec.nchannels==4) &&
+                channels.size()==std::size_t(spec.nchannels) &&
+                spec.channelnames==std::vector<std::string>({"R","G","B"}) &&
+                channels==std::vector<int>({0,1,2});
+            if(!impl_->control.reference_colour && !deep && !cmyk && !embedded_icc &&
+               icc_format && job.options.preset=="balanced" && config_name=="ocio://default" &&
+               job.options.display.empty() && spec.format==OIIO::TypeDesc::UINT8 &&
+               spec.channelformats.empty() && plain_layout && spec.depth==1 &&
+               spec.x==0 && spec.y==0 && spec.full_x==0 && spec.full_y==0 &&
+               spec.width==spec.full_width && spec.height==spec.full_height &&
+               config->get_color_interop_id(input_space)=="srgb_rec709_scene" &&
+               config->get_color_interop_id(output_space)=="srgb_rec709_scene") {
+                for(int i=0;i<config->getNumColorSpaces();++i) {
+                    std::string name(config->getColorSpaceNameByIndex(i));
+                    if(config->get_color_interop_id(name)=="lin_rec709_scene" && config->isColorSpaceLinear(name)) {
+                        working_space=name;fast_srgb=true;break;
+                    }
+                }
+            }
+            r["colour"]["working_space"]=working_space;
+            r["colour"]["processing"]=fast_srgb?"srgb8-linear-v1":"reference";
             if(use_icc)r["colour"]["icc"]={{"engine","LittleCMS2 2.20"},{"intent","relative_colorimetric"},{"black_point_compensation",false},
                 {"model",cmyk?"CMYK":chosen.candidate.kind=="grey"?"Gray":"RGB"},
                 {"bridge","srgb_rec709_scene"},{"profile_limit_bytes",detail::icc_profile_limit},{"cms_limit_bytes",detail::cms_memory_limit},
@@ -588,7 +614,20 @@ Json Engine::convert(const Job& job) {
         // throughout all outputs, as in the original colour conversion path.
         std::vector<float> pixels;
         detail::DeepImage deep_image;
-        if(data) {
+        if(fast_srgb) {
+            stage="decode";tick=Clock::now();
+            const size_t count=size_t(spec.width)*size_t(spec.height)*channels.size();
+            if(count>job.options.max_decode_mib*1024ULL*1024ULL)
+                throw Failure("decode_limit_exceeded","decoded source buffer exceeds limit");
+            auto native=spec;native.set_format(OIIO::TypeDesc::UINT8);
+            native.erase_attribute("ICCProfile");native.attribute("oiio:UnassociatedAlpha",1);
+            working.reset(native);
+            if(!in->read_image(part,0,0,spec.nchannels,OIIO::TypeDesc::UINT8,working.localpixels()))
+                throw Failure("decode_failed",in->geterror());
+            in->close();if(impl_->observer)impl_->observer("decoded",job);verify_source();
+            order=channels;r["decoded_mib"]=double(count)/1048576;
+            r["timings_ms"]["decode"]=ms(tick);
+        } else if(data) {
             stage="visualization";
             try {
                 data_image=sampled?detail::read_sampled_id(*in,spec,part,*sampled,mapping,job.options.max_decode_mib*1024ULL*1024ULL):
@@ -727,7 +766,7 @@ Json Engine::convert(const Job& job) {
             check(iba::reorient(oriented,working),oriented,"orientation_failed");working=std::move(oriented);
         }
         stage="colour";tick=Clock::now();
-        if(!data && input_space!=working_space)
+        if(!data && !fast_srgb && input_space!=working_space)
             check(iba::colorconvert(working,working,input_space,working_space,true,"","",config),working,"colour_failed");
         r["timings_ms"]["working_colour"]=ms(tick);
         const std::string filter=categorical?"nearest":job.options.preset=="fast"?"box":job.options.preset=="quality"?"lanczos3":"triangle";
@@ -753,7 +792,9 @@ Json Engine::convert(const Job& job) {
                 int w=std::max(1,int(std::lround(display_width*scale))),h=std::max(1,int(std::lround(display_height*scale)));
                 OIIO::ImageBuf preview;
                 tick=Clock::now();
-                if(crypto && w==display_width && h==display_height)
+                if(fast_srgb)
+                    preview=detail::resize_srgb8(working,w,h);
+                else if(crypto && w==display_width && h==display_height)
                     check(preview.copy(working),preview,"resize_failed");
                 else if(categorical)
                     preview=detail::categorical_preview(data_image,w,h,job.options.max_decode_mib*1024ULL*1024ULL,job.options.threads);

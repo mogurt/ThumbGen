@@ -564,18 +564,60 @@
             "icc": {
               "type": "object",
               "properties": {
-                "engine": {"const": "LittleCMS2 2.20"},
-                "model": {"enum": ["RGB","Gray","CMYK"]},
-                "intent": {"const": "relative_colorimetric"},
-                "black_point_compensation": {"const": false},
-                "bridge": {"const": "srgb_rec709_scene"},
-                "profile_limit_bytes": {"type":"integer","minimum":1},
-                "cms_limit_bytes": {"type":"integer","minimum":1},
-                "reservation_bytes": {"type":"integer","minimum":1},
-                "peak_bytes": {"type":"integer","minimum":0}
+                "engine": {
+                  "const": "LittleCMS2 2.20"
+                },
+                "model": {
+                  "enum": [
+                    "RGB",
+                    "Gray",
+                    "CMYK"
+                  ]
+                },
+                "intent": {
+                  "const": "relative_colorimetric"
+                },
+                "black_point_compensation": {
+                  "const": false
+                },
+                "bridge": {
+                  "const": "srgb_rec709_scene"
+                },
+                "profile_limit_bytes": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "cms_limit_bytes": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "reservation_bytes": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "peak_bytes": {
+                  "type": "integer",
+                  "minimum": 0
+                }
               },
-              "required": ["engine","model","intent","black_point_compensation","bridge","profile_limit_bytes","cms_limit_bytes","reservation_bytes","peak_bytes"],
+              "required": [
+                "engine",
+                "model",
+                "intent",
+                "black_point_compensation",
+                "bridge",
+                "profile_limit_bytes",
+                "cms_limit_bytes",
+                "reservation_bytes",
+                "peak_bytes"
+              ],
               "additionalProperties": false
+            },
+            "processing": {
+              "enum": [
+                "reference",
+                "srgb8-linear-v1"
+              ]
             }
           },
           "required": [
@@ -1391,7 +1433,14 @@
         },
         "deep_compressions": {
           "type": "array",
-          "items": { "enum": ["none", "rle", "zips", "zstd"] },
+          "items": {
+            "enum": [
+              "none",
+              "rle",
+              "zips",
+              "zstd"
+            ]
+          },
           "uniqueItems": true
         },
         "deep_modes": {
