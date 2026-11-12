@@ -372,7 +372,7 @@ bool run_isolated(const std::vector<Job>& jobs,const std::string& executable,con
                         try {source=source_stamp(fs::u8path(job.input));}
                         catch(const FileFailure&){throw FileFailure("source_changed","source could not be verified after metadata preparation",true);}
                         if(stamp_json(*source)!=payload["source_stamp"])throw FileFailure("source_changed","source changed during metadata preparation",true);
-                        const auto& f=payload["footprint"];fields(f,{"data_width","data_height","display_width","display_height","channel_span","selected_channels","output_width","output_height","threads","source_sample_bytes","source_pixel_bytes","source_buffer_bytes","native_categorical","deep_buffer_bytes","cms_buffer_bytes"});
+                        const auto& f=payload["footprint"];fields(f,{"data_width","data_height","display_width","display_height","channel_span","selected_channels","output_width","output_height","threads","source_sample_bytes","source_pixel_bytes","source_buffer_bytes","native_categorical","deep_buffer_bytes","cms_buffer_bytes","srgb8"});
                         const bool categorical=job.options.visualization=="id" || job.options.visualization=="id_rgb";
                         check(f["native_categorical"].is_boolean() && f["native_categorical"]==categorical,"worker categorical footprint mismatch");
                         check(number(f["threads"],256)==unsigned(job.options.threads),"plan thread quota mismatch");
@@ -380,13 +380,19 @@ bool run_isolated(const std::vector<Job>& jobs,const std::string& executable,con
                             number(f["channel_span"],2147483647),number(f["selected_channels"],4),number(f["output_width"],32768),number(f["output_height"],32768),unsigned(job.options.threads),unsigned(number(f["source_sample_bytes"],8)),categorical,number(f["source_pixel_bytes"],32),number(f["source_buffer_bytes"],std::numeric_limits<std::uint64_t>::max())};
                         shape.deep_buffer_bytes=number(f["deep_buffer_bytes"],16384ULL*1024*1024);
                         shape.cms_buffer_bytes=number(f["cms_buffer_bytes"],64ULL*1024*1024);
+                        check(f["srgb8"].is_boolean(),"worker sRGB8 footprint mismatch");
+                        const bool srgb8=f["srgb8"].get<bool>();
+                        shape.srgb8=srgb8;
+                        check(!srgb8 || (job.options.visualization=="colour" && job.options.preset=="balanced" &&
+                            !base.contains("deep") && base.contains("source") && base["source"]["sample_type"]=="uint8"),"invalid sRGB8 processing plan");
                         check(!shape.cms_buffer_bytes || (job.options.visualization=="colour" && job.options.input_space=="auto" && !base.contains("deep")),"invalid worker CMS footprint");
                         check(base.contains("deep")?(shape.deep_buffer_bytes==job.options.max_decode_mib*1024ULL*1024ULL && shape.selected_channels==4 && !categorical && !shape.source_buffer_bytes):shape.deep_buffer_bytes==0,"worker Deep budget mismatch");
                         check(shape.source_buffer_bytes?(job.options.visualization=="id" && base.contains("source_read") && base["source_read"]["buffer_bytes"]==shape.source_buffer_bytes):!base.contains("source_read"),"sampled source footprint mismatch");
                         check(shape.data_width && shape.data_height && shape.display_width && shape.display_height && shape.channel_span &&
                             (shape.selected_channels==3 || shape.selected_channels==4) && shape.output_width && shape.output_height && shape.source_sample_bytes &&
                             shape.source_pixel_bytes>=shape.source_sample_bytes && shape.source_pixel_bytes<=shape.source_sample_bytes*std::min<std::uint64_t>(shape.channel_span,job.options.visualization=="colour" || job.options.visualization=="cryptomatte"?4:3) &&
-                            (job.options.visualization!="colour" || (shape.source_sample_bytes==4 && shape.source_pixel_bytes%4==0)),"invalid worker footprint");
+                            (job.options.visualization!="colour" || (srgb8?shape.source_sample_bytes==1:
+                             (shape.source_sample_bytes==4 && shape.source_pixel_bytes%4==0))),"invalid worker footprint");
                         std::uint64_t cost=1;
                         try {auto estimate=estimate_memory(shape);estimate_mib=double(estimate.total)/1048576;task.admission_mib=double(estimate.incremental)/1048576;if(options.memory_mib)cost=estimate.incremental;}
                         catch(const std::exception&){if(options.memory_mib)throw FileFailure("task_memory_exceeds_budget","task memory estimate is invalid or overflows");}
@@ -478,7 +484,7 @@ bool run_isolated(const std::vector<Job>& jobs,const std::string& executable,con
             result["execution"]={{"requested_threads",requested_job.options.threads},{"threads",job.options.threads},{"thread_budget",thread_budget},
                 {"memory_budget_mib",options.memory_mib},{"fixed_reserve_mib",fixed_reserve},{"wall_ms",std::chrono::duration<double,std::milli>(Clock::now()-started).count()}};
             if(!worker_id.empty())result["execution"]["worker_id"]=worker_id;
-            if(estimate_mib){result["execution"]["estimated_task_mib"]=*estimate_mib;result["execution"]["admission_mib"]=*task.admission_mib;result["execution"]["estimate_model"]="buffers-v2";}
+            if(estimate_mib){result["execution"]["estimated_task_mib"]=*estimate_mib;result["execution"]["admission_mib"]=*task.admission_mib;result["execution"]["estimate_model"]="buffers-v3";}
             result["execution"]["queue_ms"]=task.queue_ms;
             result["execution"]["workers"]=workers;
             emit(result);

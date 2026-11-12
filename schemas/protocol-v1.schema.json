@@ -1635,7 +1635,7 @@
         "estimate_model": {
           "enum": [
             "buffers-v1",
-            "buffers-v2"
+            "buffers-v3"
           ]
         },
         "fixed_reserve_mib": {
@@ -1687,7 +1687,7 @@
             ],
             "properties": {
               "estimate_model": {
-                "const": "buffers-v2"
+                "const": "buffers-v3"
               }
             }
           },

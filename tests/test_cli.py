@@ -70,7 +70,7 @@ class CLI(unittest.TestCase):
         self.assertGreater(rows[0]['execution']['estimated_task_mib'],0)
         self.assertEqual(rows[-1]['execution'],{'workers':1,'requested_workers':1,'thread_budget':1,'memory_budget_mib':512,'fixed_reserve_mib':264,'startup_timeout_ms':10000,'task_timeout_ms':10000})
         rows=self.run_cli('convert',self.source,'--output',self.base/'incremental.png','--thread-budget',1,'--memory-budget-mib',266)
-        self.assertEqual(rows[0]['execution']['estimate_model'],'buffers-v2')
+        self.assertEqual(rows[0]['execution']['estimate_model'],'buffers-v3')
         self.assertLess(rows[0]['execution']['admission_mib'],2)
         self.assertGreater(rows[0]['execution']['estimated_task_mib'],128)
         rows=self.run_cli('convert',self.source,'--output',self.base/'refused.png','--memory-budget-mib',129,exit=4)
@@ -204,6 +204,12 @@ class CLI(unittest.TestCase):
     def test_all_failed_and_decode_limit(self):
         self.run_cli("convert",self.base/"missing.exr","--output",self.base/"a.jpg",exit=4)
         write_png(self.source,512,512)
+        native=self.run_cli("convert",self.source,"--output",self.base/"native.jpg","--max-decode-mib","1")
+        self.assertEqual(native[0]["decoded_mib"],1)
+        self.assertEqual(native[0]["colour"]["processing"],"srgb8-linear-v1")
+        reference=self.run_cli("convert",self.source,"--output",self.base/"reference.jpg","--max-decode-mib","1","--preset","quality",exit=4)
+        self.assertEqual(reference[0]["error"]["code"],"decode_limit_exceeded")
+        write_png(self.source,513,512)
         rows=self.run_cli("convert",self.source,"--output",self.base/"b.jpg","--max-decode-mib","1",exit=4)
         self.assertEqual(rows[0]["error"]["code"],"decode_limit_exceeded")
 

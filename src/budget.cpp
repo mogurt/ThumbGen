@@ -50,6 +50,16 @@ MemoryEstimate estimate_memory(const ImageFootprint& s) {
     // Other modes keep full colour/mapping, padding and orientation temporaries.
     e.working=s.native_categorical?multiply(multiply(s.data_width,s.threads),3*sizeof(double)):
         multiply(multiply(std::max(data,canvas),s.selected_channels),3*sizeof(float));
+    if(s.srgb8) {
+        if(s.native_categorical || s.deep_buffer_bytes || s.cms_buffer_bytes || s.source_buffer_bytes ||
+           s.source_sample_bytes!=1 || s.source_pixel_bytes!=s.selected_channels || data!=canvas)
+            throw std::invalid_argument("invalid sRGB8 source footprint");
+        // Decoder/orientation copies plus row/filter coefficients and the
+        // resizer's cache-sized scratch. Output floats are charged below.
+        auto rows=multiply(add(s.data_width,s.data_height),multiply(s.selected_channels+4,8*sizeof(float)));
+        auto scratch=std::min<std::uint64_t>(16*mib,multiply(data,s.selected_channels*sizeof(float)));
+        e.working=add(add(multiply(e.source,2),rows),scratch);
+    }
     // Resize/composite/unpremult/RGB conversion can have overlapping buffers.
     // This allowance also covers the final UINT8 RGB(A) buffer (<=4 bytes/pixel)
     // while its FLOAT source remains alive; it replaces codec float conversion.

@@ -22,6 +22,10 @@ int main() {
         require(small.total>small.source+small.working+small.output+small.codec,"worker/margin omitted");
         require(small.total==small.incremental+small.worker && small.incremental==small.source+small.working+small.output+small.codec+small.margin,"incremental buffers or fixed worker allowance counted incorrectly");
         require(small.codec>0,"JPEG encoded destination omitted");
+        auto fast=ImageFootprint{5184,3456,5184,3456,3,3,960,640,1,1,false,3};fast.srgb8=true;
+        auto reference=fast;reference.srgb8=false;reference.source_sample_bytes=4;reference.source_pixel_bytes=12;
+        require(estimate_memory(fast).source==5184ULL*3456*3 && estimate_memory(fast).total<estimate_memory(reference).total,"sRGB8 memory estimate still charges full FLOAT image");
+        rejects<std::invalid_argument>([&]{auto invalid=fast;invalid.source_sample_bytes=4;estimate_memory(invalid);});
         auto cms=ImageFootprint{8,8,8,8,3,3,8,8,4};cms.cms_buffer_bytes=40ULL*1024*1024;
         require(estimate_memory(cms).source==small.source+cms.cms_buffer_bytes,"CMS reservation omitted");
         rejects<std::invalid_argument>([&]{auto invalid=cms;invalid.cms_buffer_bytes=65ULL*1024*1024;estimate_memory(invalid);});

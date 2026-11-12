@@ -33,14 +33,14 @@ public:
     // Internal phase observer; used by native integration tests and future scheduling.
     using Observer = std::function<void(const std::string&,const Job&)>;
     struct Control {
-        // Internal reference switch for paired processing tests, not a CLI option.
-        bool reference_colour=false;
         // Called after metadata selection, before colour/pixel allocation.
         std::function<void(const Job&,const Json&)> planned;
         // The controller owns the returned absolute, nonexistent temporary path.
         std::function<std::string(const Job&,size_t)> reserve;
         // Called only after the encoded stream is closed. False means skip.
         std::function<bool(const Job&,size_t,const std::string&,const Json&)> commit;
+        // Internal reference switch for paired processing tests, not a CLI option.
+        bool reference_colour=false;
     };
     explicit Engine(Observer observer = {});
     ~Engine();

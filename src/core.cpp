@@ -482,6 +482,28 @@ Json Engine::convert(const Job& job) {
             if(sampled)r["source_read"]={{"mode","sampled_blocks"},{"grid",{sampled->x.size(),sampled->y.size()}},
                 {"block",{sampled->block_width,sampled->block_height}},{"calls",sampled->x_blocks.size()*sampled->y_blocks.size()},{"buffer_bytes",sampled->peak_bytes}};
         }
+        // Decide native storage from metadata before decode admission. The
+        // pinned built-in colour contract is checked after admission, before IO.
+        std::string requested_config=job.options.ocio_config;
+        if(requested_config.empty()){const char* env=std::getenv("OCIO");requested_config=env?env:"";}
+        if(requested_config.empty())requested_config="ocio://default";
+        std::string requested_input=job.options.input_space;
+        if(requested_input=="auto") {
+            requested_input=spec.get_string_attribute("oiio:ColorSpace");
+            if(requested_input.empty())requested_input="sRGB";
+        }
+        const bool plain_rgb=spec.nchannels==3 && spec.alpha_channel==-1 &&
+            spec.channelnames==std::vector<std::string>({"R","G","B"}) && channels==std::vector<int>({0,1,2});
+        const bool plain_rgba=spec.nchannels==4 && spec.alpha_channel==3 &&
+            spec.get_int_attribute("oiio:UnassociatedAlpha",0)==1 &&
+            spec.channelnames==std::vector<std::string>({"R","G","B","A"}) && channels==std::vector<int>({0,1,2,3});
+        const bool fast_srgb=!impl_->control.reference_colour && !data && !deep && !cmyk &&
+            !container_icc && !spec.find_attribute("ICCProfile") && icc_format &&
+            job.options.preset=="balanced" && requested_config=="ocio://default" &&
+            job.options.display.empty() && (requested_input=="sRGB" || requested_input=="srgb_rec709_scene" || requested_input=="sRGB Encoded Rec.709 (sRGB)") &&
+            spec.format==OIIO::TypeDesc::UINT8 && spec.channelformats.empty() && (plain_rgb || plain_rgba) &&
+            spec.depth==1 && spec.x==0 && spec.y==0 && spec.full_x==0 && spec.full_y==0 &&
+            spec.width==spec.full_width && spec.height==spec.full_height;
         if(impl_->control.planned) {
             auto span=std::minmax_element(channels.begin(),channels.end());
             int display_width=spec.full_width,display_height=spec.full_height;
@@ -499,11 +521,11 @@ Json Engine::convert(const Job& job) {
                 {"footprint",{{"data_width",spec.width},{"data_height",spec.height},
                     {"display_width",display_width},{"display_height",display_height},
                     {"channel_span",cmyk?4:*span.second-*span.first+1},{"selected_channels",data || deep?4:channels.size()},
-                    {"source_sample_bytes",input_plan.sample_bytes},{"source_pixel_bytes",input_plan.pixel_bytes},
+                    {"source_sample_bytes",fast_srgb?1:input_plan.sample_bytes},{"source_pixel_bytes",fast_srgb?channels.size():input_plan.pixel_bytes},
                     {"source_buffer_bytes",sampled?sampled->peak_bytes:0},
                     {"deep_buffer_bytes",deep?job.options.max_decode_mib*1024ULL*1024ULL:0},
                     {"cms_buffer_bytes",use_icc?detail::cms_reservation:0},
-                    {"native_categorical",categorical},
+                    {"native_categorical",categorical},{"srgb8",fast_srgb},
                     {"output_width",largest_w},{"output_height",largest_h},{"threads",job.options.threads}}},
                 {"sequence_pin",sequence_lock(job.sequence_id)}};
             impl_->control.planned(job,plan);
@@ -511,7 +533,6 @@ Json Engine::convert(const Job& job) {
         }
         OIIO::ColorConfig* config=nullptr;
         std::string working_space,input_space,output_space;
-        bool fast_srgb=false;
         if(!data) {
             stage="colour";
             const bool embedded_icc=container_icc || spec.find_attribute("ICCProfile");
@@ -576,25 +597,18 @@ Json Engine::convert(const Job& job) {
             // The standard scene-sRGB bridge has linear Rec.709 primaries.
             // Custom configs, ICC, cropped windows and non-colour inputs keep
             // the reference path. Selection is already settled above.
-            const bool plain_rgb=spec.nchannels==3 && spec.alpha_channel==-1 &&
-                spec.channelnames==std::vector<std::string>({"R","G","B"}) && channels==std::vector<int>({0,1,2});
-            const bool plain_rgba=spec.nchannels==4 && spec.alpha_channel==3 &&
-                spec.get_int_attribute("oiio:UnassociatedAlpha",0)==1 &&
-                spec.channelnames==std::vector<std::string>({"R","G","B","A"}) && channels==std::vector<int>({0,1,2,3});
-            if(!impl_->control.reference_colour && !deep && !cmyk && !embedded_icc &&
-               icc_format && job.options.preset=="balanced" && config_name=="ocio://default" &&
-               job.options.display.empty() && spec.format==OIIO::TypeDesc::UINT8 &&
-               spec.channelformats.empty() && (plain_rgb || plain_rgba) && spec.depth==1 &&
-               spec.x==0 && spec.y==0 && spec.full_x==0 && spec.full_y==0 &&
-               spec.width==spec.full_width && spec.height==spec.full_height &&
-               config->get_color_interop_id(input_space)=="srgb_rec709_scene" &&
-               config->get_color_interop_id(output_space)=="srgb_rec709_scene") {
+            if(fast_srgb) {
+                if(config_name!="ocio://default" || config->get_color_interop_id(input_space)!="srgb_rec709_scene" ||
+                   config->get_color_interop_id(output_space)!="srgb_rec709_scene")
+                    throw Failure("colour_failed","standard sRGB fast-path colour contract changed");
+                bool found=false;
                 for(int i=0;i<config->getNumColorSpaces();++i) {
                     std::string name(config->getColorSpaceNameByIndex(i));
                     if(config->get_color_interop_id(name)=="lin_rec709_scene" && config->isColorSpaceLinear(name)) {
-                        working_space=name;fast_srgb=true;break;
+                        working_space=name;found=true;break;
                     }
                 }
+                if(!found)throw Failure("colour_space_not_found","standard linear Rec.709 space is unavailable");
             }
             r["colour"]["working_space"]=working_space;
             r["colour"]["processing"]=fast_srgb?"srgb8-linear-v1":"reference";
