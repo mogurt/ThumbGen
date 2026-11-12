@@ -91,9 +91,11 @@ for row in (root / 'SHA256SUMS').read_text().splitlines():
 actual_files = {str(path.relative_to(root)) for path in root.rglob('*') if path.is_file() and path != root / 'SHA256SUMS'}
 if actual_files != listed:
     raise SystemExit('Checksum coverage differs from complete file payload')
-allowed_root = {'bin', 'lib', 'licenses', 'thumbgen', 'NOTICE', 'README.txt', 'DEPENDENCIES.json', 'ABI_REQUIREMENTS.json', 'SHA256SUMS'}
+allowed_root = {'bin', 'lib', 'licenses', 'thumbgen', 'NOTICE', 'README.txt', 'DEPENDENCIES.json', 'ABI_REQUIREMENTS.json', 'SHA256SUMS', 'LICENSE'}
 if {path.name for path in root.iterdir()} != allowed_root:
     raise SystemExit('Unexpected runtime candidate top-level payload')
+if (root / 'LICENSE').read_bytes().replace(b'\r\n', b'\n') != (repo / 'LICENSE').read_bytes().replace(b'\r\n', b'\n'):
+    raise SystemExit('Project license differs from the repository')
 for path in root.rglob('*'):
     if path.is_file() and path.suffix in ('.py', '.cpp', '.h', '.a', '.whl'):
         raise SystemExit('Development material leaked into candidate: ' + str(path))
