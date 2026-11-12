@@ -5,3 +5,6 @@
 dependencies/notices/* -text -whitespace
 # Preserve pinned upstream source bytes, including upstream whitespace.
 third_party/stb/* -text -whitespace
+
+third_party/skcms/** text eol=lf
+dependencies/notices/skcms-BSD-3-Clause.txt text eol=lf
