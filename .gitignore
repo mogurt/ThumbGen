@@ -10,3 +10,6 @@ benchmarks/results/*
 benchmarks/results/**/*
 !benchmarks/results/**/
 !benchmarks/results/**/SUMMARY.md
+
+# Local development notes and original documentation snapshots
+/.local/

@@ -26,6 +26,7 @@ class PublicValidationTests(unittest.TestCase):
                         self.root / "tests/data/deep-reference-v1.json")
         shutil.copyfile(ROOT / "CHANGELOG.md", self.root / "CHANGELOG.md")
         shutil.copyfile(ROOT / "README.md", self.root / "README.md")
+        shutil.copyfile(ROOT / "README.zh-CN.md", self.root / "README.zh-CN.md")
         for name in ('CMakeLists.txt', 'CMakePresets.json'):
             shutil.copyfile(ROOT / name, self.root / name)
         for summary in (ROOT / 'benchmarks/results').glob('*/SUMMARY.md'):
@@ -57,7 +58,7 @@ class PublicValidationTests(unittest.TestCase):
         self.assertIn("Missing link target", result.stderr)
 
     def test_root_readme_and_new_documents_are_checked(self):
-        for path in ('README.md', 'docs/future-feature.md', 'benchmarks/results/new-summary/SUMMARY.md'):
+        for path in ('README.md', 'README.zh-CN.md', 'docs/future-feature.md', 'benchmarks/results/new-summary/SUMMARY.md'):
             with self.subTest(path=path):
                 target = self.root / path
                 original = target.read_bytes() if target.exists() else None
@@ -72,13 +73,16 @@ class PublicValidationTests(unittest.TestCase):
                     target.write_bytes(original)
 
     def test_existing_private_generated_target_cannot_satisfy_public_link(self):
-        target = self.root / '.deps/private-report.json'
-        target.parent.mkdir()
-        target.write_text('{}', encoding='utf-8')
-        (self.root / 'docs/future-feature.md').write_text('[report](../.deps/private-report.json)', encoding='utf-8')
-        result = self.run_validator()
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn('private/generated', result.stderr)
+        for directory in ('.deps', '.local'):
+            with self.subTest(directory=directory):
+                target = self.root / directory / 'private-report.json'
+                target.parent.mkdir()
+                target.write_text('{}', encoding='utf-8')
+                (self.root / 'docs/future-feature.md').write_text(
+                    f'[report](../{directory}/private-report.json)', encoding='utf-8')
+                result = self.run_validator()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('private/generated', result.stderr)
 
     def test_outside_and_file_uri_targets_are_rejected(self):
         for target in ('../../outside-report.md', 'file:///private/report.json'):

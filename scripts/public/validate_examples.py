@@ -8,7 +8,7 @@ from jsonschema import Draft202012Validator
 
 
 def public_documents(root):
-    return [root / 'README.md', root / 'CHANGELOG.md',
+    return [root / 'README.md', root / 'README.zh-CN.md', root / 'CHANGELOG.md',
             *sorted((root / 'docs').rglob('*.md')),
             *sorted((root / 'examples').rglob('*.md')),
             root / 'benchmarks/README.md', root / 'benchmarks/PRODUCTION_RESULTS.md',
@@ -33,7 +33,7 @@ def validate_links(root, documents):
             if scheme or not resolved.is_relative_to(root):
                 raise ValueError(f'Public link outside repository in {document.name}: {target}')
             relative = resolved.relative_to(root)
-            if any(part in ('.deps', '.venv', 'build', '__pycache__') for part in relative.parts):
+            if any(part in ('.deps', '.local', '.venv', 'build', '__pycache__') for part in relative.parts):
                 raise ValueError(f'Public link requires private/generated files in {document.name}: {target}')
             if not resolved.exists():
                 raise ValueError(f'Missing link target in {document.name}: {target}')
