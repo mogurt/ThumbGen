@@ -576,14 +576,15 @@ Json Engine::convert(const Job& job) {
             // The standard scene-sRGB bridge has linear Rec.709 primaries.
             // Custom configs, ICC, cropped windows and non-colour inputs keep
             // the reference path. Selection is already settled above.
-            const bool plain_layout=(spec.nchannels==3 || spec.nchannels==4) &&
-                channels.size()==std::size_t(spec.nchannels) &&
-                spec.channelnames==std::vector<std::string>({"R","G","B"}) &&
-                channels==std::vector<int>({0,1,2});
+            const bool plain_rgb=spec.nchannels==3 && spec.alpha_channel==-1 &&
+                spec.channelnames==std::vector<std::string>({"R","G","B"}) && channels==std::vector<int>({0,1,2});
+            const bool plain_rgba=spec.nchannels==4 && spec.alpha_channel==3 &&
+                spec.get_int_attribute("oiio:UnassociatedAlpha",0)==1 &&
+                spec.channelnames==std::vector<std::string>({"R","G","B","A"}) && channels==std::vector<int>({0,1,2,3});
             if(!impl_->control.reference_colour && !deep && !cmyk && !embedded_icc &&
                icc_format && job.options.preset=="balanced" && config_name=="ocio://default" &&
                job.options.display.empty() && spec.format==OIIO::TypeDesc::UINT8 &&
-               spec.channelformats.empty() && plain_layout && spec.depth==1 &&
+               spec.channelformats.empty() && (plain_rgb || plain_rgba) && spec.depth==1 &&
                spec.x==0 && spec.y==0 && spec.full_x==0 && spec.full_y==0 &&
                spec.width==spec.full_width && spec.height==spec.full_height &&
                config->get_color_interop_id(input_space)=="srgb_rec709_scene" &&
