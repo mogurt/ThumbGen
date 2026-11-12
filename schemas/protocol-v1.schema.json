@@ -565,7 +565,7 @@
               "type": "object",
               "properties": {
                 "engine": {
-                  "const": "LittleCMS2 2.20"
+                  "enum": ["LittleCMS2 2.20", "skcms"]
                 },
                 "model": {
                   "enum": [
@@ -613,10 +613,12 @@
               ],
               "additionalProperties": false
             },
+            "fallback_reason": {"type": "string", "minLength": 1},
             "processing": {
               "enum": [
                 "reference",
-                "srgb8-linear-v1"
+                "srgb8-linear-v1",
+                  "integer-linear-v1"
               ]
             }
           },
@@ -1324,6 +1326,8 @@
         "oiio_version": {
           "type": "string"
         },
+        "colour_processing": {"type": "array", "items": {"enum": ["reference", "srgb8-linear-v1", "integer-linear-v1"]}},
+        "icc_engines": {"type": "array", "items": {"enum": ["LittleCMS2 2.20", "skcms"]}},
         "quantization": {
           "const": "unorm8-half-up-v1"
         },

@@ -50,6 +50,17 @@ MemoryEstimate estimate_memory(const ImageFootprint& s) {
     // Other modes keep full colour/mapping, padding and orientation temporaries.
     e.working=s.native_categorical?multiply(multiply(s.data_width,s.threads),3*sizeof(double)):
         multiply(multiply(std::max(data,canvas),s.selected_channels),3*sizeof(float));
+    if(s.integer_linear) {
+        if(s.srgb8 || s.native_categorical || s.deep_buffer_bytes || s.source_buffer_bytes ||
+           (s.source_sample_bytes!=1 && s.source_sample_bytes!=2) ||
+           s.source_pixel_bytes!=s.selected_channels*s.source_sample_bytes || data!=canvas)
+            throw std::invalid_argument("invalid integer colour source footprint");
+        // Three complete float images cover colour + orientation + resizer
+        // overlap, in addition to the native source charged above. Include
+        // the same coefficient/row and bounded filter scratch as sRGB8.
+        const auto rows=multiply(add(s.data_width,s.data_height),multiply(s.selected_channels+4,8*sizeof(float)));
+        e.working=add(e.working,add(rows,std::min<Bytes>(16*mib,multiply(data,s.selected_channels*sizeof(float)))));
+    }
     if(s.srgb8) {
         if(s.native_categorical || s.deep_buffer_bytes || s.cms_buffer_bytes || s.source_buffer_bytes ||
            s.source_sample_bytes!=1 || s.source_pixel_bytes!=s.selected_channels || data!=canvas)

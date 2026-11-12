@@ -228,6 +228,8 @@ Json Engine::capabilities() {
         {"cpu",{{"runtime_simd",OIIO::get_string_attribute("hw:simd")},{"oiio_simd",OIIO::get_string_attribute("build:simd")}}},
         {"selection_policy","v2"},
         {"quantization","unorm8-half-up-v1"},
+        {"colour_processing",{"reference","srgb8-linear-v1","integer-linear-v1"}},
+        {"icc_engines",{"LittleCMS2 2.20","skcms"}},
         {"visualization_modes",{"colour","depth","normal","vector","id","id_rgb","cryptomatte"}},
         {"deep_modes",{"reject","flatten"}},
         {"deep_compressions",detail::bounded_deep_zstd_available()?Json::array({"none","rle","zips","zstd"}):Json::array({"none","rle","zips"})},
@@ -595,7 +597,7 @@ Json Engine::convert(const Job& job) {
                 {"working_space",working_space},{"output_space",output_space},{"ocio_config",config->configname()},
                 {"config_basis",config_basis},{"display",job.options.display},{"view",job.options.view}};
             // The standard scene-sRGB bridge has linear Rec.709 primaries.
-            // Custom configs, ICC, cropped windows and non-colour inputs keep
+            // Custom configs, cropped windows and non-colour inputs keep
             // the reference path. Selection is already settled above.
             if(colour_plan.linear()) {
                 if(config_name!="ocio://default" || (!integer_linear && config->get_color_interop_id(input_space)!="srgb_rec709_scene") ||

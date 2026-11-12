@@ -26,6 +26,12 @@ int main() {
         auto reference=fast;reference.srgb8=false;reference.source_sample_bytes=4;reference.source_pixel_bytes=12;
         require(estimate_memory(fast).source==5184ULL*3456*3 && estimate_memory(fast).total<estimate_memory(reference).total,"sRGB8 memory estimate still charges full FLOAT image");
         rejects<std::invalid_argument>([&]{auto invalid=fast;invalid.source_sample_bytes=4;estimate_memory(invalid);});
+        auto integer=reference;integer.integer_linear=true;integer.source_sample_bytes=2;integer.source_pixel_bytes=6;
+        require(estimate_memory(integer).source==5184ULL*3456*6,"native integer source missing");
+        require(estimate_memory(integer).working>=5184ULL*3456*3*3*sizeof(float),"complete linear image/orientation missing");
+        require(estimate_memory(integer).total<estimate_memory(reference).total,"integer reservation exceeds reference");
+        rejects<std::invalid_argument>([&]{auto invalid=integer;invalid.srgb8=true;estimate_memory(invalid);});
+        rejects<std::invalid_argument>([&]{auto invalid=integer;invalid.source_sample_bytes=4;estimate_memory(invalid);});
         auto cms=ImageFootprint{8,8,8,8,3,3,8,8,4};cms.cms_buffer_bytes=40ULL*1024*1024;
         require(estimate_memory(cms).source==small.source+cms.cms_buffer_bytes,"CMS reservation omitted");
         rejects<std::invalid_argument>([&]{auto invalid=cms;invalid.cms_buffer_bytes=65ULL*1024*1024;estimate_memory(invalid);});
