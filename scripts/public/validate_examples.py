@@ -11,7 +11,7 @@ def public_documents(root):
     return [root / 'README.md', root / 'README.en.md', root / 'CHANGELOG.md',
             *sorted((root / 'docs').rglob('*.md')),
             *sorted((root / 'examples').rglob('*.md')),
-            root / 'benchmarks/README.md', root / 'benchmarks/RESULTS.md', root / 'benchmarks/PRODUCTION_RESULTS.md',
+            root / 'benchmarks/README.md', root / 'benchmarks/RESULTS.md', root / 'benchmarks/HISTORICAL.md', root / 'benchmarks/PRODUCTION_RESULTS.md',
             *sorted((root / 'benchmarks/results').glob('*/SUMMARY.md'))]
 
 
