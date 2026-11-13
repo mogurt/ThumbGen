@@ -486,6 +486,19 @@ if(THUMBGEN_BUILD_COLOUR_PROBE)
     target_link_libraries(thumbgen_colour_probe PRIVATE thumbgen_core)
 endif()
 
+# Standalone numerical diagnostic; never linked into the product.
+option(THUMBGEN_BUILD_STREAM_CONTRACT_PROBE "Build locked stb streaming contract diagnostics" OFF)
+if(THUMBGEN_BUILD_STREAM_CONTRACT_PROBE)
+    add_executable(thumbgen_stream_contract_probe tests/stream_contract_probe.cpp)
+    target_compile_features(thumbgen_stream_contract_probe PRIVATE cxx_std_17)
+    target_link_libraries(thumbgen_stream_contract_probe PRIVATE nlohmann_json::nlohmann_json)
+    if(MSVC)
+        target_compile_options(thumbgen_stream_contract_probe PRIVATE /O2 /utf-8 /fp:precise)
+    else()
+        target_compile_options(thumbgen_stream_contract_probe PRIVATE -O2 -fno-fast-math -ffp-contract=off)
+    endif()
+endif()
+
 # Each executable may have its own configuration/output directory. Preserve
 # actual PE import basenames; serialize copies when targets share a directory.
 if(WIN32)
