@@ -666,9 +666,9 @@ Json Engine::convert(const Job& job) {
                     const bool ok=detail::png_scanline_blocks(spec.width,spec.height,spec.nchannels,
                         [&](int y,void* row) {return in->read_scanlines(part,0,y,y+1,0,0,spec.nchannels,spec.format,row);},
                         [&](const void* block,std::size_t base,std::size_t n) {
-                            const auto start=Clock::now();stage="colour";
+                            const auto start=Clock::now();
                             colour_plan.transform(block,static_cast<float*>(working.localpixels())+base*spec.nchannels,n,spec.nchannels);
-                            colour_ms+=ms(start);stage="decode";
+                            colour_ms+=ms(start);
                         });
                     if(!ok)throw Failure("decode_failed",in->geterror());
                 } catch(const detail::CmsFailure& e){throw Failure("colour_input_unsupported",e.what());}
