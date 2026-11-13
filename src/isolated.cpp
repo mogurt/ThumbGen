@@ -28,6 +28,14 @@
 #endif
 
 namespace thumbgen::detail {
+#if defined(THUMBGEN_TEST_HOOKS)
+namespace {
+// Test-only: the notification tests install a hook that the controller thread
+// runs at the no-progress scan/wait boundary. Never set outside test builds.
+std::function<void(const std::shared_ptr<ProcessWakeup>&)> test_scan_hook;
+}
+void set_test_scan_hook(std::function<void(const std::shared_ptr<ProcessWakeup>&)> hook){test_scan_hook=std::move(hook);}
+#endif
 namespace {
 namespace fs=std::filesystem;
 using Clock=std::chrono::steady_clock;
@@ -180,8 +188,8 @@ public:
     unsigned threads;
     std::string id;
     bool ready=false;
-    Channel(const std::string& exe,const std::string& token,const std::string& worker,unsigned quota,std::chrono::milliseconds):
-        session(token,worker),process(exe,{"--internal-worker",token,worker,std::to_string(quota)}),threads(quota),id(worker) {
+    Channel(const std::string& exe,const std::string& token,const std::string& worker,unsigned quota,std::chrono::milliseconds,std::shared_ptr<ProcessWakeup> wakeup):
+        session(token,worker),process(exe,{"--internal-worker",token,worker,std::to_string(quota)},{},std::move(wakeup)),threads(quota),id(worker) {
         try {
         send("hello","",{{"identity",identity()},{"threads",quota},{"parent_pid",
 #ifdef _WIN32
@@ -282,6 +290,7 @@ Json execution_configuration(const std::vector<Job>& jobs,const IsolationOptions
         {"startup_timeout_ms",options.startup_timeout.count()},{"task_timeout_ms",options.task_timeout.count()}};
 }
 bool run_isolated(const std::vector<Job>& jobs,const std::string& executable,const std::function<void(const Json&)>& emit,IsolationOptions options) {
+    const auto wakeup=std::make_shared<ProcessWakeup>();
     for(const auto& job:jobs)job_from_wire(job_to_wire(job));
     const auto configuration=execution_configuration(jobs,options);
     const auto thread_budget=configuration["thread_budget"].get<unsigned>();
@@ -313,6 +322,7 @@ bool run_isolated(const std::vector<Job>& jobs,const std::string& executable,con
     bool interrupted=false;
     auto cancelled=[&] {if(!interrupted && options.cancelled && options.cancelled())interrupted=true;return interrupted;};
     while(completed<jobs.size()) {
+        const auto observed=wakeup->sequence();
         bool progress=false;
         if(cancelled())for(auto& lane:lanes)if(lane.channel)lane.channel->process.stop();
         // Only one metadata preparation at a time: pins and FIFO order follow the manifest.
@@ -349,7 +359,7 @@ bool run_isolated(const std::vector<Job>& jobs,const std::string& executable,con
                     if(!budget)throw FileFailure("task_memory_exceeds_budget","budget does not cover fixed controller/IPC/idle-worker reserve");
                     if(!channel || channel->threads!=unsigned(job.options.threads)) {
                         channel.reset();
-                        try {channel=std::make_unique<Channel>(executable,token,"w"+std::to_string(++worker_serial),unsigned(job.options.threads),options.startup_timeout);}
+                        try {channel=std::make_unique<Channel>(executable,token,"w"+std::to_string(++worker_serial),unsigned(job.options.threads),options.startup_timeout,wakeup);}
                         catch(const ProtocolError&){throw;}
                         catch(const std::system_error& e){throw FileFailure("worker_start_failed",error_message(e.code()));}
                         catch(const std::exception& e){throw FileFailure("worker_start_failed",e.what());}
@@ -520,7 +530,17 @@ bool run_isolated(const std::vector<Job>& jobs,const std::string& executable,con
             task.deadline=task.admitted?(options.task_timeout.count()?Clock::now()+options.task_timeout:Clock::time_point::max()):Clock::now()+options.startup_timeout;
             progress=true;
         }
-        if(!progress)std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        if(!progress) {
+            auto deadline=Clock::time_point::max();
+            for(const auto& lane:lanes)if(lane.task)deadline=std::min(deadline,lane.task->deadline);
+            // Signal handlers remain atomic-only. Bound cancellation polling
+            // without adding a timer thread or changing timer resolution.
+            if(options.cancelled)deadline=std::min(deadline,Clock::now()+std::chrono::milliseconds(10));
+#if defined(THUMBGEN_TEST_HOOKS)
+            if(test_scan_hook)test_scan_hook(wakeup);
+#endif
+            wakeup->wait(observed,deadline);
+        }
     }
     // All result/commit handshakes are complete. Destruction owns shutdown and reaping.
     return cancelled();

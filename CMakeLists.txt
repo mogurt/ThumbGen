@@ -198,6 +198,19 @@ if(BUILD_TESTING)
     target_link_libraries(thumbgen_process_tests PRIVATE thumbgen_schedule)
     add_test(NAME scheduler_process COMMAND thumbgen_process_tests)
     set_tests_properties(scheduler_process PROPERTIES TIMEOUT 30 LABELS "scheduler")
+    # Compiles the schedule/runtime sources with THUMBGEN_TEST_HOOKS instead of
+    # linking thumbgen_schedule/thumbgen_runtime: hook symbols (spurious cv wake,
+    # controller scan boundary) exist only in this test binary, never in
+    # production or in the shared test libraries.
+    add_executable(thumbgen_notification_tests tests/test_process_notifications.cpp
+        src/child_process.cpp src/budget.cpp src/worker_protocol.cpp src/isolated.cpp)
+    target_compile_features(thumbgen_notification_tests PRIVATE cxx_std_17)
+    target_include_directories(thumbgen_notification_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR}/generated)
+    target_compile_definitions(thumbgen_notification_tests PRIVATE THUMBGEN_TEST_HOOKS _WIN32_WINNT=0x0A00 WINVER=0x0A00)
+    target_link_libraries(thumbgen_notification_tests PRIVATE thumbgen_core OpenImageIO::OpenImageIO Threads::Threads)
+    add_test(NAME scheduler_notifications COMMAND thumbgen_notification_tests $<TARGET_FILE:thumbgen_process_tests>)
+    set_tests_properties(scheduler_notifications PROPERTIES TIMEOUT 90 LABELS "scheduler" ENVIRONMENT_MODIFICATION
+        "PATH=path_list_prepend:$<TARGET_FILE_DIR:OpenImageIO::OpenImageIO>;LD_LIBRARY_PATH=path_list_prepend:$<TARGET_FILE_DIR:OpenImageIO::OpenImageIO>")
     add_executable(thumbgen_budget_tests tests/test_budget.cpp)
     target_link_libraries(thumbgen_budget_tests PRIVATE thumbgen_schedule)
     add_test(NAME scheduler_budget COMMAND thumbgen_budget_tests)
@@ -205,6 +218,7 @@ if(BUILD_TESTING)
     if(MSVC)
         target_compile_options(thumbgen_budget_tests PRIVATE /W4 /utf-8 /permissive-)
         target_compile_options(thumbgen_process_tests PRIVATE /W4 /utf-8 /permissive-)
+        target_compile_options(thumbgen_notification_tests PRIVATE /W4 /utf-8 /permissive-)
     endif()
     add_executable(thumbgen_core_tests tests/test_core.cpp)
     target_link_libraries(thumbgen_core_tests PRIVATE thumbgen_core OpenImageIO::OpenImageIO)

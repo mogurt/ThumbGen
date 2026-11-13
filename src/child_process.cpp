@@ -26,6 +26,22 @@ extern char** environ;
 #endif
 
 namespace thumbgen::detail {
+std::uint64_t ProcessWakeup::sequence() const {
+    std::lock_guard<std::mutex> lock(mutex_);return sequence_;
+}
+void ProcessWakeup::notify() noexcept {
+    {std::lock_guard<std::mutex> lock(mutex_);++sequence_;}
+    changed_.notify_all();
+}
+bool ProcessWakeup::wait(std::uint64_t observed,std::chrono::steady_clock::time_point deadline) {
+    std::unique_lock<std::mutex> lock(mutex_);
+    auto ready=[&]{return sequence_!=observed;};
+    if(deadline==std::chrono::steady_clock::time_point::max()){changed_.wait(lock,ready);return true;}
+    return changed_.wait_until(lock,deadline,ready);
+}
+#if defined(THUMBGEN_TEST_HOOKS)
+void ProcessWakeup::spurious() noexcept {changed_.notify_all();}
+#endif
 namespace {
 #ifdef _WIN32
 struct NativeHandle {
@@ -96,6 +112,8 @@ struct SpawnAttributes {
 }
 struct ChildProcess::Impl {
     PipeLimits limits;
+    std::shared_ptr<ProcessWakeup> wakeup;
+    void notify_controller() noexcept {if(wakeup)wakeup->notify();}
     NativeHandle input,output,error;
 #ifdef _WIN32
     NativeHandle process,job;
@@ -112,9 +130,12 @@ struct ChildProcess::Impl {
     bool stopping=false,stdout_closed=false,truncated=false;
     ~Impl(){stop();}
     void fail(const char* message) {
-        std::lock_guard<std::mutex> lock(mutex);
-        if(!stopping && fault.empty())fault=message;
-        changed.notify_all();
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            if(!stopping && fault.empty())fault=message;
+            changed.notify_all();
+        }
+        notify_controller();
     }
     void start(const std::string& executable,const std::vector<std::string>& args) {
         if(!std::filesystem::u8path(executable).is_absolute() || executable.find('\0')!=std::string::npos)
@@ -215,19 +236,25 @@ struct ChildProcess::Impl {
                 }
                 if(!pending.empty() && pending.back()=='\r')pending.pop_back();
                 if(pending.size()>limits.line_bytes){fail("stdout frame exceeds limit");return;}
+                bool overflow=false;
                 {
                     std::lock_guard<std::mutex> lock(mutex);
                     if(stopping)return;
                     if(incoming.size()>=limits.queued_lines || pending.size()+1>limits.queued_bytes-incoming_bytes) {
                         if(fault.empty())fault="stdout queue exceeds limit";
-                        changed.notify_all();return;
+                        overflow=true;
+                    } else {
+                        incoming_bytes+=pending.size()+1;incoming.push_back(std::move(pending));
+                        pending.clear();
                     }
-                    incoming_bytes+=pending.size()+1;incoming.push_back(std::move(pending));
-                    pending.clear();changed.notify_all();
+                    changed.notify_all();
                 }
+                notify_controller();
+                if(overflow)return;
             }
         }
-        std::lock_guard<std::mutex> lock(mutex);stdout_closed=true;changed.notify_all();
+        {std::lock_guard<std::mutex> lock(mutex);stdout_closed=true;changed.notify_all();}
+        notify_controller();
     }
     void read_error() {
         std::array<char,8192> buffer;
@@ -299,6 +326,7 @@ struct ChildProcess::Impl {
     }
     void stop() noexcept {
         {std::lock_guard<std::mutex> lock(mutex);stopping=true;outgoing.clear();outgoing_bytes=0;changed.notify_all();}
+        notify_controller();
 #ifdef _WIN32
         if(job.value)TerminateJobObject(job.value,1);
         if(process.value && WaitForSingleObject(process.value,0)!=WAIT_OBJECT_0)TerminateProcess(process.value,1);
@@ -321,11 +349,11 @@ struct ChildProcess::Impl {
         input.reset();output.reset();error.reset();
     }
 };
-ChildProcess::ChildProcess(const std::string& executable,const std::vector<std::string>& args,PipeLimits limits):impl_(std::make_unique<Impl>()) {
+ChildProcess::ChildProcess(const std::string& executable,const std::vector<std::string>& args,PipeLimits limits,std::shared_ptr<ProcessWakeup> wakeup):impl_(std::make_unique<Impl>()) {
     if(!limits.line_bytes || limits.line_bytes>16*1024*1024 || !limits.queued_bytes || limits.queued_bytes>64*1024*1024 ||
        !limits.queued_lines || limits.queued_lines>1024 || limits.stderr_bytes>1024*1024)
         throw std::invalid_argument("invalid bounded pipe limits");
-    impl_->limits=limits;impl_->start(executable,args);
+    impl_->limits=limits;impl_->wakeup=std::move(wakeup);impl_->start(executable,args);
 }
 ChildProcess::~ChildProcess()=default;
 void ChildProcess::send(std::string line) {
