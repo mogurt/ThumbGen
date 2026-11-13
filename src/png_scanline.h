@@ -31,25 +31,40 @@ inline bool png_scanline_eligible(const std::filesystem::path& path,
         ((h[25]==2 && s.nchannels==3) || (h[25]==6 && s.nchannels==4)) && h[26]==0 && h[27]==0 && h[28]==0;
 }
 
-// One forward pass, bounded native block plus one row. The transform calls
+// One forward pass, bounded native block plus one lazily allocated row. Read
+// whole rows directly into the block; only a row crossing a block boundary
+// needs scratch (including rows wider than the block). The transform calls
 // retain EXACTLY the original global 1M-pixel boundaries and final tail.
 // Reader failures return immediately; callers must never retry full decode.
-template<class ReadRow,class Transform>
-bool png_scanline_blocks(int width,int height,int channels,ReadRow read,Transform transform) {
+// Scratch is replaceable in tests to verify lazy allocation without runtime
+// counters or hooks in the product. It follows the vector empty/resize/data API.
+template<class ReadRows,class Transform,class Scratch=std::vector<std::uint16_t>>
+bool png_scanline_blocks(int width,int height,int channels,ReadRows read,Transform transform) {
     const auto count=std::size_t(width)*height;
     const auto capacity=std::min(count,colour_chunk_pixels);
-    std::vector<std::uint16_t> block(capacity*channels),row(std::size_t(width)*channels);
+    std::vector<std::uint16_t> block(capacity*channels);
+    Scratch row;
     std::size_t used=0,base=0;
-    for(int y=0;y<height;++y) {
-        if(!read(y,row.data()))return false;
+    auto flush=[&]() {transform(block.data(),base,used);base+=used;used=0;};
+    for(int y=0;y<height;) {
+        const auto rows=std::min((capacity-used)/std::size_t(width),std::size_t(height-y));
+        if(rows) {
+            if(!read(y,y+int(rows),block.data()+used*channels))return false;
+            y+=int(rows);used+=rows*std::size_t(width);
+            if(used==capacity)flush();
+            continue;
+        }
+        if(row.empty())row.resize(std::size_t(width)*channels);
+        if(!read(y,y+1,row.data()))return false;
+        ++y;
         for(std::size_t x=0;x<std::size_t(width);) {
             const auto n=std::min(capacity-used,std::size_t(width)-x);
             std::memcpy(block.data()+used*channels,row.data()+x*channels,n*channels*sizeof(std::uint16_t));
             used+=n;x+=n;
-            if(used==capacity) {transform(block.data(),base,used);base+=used;used=0;}
+            if(used==capacity)flush();
         }
     }
-    if(used)transform(block.data(),base,used);
+    if(used)flush();
     return true;
 }
 }

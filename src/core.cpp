@@ -657,14 +657,14 @@ Json Engine::convert(const Job& job) {
                 catch(const detail::CmsFailure& e){throw Failure("colour_input_unsupported",e.what());}
                 r["colour"]["icc"]["engine"]="skcms";r["colour"]["icc"]["peak_bytes"]=stats.peak;
             }
-            auto linear=spec;linear.set_format(OIIO::TypeDesc::FLOAT);linear.erase_attribute("ICCProfile");linear.attribute("oiio:UnassociatedAlpha",0);
             if(scanline_png) {
+                auto linear=spec;linear.set_format(OIIO::TypeDesc::FLOAT);linear.erase_attribute("ICCProfile");linear.attribute("oiio:UnassociatedAlpha",0);
                 working.reset(linear);order=channels;
                 if(!working.localpixels())throw Failure("decode_failed","cannot allocate linear colour image");
                 double colour_ms=0;
                 try {
                     const bool ok=detail::png_scanline_blocks(spec.width,spec.height,spec.nchannels,
-                        [&](int y,void* row) {return in->read_scanlines(part,0,y,y+1,0,0,spec.nchannels,spec.format,row);},
+                        [&](int ybegin,int yend,void* rows) {return in->read_scanlines(part,0,ybegin,yend,0,0,spec.nchannels,spec.format,rows);},
                         [&](const void* block,std::size_t base,std::size_t n) {
                             const auto start=Clock::now();
                             colour_plan.transform(block,static_cast<float*>(working.localpixels())+base*spec.nchannels,n,spec.nchannels);
@@ -682,6 +682,7 @@ Json Engine::convert(const Job& job) {
                 if(!in->read_image(part,0,0,spec.nchannels,spec.format,native))throw Failure("decode_failed",in->geterror());
                 in->close();if(impl_->observer)impl_->observer("decoded",job);verify_source();
                 r["timings_ms"]["decode"]=ms(tick);tick=Clock::now();
+                auto linear=spec;linear.set_format(OIIO::TypeDesc::FLOAT);linear.erase_attribute("ICCProfile");linear.attribute("oiio:UnassociatedAlpha",0);
                 working.reset(linear);order=channels;
                 if(!working.localpixels())throw Failure("decode_failed","cannot allocate linear colour image");
                 try {colour_plan.transform(native,static_cast<float*>(working.localpixels()),count,spec.nchannels);}
