@@ -9,6 +9,7 @@
 
 namespace thumbgen::detail {
 inline constexpr std::size_t colour_chunk_pixels=1024*1024;
+inline constexpr std::uint64_t png_scanline_min_pixels=8000000;
 
 // OIIO 3.2.1.2 keeps PNG interlace private (pnginput.cpp); no ImageSpec
 // attribute proves its absence. Inspect the fixed IHDR only AFTER the decoded
@@ -18,7 +19,7 @@ inline bool png_scanline_eligible(const std::filesystem::path& path,
                                   const std::string& format,const ColourPlan& plan) {
     if(format!="png" || plan.route!=ColourPlan::Route::integer_linear ||
        s.format!=OIIO::TypeDesc::UINT16 || s.width<=0 || s.height<=0 ||
-       std::uint64_t(s.width)*s.height<8000000 || s.get_int_attribute("Orientation",1)!=1)
+       std::uint64_t(s.width)*std::uint64_t(s.height)<png_scanline_min_pixels || s.get_int_attribute("Orientation",1)!=1)
         return false;
     unsigned char h[33]{};
     std::ifstream file(path,std::ios::binary);

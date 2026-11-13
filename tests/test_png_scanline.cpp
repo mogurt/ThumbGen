@@ -3,6 +3,7 @@
 #include <iostream>
 #include <chrono>
 #include <stdexcept>
+#include <limits>
 using namespace thumbgen::detail;
 static void check(bool ok,const char* message){if(!ok)throw std::runtime_error(message);}
 struct TrackedScratch {
@@ -101,6 +102,21 @@ static void eligibility() {
     spec.width=3999;check(!eligible(),"small image accepted");spec.width=4001;
     plan.route=ColourPlan::Route::reference;check(!eligible(),"reference override ignored");
     plan.route=ColourPlan::Route::srgb8;check(!eligible(),"srgb8 rerouted");plan.route=ColourPlan::Route::integer_linear;
+    auto dimensions=[&](int w,int h) {
+        spec.width=w;spec.height=h;
+        set32(header+16,static_cast<unsigned>(w));set32(header+20,static_cast<unsigned>(h));save();
+    };
+    dimensions(7999999,1);check(!eligible(),"below 8MP boundary accepted");
+    dimensions(8000000,1);check(eligible(),"exact 8MP boundary rejected");
+    dimensions(8000001,1);check(eligible(),"above 8MP boundary rejected");
+    dimensions(4000,2000);check(eligible(),"two-dimensional 8MP boundary rejected");
+    dimensions(3999,2000);check(!eligible(),"two-dimensional below boundary accepted");
+    dimensions(0,8000000);check(!eligible(),"zero width accepted");
+    dimensions(8000000,0);check(!eligible(),"zero height accepted");
+    dimensions(-1,8000000);check(!eligible(),"negative width wrapped into eligibility");
+    dimensions(8000000,-1);check(!eligible(),"negative height wrapped into eligibility");
+    dimensions(std::numeric_limits<int>::max(),std::numeric_limits<int>::max());
+    check(eligible(),"dimension multiplication overflowed signed int");
     header[0]=0;save();check(!eligible(),"unrecognized header accepted");
 }
 int main(int argc,char**) {try {

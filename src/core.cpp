@@ -509,7 +509,11 @@ Json Engine::convert(const Job& job) {
         const bool fast_srgb=colour_plan.route==detail::ColourPlan::Route::srgb8;
         const bool integer_linear=colour_plan.route==detail::ColourPlan::Route::integer_linear;
 #ifdef THUMBGEN_PNG_SCANLINE
-        const bool scanline_png=integer_linear && detail::png_scanline_eligible(source_path,spec,input_format,colour_plan);
+        // Reject small sources before entering the metadata/header helper.
+        // Positive int dimensions multiply safely after widening to uint64.
+        const bool scanline_png=integer_linear && spec.width>0 && spec.height>0 &&
+            std::uint64_t(spec.width)*std::uint64_t(spec.height)>=detail::png_scanline_min_pixels &&
+            detail::png_scanline_eligible(source_path,spec,input_format,colour_plan);
 #else
         const bool scanline_png=false;
 #endif
