@@ -3,6 +3,7 @@
 #include "color_input.h"
 #include "cms_input.h"
 #include "colour_plan.h"
+#include "png_scanline.h"
 #include "cmyk_jpeg.h"
 #include "build_info.h"
 #include "files.h"
@@ -507,6 +508,11 @@ Json Engine::convert(const Job& job) {
             plain_rgb || plain_rgba,container_icc || spec.find_attribute("ICCProfile"),use_icc,requested_input);
         const bool fast_srgb=colour_plan.route==detail::ColourPlan::Route::srgb8;
         const bool integer_linear=colour_plan.route==detail::ColourPlan::Route::integer_linear;
+#ifdef THUMBGEN_PNG_SCANLINE
+        const bool scanline_png=integer_linear && detail::png_scanline_eligible(source_path,spec,input_format,colour_plan);
+#else
+        const bool scanline_png=false;
+#endif
         if(impl_->control.planned) {
             auto span=std::minmax_element(channels.begin(),channels.end());
             int display_width=spec.full_width,display_height=spec.full_height;
@@ -651,18 +657,37 @@ Json Engine::convert(const Job& job) {
                 catch(const detail::CmsFailure& e){throw Failure("colour_input_unsupported",e.what());}
                 r["colour"]["icc"]["engine"]="skcms";r["colour"]["icc"]["peak_bytes"]=stats.peak;
             }
-            std::vector<std::uint16_t> native16(colour_plan.sample_bytes==2?count*channels.size():0);
-            std::vector<std::uint8_t> native8(colour_plan.sample_bytes==1?count*channels.size():0);
-            void* native=colour_plan.sample_bytes==2?static_cast<void*>(native16.data()):static_cast<void*>(native8.data());
-            if(!in->read_image(part,0,0,spec.nchannels,spec.format,native))throw Failure("decode_failed",in->geterror());
-            in->close();if(impl_->observer)impl_->observer("decoded",job);verify_source();
-            r["timings_ms"]["decode"]=ms(tick);tick=Clock::now();
             auto linear=spec;linear.set_format(OIIO::TypeDesc::FLOAT);linear.erase_attribute("ICCProfile");linear.attribute("oiio:UnassociatedAlpha",0);
-            working.reset(linear);order=channels;
-            if(!working.localpixels())throw Failure("decode_failed","cannot allocate linear colour image");
-            try {colour_plan.transform(native,static_cast<float*>(working.localpixels()),count,spec.nchannels);}
-            catch(const detail::CmsFailure& e){throw Failure("colour_input_unsupported",e.what());}
-            r["timings_ms"]["input_colour"]=ms(tick);
+            if(scanline_png) {
+                working.reset(linear);order=channels;
+                if(!working.localpixels())throw Failure("decode_failed","cannot allocate linear colour image");
+                double colour_ms=0;
+                try {
+                    const bool ok=detail::png_scanline_blocks(spec.width,spec.height,spec.nchannels,
+                        [&](int y,void* row) {return in->read_scanlines(part,0,y,y+1,0,0,spec.nchannels,spec.format,row);},
+                        [&](const void* block,std::size_t base,std::size_t n) {
+                            const auto start=Clock::now();stage="colour";
+                            colour_plan.transform(block,static_cast<float*>(working.localpixels())+base*spec.nchannels,n,spec.nchannels);
+                            colour_ms+=ms(start);stage="decode";
+                        });
+                    if(!ok)throw Failure("decode_failed",in->geterror());
+                } catch(const detail::CmsFailure& e){throw Failure("colour_input_unsupported",e.what());}
+                in->close();if(impl_->observer)impl_->observer("decoded",job);verify_source();
+                r["timings_ms"]["decode"]=std::max(0.0,ms(tick)-colour_ms);
+                r["timings_ms"]["input_colour"]=colour_ms;
+            } else {
+                std::vector<std::uint16_t> native16(colour_plan.sample_bytes==2?count*channels.size():0);
+                std::vector<std::uint8_t> native8(colour_plan.sample_bytes==1?count*channels.size():0);
+                void* native=colour_plan.sample_bytes==2?static_cast<void*>(native16.data()):static_cast<void*>(native8.data());
+                if(!in->read_image(part,0,0,spec.nchannels,spec.format,native))throw Failure("decode_failed",in->geterror());
+                in->close();if(impl_->observer)impl_->observer("decoded",job);verify_source();
+                r["timings_ms"]["decode"]=ms(tick);tick=Clock::now();
+                working.reset(linear);order=channels;
+                if(!working.localpixels())throw Failure("decode_failed","cannot allocate linear colour image");
+                try {colour_plan.transform(native,static_cast<float*>(working.localpixels()),count,spec.nchannels);}
+                catch(const detail::CmsFailure& e){throw Failure("colour_input_unsupported",e.what());}
+                r["timings_ms"]["input_colour"]=ms(tick);
+            }
             r["decoded_mib"]=double(count*channels.size()*colour_plan.sample_bytes)/1048576;
         } else if(fast_srgb) {
             stage="decode";tick=Clock::now();
