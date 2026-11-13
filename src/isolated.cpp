@@ -5,6 +5,9 @@
 #include "worker_protocol.h"
 #include "error_registry.h"
 #include "selection_request.h"
+#if defined(THUMBGEN_FAST_IDENTITY)
+#include "build_identity.h"
+#endif
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
@@ -61,8 +64,12 @@ std::uint64_t number(const Json& value,std::uint64_t maximum=std::numeric_limits
     return value.get<std::uint64_t>();
 }
 Json identity() {
+#if defined(THUMBGEN_FAST_IDENTITY)
+    return immutable_build_identity();
+#else
     auto capabilities=Engine::capabilities();
     return {{"build",capabilities["build"]},{"version",capabilities["version"]},{"oiio_version",capabilities["oiio_version"]}};
+#endif
 }
 std::string clean(const std::string& value){return Json::parse(Json(value).dump(-1,' ',false,Json::error_handler_t::replace)).get<std::string>();}
 Json error(const FileFailure& e){return {{"code",e.code},{"message",clean(e.what())},{"retryable",e.retryable}};}

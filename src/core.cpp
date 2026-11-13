@@ -1,5 +1,6 @@
 #include <thumbgen/core.h>
 #include "selection.h"
+#include "exr_profile.h"
 #include "color_input.h"
 #include "cms_input.h"
 #include "colour_plan.h"
@@ -48,11 +49,12 @@ using Clock = std::chrono::steady_clock;
 using Failure=detail::FileFailure;
 // OIIO's IOFile does not propagate fflush/fclose errors. Keep ownership of
 // the stream, and latch short writes even when a codec ignores their result.
-static void write_preview(const OIIO::ImageBuf& source,const fs::path& path,int threads,bool canonical_rgba) {
+static void write_preview(const OIIO::ImageBuf& source,const fs::path& path,int threads,bool canonical_rgba TG_EXR_PROFILE_PARAM) {
     const auto& original=source.spec();
     if(original.format!=OIIO::TypeDesc::FLOAT || original.depth!=1 || original.deep ||
        (original.nchannels!=3 && original.nchannels!=4) || !source.localpixels() || !source.contiguous())
         throw Failure("encode_failed","expected a contiguous FLOAT RGB/RGBA preview");
+    TG_EXR_TICK(quantize_tick);
     auto spec=original;spec.set_format(OIIO::TypeDesc::UINT8);
     spec.attribute("oiio:BitsPerSample",8);
     OIIO::ImageBuf image(spec);
@@ -66,6 +68,8 @@ static void write_preview(const OIIO::ImageBuf& source,const fs::path& path,int 
             detail::quantize_rgba8(input+begin*4,output+begin*4,static_cast<size_t>(end-begin));
         else detail::quantize_u8(input+begin,output+begin,static_cast<size_t>(end-begin));
     },OIIO::paropt(threads,OIIO::paropt::SplitDir::Y,65536));
+    TG_EXR_TOCK(quantize_tick,"exr_quantize_allocate_ms");
+    TG_EXR_TICK(png_tick);
     struct CheckedFile final : OIIO::Filesystem::IOFile {
         int failure=0;
         explicit CheckedFile(FILE* file):IOFile(file,Write) {}
@@ -94,8 +98,11 @@ static void write_preview(const OIIO::ImageBuf& source,const fs::path& path,int 
     try { written=image.write(path.u8string(),OIIO::TypeDesc::UINT8); }
     catch(...) {image.set_write_ioproxy(nullptr);throw;}
     image.set_write_ioproxy(nullptr);
+    TG_EXR_TOCK(png_tick,"exr_png_write_ms");
+    TG_EXR_TICK(flush_tick);
     if(std::fflush(stream.get())!=0 || std::ferror(stream.get()))proxy.failed();
     if(std::fclose(stream.release())!=0)proxy.failed();
+    TG_EXR_TOCK(flush_tick,"exr_output_close_ms");
     if(proxy.failure)throw Failure("encode_failed",detail::error_message({proxy.failure,std::generic_category()}));
     if(!written)throw Failure("encode_failed",image.geterror());
 }
@@ -271,6 +278,9 @@ Json Engine::convert(const Job& job) {
     Json r{{"schema_version",1},{"type","result"},{"id",job.id},{"input",job.input},
            {"ok",false},{"status","failed"},{"outputs",Json::array()},{"warnings",Json::array()}};
     if(!job.sequence_id.empty())r["sequence_id"]=job.sequence_id;
+#if defined(THUMBGEN_EXR_PROFILE) && THUMBGEN_EXR_PROFILE
+    detail::ExrProfile profile(r);
+#endif
     std::string stage="open";
     try {
         detail::DataMapping mapping;
@@ -296,11 +306,13 @@ Json Engine::convert(const Job& job) {
         }
         r["source_check"]={{"method","identity_size_mtime"},{"checks",0},{"stable",true}};
         auto verify_source=[&]() {
+            TG_EXR_TICK(source_check_tick);
             r["source_check"]["checks"]=r["source_check"]["checks"].get<int>()+1;
             if(!detail::source_matches(source_path,stamp)) {
                 r["source_check"]["stable"]=false;
                 throw Failure("source_changed","source identity, size or mtime changed during processing",true);
             }
+            TG_EXR_TOCK(source_check_tick,"exr_source_verify_ms");
         };
         OIIO::ImageSpec read_config;
         // Ask unassociated formats to return straight RGB. In particular WebP
@@ -311,6 +323,9 @@ Json Engine::convert(const Job& job) {
         catch(const detail::CmsFailure& error){throw Failure("colour_input_unsupported",error.what());}
         auto in=OIIO::ImageInput::open(job.input,&read_config);
         if(!in){auto error=OIIO::geterror();verify_source();throw Failure("open_failed",error);}
+#if defined(THUMBGEN_EXR_PROFILE) && THUMBGEN_EXR_PROFILE
+        profile.enable(std::string(in->format_name())=="openexr");
+#endif
         if(!data && detail::container_separated_colour(job.input))
             throw Failure("colour_input_unsupported","CMYK/separated input requires an external profile-aware conversion to RGB");
         stage="selection";
@@ -544,6 +559,7 @@ Json Engine::convert(const Job& job) {
             impl_->control.planned(job,plan);
             verify_source();
         }
+        TG_EXR_TICK(config_setup_tick);
         OIIO::ColorConfig* config=nullptr;
         std::string working_space,input_space,output_space;
         if(!data) {
@@ -561,7 +577,14 @@ Json Engine::convert(const Job& job) {
             }
             r["colour"]={{"ocio_config",config_name},{"config_basis",config_basis},
                 {"input_requested",job.options.input_space},{"display",job.options.display},{"view",job.options.view}};
+            TG_EXR_TICK(config_lookup_tick);
+#if defined(THUMBGEN_EXR_PROFILE) && THUMBGEN_EXR_PROFILE
+            const bool reused_config=impl_->configs.find(config_name)!=impl_->configs.end();
+#endif
             config=impl_->config(config_name);
+#if defined(THUMBGEN_EXR_PROFILE) && THUMBGEN_EXR_PROFILE
+            profile.add(reused_config?"exr_ocio_config_reuse_ms":"exr_ocio_config_create_ms",config_lookup_tick);
+#endif
             auto space=[&](const std::string& name) {
                 if(config->getColorSpaceIndex(name)<0)
                     throw Failure("colour_space_not_found","colour space or role not found: "+name);
@@ -636,12 +659,18 @@ Json Engine::convert(const Job& job) {
             r["visualization"]={{"mode",job.options.visualization},{"policy","v1"},{"range",mapping.mode==detail::DataMode::id || crypto?Json::array():Json::array({mapping.minimum,mapping.maximum})},
                 {"invalid_values",job.options.invalid_values},{"invalid_pixels",0},{"clipped_components",0}};
         }
+        TG_EXR_TOCK(config_setup_tick,"exr_ocio_setup_ms");
         OIIO::ImageBuf working;
         detail::DataImage data_image;
         std::vector<int> order;
         // ImageBuf may wrap caller-owned storage. Keep the colour source alive
         // throughout all outputs, as in the original colour conversion path.
         std::vector<float> pixels;
+#if defined(THUMBGEN_EXR_NOZERO) && THUMBGEN_EXR_NOZERO
+        // Same job-wide lifetime as the reference pixels vector: NOZERO does
+        // not also test an early-free policy or an application-buffer view.
+        std::unique_ptr<float[]> exr_pixels;
+#endif
         detail::DeepImage deep_image;
         if(integer_linear) {
             stage="decode";tick=Clock::now();
@@ -765,7 +794,22 @@ Json Engine::convert(const Job& job) {
                 count*=factor;
             }
             stage="decode";tick=Clock::now();
+            TG_EXR_TICK(allocate_tick);
+#if defined(THUMBGEN_EXR_NOZERO) && THUMBGEN_EXR_NOZERO
+            // Only a single dense FLOAT read of a flat EXR may overwrite the
+            // uninitialized allocation. No pack/colour code runs unless that
+            // complete read succeeds. Sparse runs and all non-EXR routes keep
+            // the initialized reference allocation. Keep this owner alive
+            // through every output, just like the reference pixels vector.
+            if(input_format=="openexr" && !use_icc && !cmyk && spec.depth==1 && input_plan.runs.size()==1)
+                exr_pixels.reset(new float[count]); // deliberately no ()
+            else pixels.resize(count);
+            float* colour_pixels=exr_pixels?exr_pixels.get():pixels.data();
+#else
             pixels.resize(count);
+            float* colour_pixels=pixels.data();
+#endif
+            TG_EXR_TOCK(allocate_tick,"exr_allocate_ms");
             if(cmyk && !cmyk_jpeg) {
                 in->close();read_config.attribute("oiio:RawColor",1);in=OIIO::ImageInput::open(job.input,&read_config);
                 if(!in || !in->seek_subimage(part,0,raw_cmyk) || raw_cmyk.nchannels!=4 || raw_cmyk.width!=spec.width || raw_cmyk.height!=spec.height ||
@@ -773,14 +817,18 @@ Json Engine::convert(const Job& job) {
                     throw Failure("colour_input_unsupported","cannot read unmodified CMYK TIFF ink channels");
                 raw_cmyk.erase_attribute("ICCProfile");
             }
+            TG_EXR_TICK(read_tick);
             bool read_ok=false;
             if(cmyk_jpeg) {
                 in->close();
-                try{detail::read_cmyk_jpeg(job.input,spec.width,spec.height,pixels.data());read_ok=true;}
+                try{detail::read_cmyk_jpeg(job.input,spec.width,spec.height,colour_pixels);read_ok=true;}
                 catch(const detail::CmsFailure& error){throw Failure("colour_input_unsupported",error.what());}
-            } else read_ok=detail::read_selected(*in,cmyk?raw_cmyk:spec,part,input_plan,false,pixels.data());
+            } else read_ok=detail::read_selected(*in,cmyk?raw_cmyk:spec,part,input_plan,false,colour_pixels);
+            TG_EXR_TOCK(read_tick,"exr_read_selected_ms");
             const std::string read_error=read_ok?std::string{}:in->geterror();
+            TG_EXR_TICK(close_tick);
             in->close();
+            TG_EXR_TOCK(close_tick,"exr_input_close_ms");
             if(impl_->observer)impl_->observer("decoded",job);
             verify_source();
             if(!read_ok)throw Failure("decode_failed",read_error);
@@ -798,7 +846,8 @@ Json Engine::convert(const Job& job) {
                 } catch(const detail::CmsFailure& error){throw Failure("colour_input_unsupported",error.what());}
                 r["colour"]["icc"]["peak_bytes"]=stats.peak;
             };
-            if(cmyk)apply_icc(pixels.data(),4,detail::CmsModel::cmyk,false);
+            if(cmyk)apply_icc(colour_pixels,4,detail::CmsModel::cmyk,false);
+            TG_EXR_TICK(pack_tick);
             OIIO::ImageSpec subset=spec;
             subset.erase_attribute("ICCProfile");
             subset.nchannels=int(input_plan.channels.size());subset.format=OIIO::TypeDesc::FLOAT;subset.channelformats.clear();
@@ -807,7 +856,7 @@ Json Engine::convert(const Job& job) {
             subset.alpha_channel=alpha!=input_plan.channels.end()?int(alpha-input_plan.channels.begin()):-1;
             auto depth=std::find(input_plan.channels.begin(),input_plan.channels.end(),spec.z_channel);
             subset.z_channel=depth!=input_plan.channels.end()?int(depth-input_plan.channels.begin()):-1;
-            OIIO::ImageBuf buffer(subset,pixels.data());
+            OIIO::ImageBuf buffer(subset,colour_pixels);
             for(int c:channels)order.push_back(int(std::lower_bound(input_plan.channels.begin(),input_plan.channels.end(),c)-input_plan.channels.begin()));
             std::vector<std::string> names{"R","G","B"};if(order.size()==4)names.push_back("A");
             check(iba::channels(working,buffer,int(order.size()),order,{},names),working,"channels_failed");
@@ -816,7 +865,9 @@ Json Engine::convert(const Job& job) {
             if(spec.get_int_attribute("oiio:UnassociatedAlpha",0) && order.size()==4)
                 check(iba::premult(working,working),working,"alpha_failed");
             working.specmod().attribute("oiio:UnassociatedAlpha",0);
+            TG_EXR_TOCK(pack_tick,"exr_pack_alpha_ms");
         }
+        TG_EXR_TICK(canvas_tick);
         const size_t limit=job.options.max_decode_mib*1024ULL*1024ULL/sizeof(float);
         // resize() clamps outside the data window. Pad a cropped display window
         // with zero pixels first, rather than stretching edge pixels into it.
@@ -845,9 +896,12 @@ Json Engine::convert(const Job& job) {
             OIIO::ImageBuf oriented;
             check(iba::reorient(oriented,working),oriented,"orientation_failed");working=std::move(oriented);
         }
+        TG_EXR_TOCK(canvas_tick,"exr_canvas_orientation_ms");
         stage="colour";tick=Clock::now();
+        TG_EXR_TICK(working_tick);
         if(!data && !colour_plan.linear() && input_space!=working_space)
             check(iba::colorconvert(working,working,input_space,working_space,true,"","",config),working,"colour_failed");
+        TG_EXR_TOCK(working_tick,"exr_ocio_working_apply_ms");
         r["timings_ms"]["working_colour"]=ms(tick);
         const std::string filter=categorical?"nearest":job.options.preset=="fast"?"box":job.options.preset=="quality"?"lanczos3":"triangle";
         r["preset"]=job.options.preset;r["filter"]=filter;
@@ -872,6 +926,7 @@ Json Engine::convert(const Job& job) {
                 int w=std::max(1,int(std::lround(display_width*scale))),h=std::max(1,int(std::lround(display_height*scale)));
                 OIIO::ImageBuf preview;
                 tick=Clock::now();
+                TG_EXR_TICK(resize_tick);
                 if(fast_srgb)
                     preview=detail::resize_srgb8(working,w,h);
                 else if(integer_linear)
@@ -881,7 +936,9 @@ Json Engine::convert(const Job& job) {
                 else if(categorical)
                     preview=detail::categorical_preview(data_image,w,h,job.options.max_decode_mib*1024ULL*1024ULL,job.options.threads);
                 else check(iba::resize(preview,working,{{"filtername",filter}},OIIO::ROI(0,w,0,h,0,1,0,int(order.size())),job.options.threads),preview,"resize_failed");
+                TG_EXR_TOCK(resize_tick,"exr_resize_sum_ms");
                 result["resize_ms"]=ms(tick);tick=Clock::now();
+                TG_EXR_TICK(finish_tick);
                 if(job.options.background!="transparent" && preview.nchannels()==4) {
                     OIIO::ImageSpec bs(w,h,4,OIIO::TypeDesc::FLOAT);bs.alpha_channel=3;
                     OIIO::ImageBuf background(bs),composite;
@@ -895,12 +952,14 @@ Json Engine::convert(const Job& job) {
                     // colour transform before RGB output discards it.
                     check(iba::fill(preview,colour,OIIO::ROI(0,w,0,h,0,1,3,4),job.options.threads),preview,"alpha_failed");
                 }
+                TG_EXR_TICK(output_colour_tick);
                 if(!data) {
                     if(job.options.display.empty())
                         check(iba::colorconvert(preview,preview,working_space,output_space,true,"","",config),preview,"colour_failed");
                     else
                         check(iba::ociodisplay(preview,preview,job.options.display,job.options.view,working_space,"",true,false,"","",config),preview,"colour_failed");
                 }
+                TG_EXR_TOCK(output_colour_tick,"exr_ocio_output_apply_sum_ms");
                 if(job.options.background=="transparent" && preview.nchannels()==4) {
                     if(deep) {
                         const auto* p=static_cast<const float*>(preview.localpixels());
@@ -930,6 +989,7 @@ Json Engine::convert(const Job& job) {
                     preview.specmod().attribute("compression",out.format+":"+std::to_string(out.quality));
                 preview.specmod().attribute("CompressionQuality",out.quality);
                 preview.specmod().attribute("oiio:ColorSpace",job.options.display.empty()?"sRGB":"display-referred");
+                TG_EXR_TICK(reserve_tick);
                 fs::path temporary;
                 if(impl_->control.reserve) {
                     temporary=fs::u8path(impl_->control.reserve(job,output_index));
@@ -945,10 +1005,12 @@ Json Engine::convert(const Job& job) {
                 } else {
                     temp=std::make_unique<detail::TemporaryOutput>(dest,out.format);temporary=temp->path();
                 }
+                TG_EXR_TOCK(reserve_tick,"exr_output_reserve_sum_ms");
                 write_preview(preview,temporary,job.options.threads,
-                    !data && job.options.background=="transparent" && preview.nchannels()==4);
+                    !data && job.options.background=="transparent" && preview.nchannels()==4 TG_EXR_PROFILE_ARG);
                 if(impl_->observer)impl_->observer("encoded",job);
                 verify_source();
+                TG_EXR_TICK(commit_tick);
                 bool committed;
                 if(impl_->control.commit) {
                     auto encoded=result;encoded["status"]="success";encoded["width"]=w;encoded["height"]=h;
@@ -956,6 +1018,8 @@ Json Engine::convert(const Job& job) {
                     committed=impl_->control.commit(job,output_index,temporary.u8string(),{{"base",r},{"output",encoded}});
                     if(!committed && out.existing!="skip")throw Failure("commit_failed","controller returned skip for a non-skip policy");
                 } else committed=temp->commit(dest,source_path,out.existing);
+                TG_EXR_TOCK(commit_tick,"exr_output_commit_sum_ms");
+                TG_EXR_TOCK(finish_tick,"exr_finish_sum_ms");
                 if(committed) {
                     result["status"]="success";result["width"]=w;result["height"]=h;
                     result["finish_ms"]=ms(tick);result["format"]=out.format;
