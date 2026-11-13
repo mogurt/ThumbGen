@@ -801,7 +801,8 @@ Json Engine::convert(const Job& job) {
             // complete read succeeds. Sparse runs and all non-EXR routes keep
             // the initialized reference allocation. Keep this owner alive
             // through every output, just like the reference pixels vector.
-            if(input_format=="openexr" && !use_icc && !cmyk && spec.depth==1 && input_plan.runs.size()==1)
+            if(input_format=="openexr" && !use_icc && !cmyk && spec.depth==1 &&
+               !spec.get_int_attribute("openexr:luminancechroma",0) && input_plan.runs.size()==1)
                 exr_pixels.reset(new float[count]); // deliberately no ()
             else pixels.resize(count);
             float* colour_pixels=exr_pixels?exr_pixels.get():pixels.data();

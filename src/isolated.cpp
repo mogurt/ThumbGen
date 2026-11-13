@@ -297,6 +297,9 @@ Json execution_configuration(const std::vector<Job>& jobs,const IsolationOptions
         {"startup_timeout_ms",options.startup_timeout.count()},{"task_timeout_ms",options.task_timeout.count()}};
 }
 bool run_isolated(const std::vector<Job>& jobs,const std::string& executable,const std::function<void(const Json&)>& emit,IsolationOptions options) {
+#if defined(THUMBGEN_EXR_PROFILE) && THUMBGEN_EXR_PROFILE
+    const auto profile_batch_started=Clock::now();
+#endif
     const auto wakeup=std::make_shared<ProcessWakeup>();
     for(const auto& job:jobs)job_from_wire(job_to_wire(job));
     const auto configuration=execution_configuration(jobs,options);
@@ -510,6 +513,13 @@ bool run_isolated(const std::vector<Job>& jobs,const std::string& executable,con
             if(estimate_mib){result["execution"]["estimated_task_mib"]=*estimate_mib;result["execution"]["admission_mib"]=*task.admission_mib;result["execution"]["estimate_model"]="buffers-v3";}
             result["execution"]["queue_ms"]=task.queue_ms;
             result["execution"]["workers"]=workers;
+#if defined(THUMBGEN_EXR_PROFILE) && THUMBGEN_EXR_PROFILE
+            // All manifest jobs are available at this controller entry. This
+            // includes undispatched backlog, unlike admission-only queue_ms.
+            // Boundary ends before JSON emission, not at process/file flush.
+            result["timings_ms"]["controller_batch_to_result_ready_ms"]=
+                std::chrono::duration<double,std::milli>(Clock::now()-profile_batch_started).count();
+#endif
             emit(result);
             if(!job.sequence_id.empty() && --remaining.at(job.sequence_id)==0) {
                 pins.forget_sequence_lock(job.sequence_id);requests.erase(job.sequence_id);remaining.erase(job.sequence_id);

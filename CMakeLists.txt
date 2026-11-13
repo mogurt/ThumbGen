@@ -82,6 +82,7 @@ target_include_directories(thumbgen_runtime PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/
 option(THUMBGEN_EXR_PROFILE "Collect detailed EXR implementation timings (measurement builds only)" OFF)
 if(THUMBGEN_EXR_PROFILE)
     target_compile_definitions(thumbgen_core PRIVATE THUMBGEN_EXR_PROFILE=1)
+    target_compile_definitions(thumbgen_runtime PRIVATE THUMBGEN_EXR_PROFILE=1)
 endif()
 option(THUMBGEN_EXR_NOZERO "Avoid redundant initialization for eligible complete EXR reads" OFF)
 if(THUMBGEN_EXR_NOZERO)
