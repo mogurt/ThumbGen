@@ -795,6 +795,7 @@ Json Engine::convert(const Job& job) {
             }
             stage="decode";tick=Clock::now();
             TG_EXR_TICK(allocate_tick);
+            TG_EXR_MARK("exr_nozero_hit",0.0);
 #if defined(THUMBGEN_EXR_NOZERO) && THUMBGEN_EXR_NOZERO
             // Only a single dense FLOAT read of a flat EXR may overwrite the
             // uninitialized allocation. No pack/colour code runs unless that
@@ -802,9 +803,11 @@ Json Engine::convert(const Job& job) {
             // the initialized reference allocation. Keep this owner alive
             // through every output, just like the reference pixels vector.
             if(input_format=="openexr" && !use_icc && !cmyk && spec.depth==1 &&
-               !spec.get_int_attribute("openexr:luminancechroma",0) && input_plan.runs.size()==1)
+               !spec.get_int_attribute("openexr:luminancechroma",0) && input_plan.runs.size()==1 &&
+               count>=detail::exr_nozero_min_samples) {
                 exr_pixels.reset(new float[count]); // deliberately no ()
-            else pixels.resize(count);
+                TG_EXR_MARK("exr_nozero_hit",1.0);
+            } else pixels.resize(count);
             float* colour_pixels=exr_pixels?exr_pixels.get():pixels.data();
 #else
             pixels.resize(count);

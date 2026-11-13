@@ -2,6 +2,7 @@
 // separate roots, then compare the PNGs exactly (and success/failure records).
 #include <thumbgen/core.h>
 #include "../src/selected_input.h"
+#include "../src/exr_profile.h"
 #include <algorithm>
 #include <cstring>
 #include <cstdint>
@@ -12,11 +13,14 @@
 #include <stdexcept>
 namespace fs=std::filesystem;
 static void require(bool v,const std::string& s){if(!v)throw std::runtime_error(s);}
-static void fixture(const fs::path& path,const std::vector<std::string>& names,bool tiled,bool half) {
-    OIIO::ImageSpec s(73,41,int(names.size()),half?OIIO::TypeDesc::HALF:OIIO::TypeDesc::FLOAT);
+static void fixture(const fs::path& path,const std::vector<std::string>& names,bool tiled,bool half,int width=73,int height=41) {
+    require(width>0 && height>0,"fixture dimensions");
+    OIIO::ImageSpec s(width,height,int(names.size()),half?OIIO::TypeDesc::HALF:OIIO::TypeDesc::FLOAT);
     s.channelnames=names;s.alpha_channel=-1;
     for(int c=0;c<s.nchannels;++c)if(names[c]=="A")s.alpha_channel=c;
     s.attribute("compression","none");s.attribute("oiio:ColorSpace","linear");
+    // Test-only reproducible metadata; the original eight shapes stay 73x41.
+    s.attribute("DateTime","2000:01:01 00:00:00");
     if(tiled){s.tile_width=s.tile_height=16;s.tile_depth=1;}
     std::vector<float> p(std::size_t(s.width)*s.height*s.nchannels);
     for(std::size_t i=0;i<p.size();++i) {
@@ -85,6 +89,21 @@ static std::uint64_t first_chunk_midpoint(const fs::path& path) {
     require(bytes>1 && offset+8+bytes<=fs::file_size(path),"first chunk payload bounds");
     return offset+8+bytes/2;
 }
+static void check_nozero_marker(const thumbgen::Json& r,bool large_eligible) {
+#if defined(THUMBGEN_EXR_PROFILE) && THUMBGEN_EXR_PROFILE
+    const auto& times=r.at("timings_ms");
+    require(times.contains("exr_nozero_hit") && times["exr_nozero_hit"].is_number(),"profile must expose numeric NOZERO route marker");
+#if defined(THUMBGEN_EXR_NOZERO) && THUMBGEN_EXR_NOZERO
+    const double expected=large_eligible?1.0:0.0;
+#else
+    const double expected=0.0;(void)large_eligible;
+#endif
+    require(times["exr_nozero_hit"].get<double>()==expected,"NOZERO large hit / small fallback marker mismatch");
+#else
+    (void)large_eligible;
+    require(!r.at("timings_ms").contains("exr_nozero_hit"),"PROFILE OFF must not expose NOZERO route marker");
+#endif
+}
 int main(int argc,char** argv) {
     try {
         require(argc==2,"usage: test_exr_pipeline EMPTY_OUTPUT_ROOT");fs::path root=fs::absolute(argv[1]);
@@ -97,6 +116,7 @@ int main(int argc,char** argv) {
             thumbgen::Job job;job.id=id;job.input=source.u8string();job.options.input_space="linear";job.options.background="transparent";job.options.threads=1;
             for(int size:{19,37})job.outputs.push_back({(root/(id+"-"+std::to_string(size)+".png")).u8string(),"png",size,size,90});
             auto r=engine.convert(job);require(r["ok"].get<bool>(),r.dump());
+            check_nozero_marker(r,false);
             for(auto& x:r["timings_ms"].items())require(x.value().is_number()&&x.value().get<double>()>=0,"numeric timings contract");
             // Do not write absolute paths in the portable comparison records.
             records<<thumbgen::Json({{"id",id},{"ok",r["ok"]},{"timings_ms",r["timings_ms"]}}).dump()<<'\n';
@@ -124,6 +144,30 @@ int main(int argc,char** argv) {
         bad.outputs={{(root/"must-not-exist.png").u8string(),"png",19,19,90}};
         auto r=engine.convert(bad);require(!r["ok"].get<bool>(),"truncated payload must fail");
         require(!fs::exists(root/"must-not-exist.png"),"failed read consumed incomplete buffer");
+        // At-threshold guard is mandatory: a test suite consisting only of
+        // tiny fallbacks must not qualify the uninitialized-allocation route.
+        constexpr std::size_t large_samples=std::size_t(3072)*2048*4;
+        static_assert(large_samples==thumbgen::detail::exr_nozero_min_samples,
+                      "large fixture must hit the exact evidence boundary");
+        auto large=root/"large96.exr";fixture(large,layouts[1],false,false,3072,2048);
+        {
+            auto in=OIIO::ImageInput::open(large.u8string());require(bool(in),"large fixture open");
+            auto s=in->spec();
+            require(s.width==3072 && s.height==2048 && s.nchannels==4 && s.format==OIIO::TypeDesc::FLOAT &&
+                    s.channelnames==std::vector<std::string>({"R","G","B","A"}) && s.alpha_channel==3,
+                    "large canonical FLOAT RGBA fixture dimensions/layout");
+            auto plan=thumbgen::detail::channel_plan(s,{0,1,2,3},false);
+            require(plan.runs.size()==1 && plan.channels.size()==4,"large fixture must use single dense run");
+            in->close();
+        }
+        require(sentinel_guard(large,false,records),"large complete destination depends on sentinel prefill");
+        thumbgen::Job large_job;large_job.id="large96";large_job.input=large.u8string();
+        large_job.options.input_space="linear";large_job.options.background="transparent";large_job.options.threads=1;
+        for(int size:{19,37})large_job.outputs.push_back({(root/("large96-"+std::to_string(size)+".png")).u8string(),"png",size,size,90});
+        auto large_result=engine.convert(large_job);require(large_result["ok"].get<bool>(),large_result.dump());
+        require(large_result["decoded_mib"].get<double>()==96.0,"large selected read buffer must be 96 MiB");
+        check_nozero_marker(large_result,true);
+        records<<thumbgen::Json({{"id","large96"},{"ok",large_result["ok"]},{"timings_ms",large_result["timings_ms"]}}).dump()<<'\n';
         std::cout<<"EXR pipeline synthetic coverage passed\n";return 0;
     }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}
 }
