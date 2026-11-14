@@ -13,6 +13,30 @@ namespace fs=std::filesystem;
 using thumbgen::Json;
 using namespace thumbgen::detail;
 static void require(bool value,const std::string& message){if(!value)throw std::runtime_error(message);}
+// Observe the public reader calls while delegating decoding to a real EXR.
+// A failed strip must propagate directly; never retry with the whole reader.
+class ReadWitness final : public OIIO::ImageInput {
+    OIIO::ImageInput& source_;
+    const int fail_;
+    const char* decoder_;
+public:
+    int strip_calls=0,whole_calls=0;
+    ReadWitness(OIIO::ImageInput& source,int fail=0,const char* decoder="openexr"):
+        source_(source),fail_(fail),decoder_(decoder){}
+    const char* format_name() const override{return decoder_;}
+    bool open(const std::string&,OIIO::ImageSpec&) override{return false;}
+    bool close() override{return true;}
+    bool read_native_scanline(int,int,int,int,void*) override{return false;}
+    bool read_scanlines(int part,int mip,int begin,int end,int z,int first,int last,
+        OIIO::TypeDesc type,void* data,OIIO::stride_t xs,OIIO::stride_t ys) override {
+        if(++strip_calls==fail_)return false;
+        return source_.read_scanlines(part,mip,begin,end,z,first,last,type,data,xs,ys);
+    }
+    bool read_image(int part,int mip,int first,int last,OIIO::TypeDesc type,void* data,
+        OIIO::stride_t xs,OIIO::stride_t ys,OIIO::stride_t zs,OIIO::ProgressCallback callback,void* context) override {
+        ++whole_calls;return source_.read_image(part,mip,first,last,type,data,xs,ys,zs,callback,context);
+    }
+};
 static constexpr std::uint32_t bunny=0x13851a76U,other=0x42c9679fU;
 static void metadata(OIIO::ImageSpec& spec,const std::string& prefix="cryptomatte/test123") {
     spec.attribute(prefix+"/name","Object");spec.attribute(prefix+"/hash","MurmurHash3_32");spec.attribute(prefix+"/conversion","uint32_to_float32");
@@ -20,7 +44,7 @@ static void metadata(OIIO::ImageSpec& spec,const std::string& prefix="cryptomatt
 }
 static Json fixtures(const fs::path& root) {
     require(fs::create_directory(root),"fixture directory already exists");Json result;
-    for(const std::string kind:{"valid","bad","half_coverage","half_id","odd","gap","no_metadata","bad_hash","sidecar","legacy","many","window","oriented","missing_last","identity","strip_float","strip_half","strip_bad","strip_window","strip_tiled","strip_interleaved"}) {
+    for(const std::string kind:{"valid","bad","half_coverage","half_id","odd","gap","no_metadata","bad_hash","sidecar","legacy","many","window","oriented","missing_last","identity","strip_float","strip_half","strip_bad","strip_window","strip_tiled","strip_interleaved","strip_zips"}) {
         int width=kind.rfind("strip_",0)==0?128:kind=="many"?128:kind=="identity"?1280:kind=="window"?2:kind=="oriented"?2:8;
         int height=kind.rfind("strip_",0)==0?257:kind=="many"?128:kind=="window"?2:kind=="oriented" || kind=="identity"?3:1;
         int layers=kind=="many"?10:3;
@@ -36,6 +60,7 @@ static Json fixtures(const fs::path& root) {
         }
         OIIO::ImageSpec spec(width,height,int(names.size()),OIIO::TypeDesc::FLOAT);spec.channelnames=names;
         if(kind=="strip_tiled"){spec.tile_width=32;spec.tile_height=32;}
+        spec.attribute("compression",kind=="strip_zips"?"zips":"zip");
         metadata(spec,kind=="legacy"?"exr/cryptomatte/test123":"cryptomatte/test123");
         if(kind=="no_metadata")for(const char* field:{"name","hash","conversion"})spec.erase_attribute(std::string("cryptomatte/test123/")+field);
         if(kind=="bad_hash")spec.attribute("cryptomatte/test123/hash","wrong_hash");
@@ -93,10 +118,14 @@ static int run(const std::vector<fs::path>& args) {
         require(std::memcmp(p0,p2,sizeof(p0))==0 && p0[3]==1 && background[0]==0 && background[3]==0,"rank accumulation/background semantics");
         // Compare bounded all-rank strips against the retained whole-layer path,
         // including partial last strips, native mixed types and nonzero windows.
-        for(const char* kind:{"strip_float","strip_half","strip_bad","strip_window","strip_tiled","strip_interleaved"}) {
+        for(const char* kind:{"strip_float","strip_half","strip_bad","strip_window","strip_tiled","strip_interleaved","strip_zips"}) {
             auto source=OIIO::ImageInput::open(files[kind].get<std::string>());
             auto spec=source->spec();auto ranks=crypto_layout(spec,"Object");
-            auto strip=read_crypto_image(*source,spec,0,*ranks,InvalidData::magenta,8*1024*1024,1);
+            ReadWitness witness(*source);
+            auto strip=read_crypto_image(witness,spec,0,*ranks,InvalidData::magenta,8*1024*1024,1);
+            const bool fallback=std::string(kind)=="strip_tiled" || std::string(kind)=="strip_interleaved";
+            require(fallback?(witness.strip_calls==0 && witness.whole_calls>0):
+                (witness.strip_calls==5 && witness.whole_calls==0),"strip/fallback qualification changed");
             require(source->close(),"close strip input");
             source=OIIO::ImageInput::open(files[kind].get<std::string>());
             spec.tile_width=1; // Select the original whole-layer fallback without changing file contents.
@@ -124,6 +153,24 @@ static int run(const std::vector<fs::path>& args) {
         try{read_crypto_image(*broken,broken_spec,0,*broken_layout,InvalidData::magenta,8*1024*1024,1);}
         catch(const FileFailure& failure){require(failure.code=="decode_failed","strip failure classification changed");refused=true;}
         require(refused,"partial strip failure accepted");broken->close();
+        for(int fail:{1,3,5}) {
+            auto real=OIIO::ImageInput::open(files["strip_zips"].get<std::string>());
+            auto spec=real->spec();auto ranks=crypto_layout(spec,"Object");ReadWitness failing(*real,fail);
+            bool rejected=false;
+            try{read_crypto_image(failing,spec,0,*ranks,InvalidData::magenta,8*1024*1024,1);}
+            catch(const FileFailure& error){require(error.code=="decode_failed","injected strip error changed");rejected=true;}
+            require(rejected && failing.strip_calls==fail && failing.whole_calls==0,"failed strip was reread");
+            require(real->close(),"close injected strip input");
+        }
+        auto real=OIIO::ImageInput::open(files["strip_float"].get<std::string>());
+        auto foreign_spec=real->spec();auto foreign_ranks=crypto_layout(foreign_spec,"Object");
+        ReadWitness foreign(*real,0,"unmeasured-codec");
+        read_crypto_image(foreign,foreign_spec,0,*foreign_ranks,InvalidData::magenta,8*1024*1024,1);
+        require(foreign.strip_calls==0 && foreign.whole_calls==3,"unmeasured decoder entered EXR strips");real->close();
+        auto failed_job=job("strip_float","strip-error-stage");failed_job.input=truncated.u8string();failed_job.options.threads=1;
+        auto failed_result=engine.convert(failed_job);
+        require(failed_result["error"]["code"]=="decode_failed" && failed_result["error"]["stage"]=="visualization" &&
+            !fs::exists(failed_job.outputs[0].path),"strip error stage/output changed");
         auto recovery=job("strip_half","strip-recovery");recovery.options.threads=1;
         require(engine.convert(recovery)["ok"].get<bool>(),"task after strip failure did not recover");
         auto plain=job("valid","default");plain.options.visualization="colour";plain.options.channels="";result=engine.convert(plain);require(result["error"]["code"]=="visualization_required",result.dump());

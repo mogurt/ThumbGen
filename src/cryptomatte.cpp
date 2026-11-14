@@ -109,13 +109,21 @@ DataImage read_crypto_image(OIIO::ImageInput& input,const OIIO::ImageSpec& spec,
     const auto compression=spec.get_string_attribute("compression");
     // Concurrent strip scheduling regressed measured two-thread workers.
     // Keep those and unmeasured codecs on the original whole-layer reader.
-    const bool strips=threads==1 && (compression=="zip" || compression=="zips") &&
+    const bool strips=std::strcmp(input.format_name(),"openexr")==0 && threads==1 && (compression=="zip" || compression=="zips") &&
         !spec.tile_width && layout.layers.size()>1 && combined.runs.size()==1 &&
         std::size_t(spec.height)*source_bytes/combined.pixel_bytes>=64;
     const int rows=strips?64:spec.height;
     const std::size_t batches=strips?1:layout.layers.size();
+    OIIO::ImageSpec strip_spec;
+    if(strips) {
+        // channel_plan needs only geometry and native types, not metadata or
+        // channel names. In particular, never copy an embedded manifest here.
+        strip_spec.width=spec.width;strip_spec.nchannels=spec.nchannels;
+        strip_spec.format=spec.format;strip_spec.channelformats=spec.channelformats;
+    }
     for(int row=0;row<spec.height;row+=rows)for(std::size_t batch=0;batch<batches;++batch) {
-        auto strip=spec;strip.height=std::min(rows,spec.height-row);
+        if(strips)strip_spec.height=std::min(rows,spec.height-row);
+        const auto& strip=strips?strip_spec:spec;
         const auto& selected=strips?layout.channels:layout.layers[batch].channels;
         const auto plan=channel_plan(strip,selected,true);
         std::vector<unsigned char> raw(std::size_t(spec.width)*strip.height*plan.pixel_bytes);
