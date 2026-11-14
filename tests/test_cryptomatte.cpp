@@ -1,4 +1,5 @@
 #include "cryptomatte.h"
+#include "files.h"
 #include <OpenImageIO/half.h>
 #include <chrono>
 #include <cstring>
@@ -19,9 +20,9 @@ static void metadata(OIIO::ImageSpec& spec,const std::string& prefix="cryptomatt
 }
 static Json fixtures(const fs::path& root) {
     require(fs::create_directory(root),"fixture directory already exists");Json result;
-    for(const std::string kind:{"valid","bad","half_coverage","half_id","odd","gap","no_metadata","bad_hash","sidecar","legacy","many","window","oriented","missing_last","identity"}) {
-        int width=kind=="many"?128:kind=="identity"?1280:kind=="window"?2:kind=="oriented"?2:8;
-        int height=kind=="many"?128:kind=="window"?2:kind=="oriented" || kind=="identity"?3:1;
+    for(const std::string kind:{"valid","bad","half_coverage","half_id","odd","gap","no_metadata","bad_hash","sidecar","legacy","many","window","oriented","missing_last","identity","strip_float","strip_half","strip_bad","strip_window","strip_tiled","strip_interleaved"}) {
+        int width=kind.rfind("strip_",0)==0?128:kind=="many"?128:kind=="identity"?1280:kind=="window"?2:kind=="oriented"?2:8;
+        int height=kind.rfind("strip_",0)==0?257:kind=="many"?128:kind=="window"?2:kind=="oriented" || kind=="identity"?3:1;
         int layers=kind=="many"?10:3;
         std::vector<std::string> names{"Object.R","Object.G","Object.B"};std::vector<int> roles(3,-1);
         for(int layer=0;layer<layers;++layer) {
@@ -30,16 +31,20 @@ static Json fixtures(const fs::path& root) {
                 names.push_back(name+"."+"RGBA"[c]);roles.push_back(layer*4+c);
             }
         }
+        if(kind=="strip_interleaved") {
+            names.insert(names.begin()+7,"Object00.unrelated");roles.insert(roles.begin()+7,-1);
+        }
         OIIO::ImageSpec spec(width,height,int(names.size()),OIIO::TypeDesc::FLOAT);spec.channelnames=names;
+        if(kind=="strip_tiled"){spec.tile_width=32;spec.tile_height=32;}
         metadata(spec,kind=="legacy"?"exr/cryptomatte/test123":"cryptomatte/test123");
         if(kind=="no_metadata")for(const char* field:{"name","hash","conversion"})spec.erase_attribute(std::string("cryptomatte/test123/")+field);
         if(kind=="bad_hash")spec.attribute("cryptomatte/test123/hash","wrong_hash");
         if(kind=="sidecar")spec.attribute("cryptomatte/test123/manif_file","missing.json");
         else spec.attribute("cryptomatte/test123/manifest","this optional manifest deliberately is not JSON");
-        if(kind=="window"){spec.x=-1;spec.y=5;spec.full_x=-3;spec.full_y=4;spec.full_width=6;spec.full_height=4;}
+        if(kind=="window" || kind=="strip_window"){spec.x=-1;spec.y=5;spec.full_x=-3;spec.full_y=4;spec.full_width=6;spec.full_height=4;}
         if(kind=="oriented")spec.attribute("Orientation",6);
         spec.channelformats.resize(names.size(),OIIO::TypeDesc::FLOAT);
-        for(std::size_t c=3;c<roles.size();++c)if((kind=="half_coverage" && roles[c]%2==1) || (kind=="half_id" && roles[c]%2==0))spec.channelformats[c]=OIIO::TypeDesc::HALF;
+        for(std::size_t c=3;c<roles.size();++c)if(((kind=="half_coverage" || kind=="strip_half") && roles[c]%2==1) || (kind=="half_id" && roles[c]%2==0))spec.channelformats[c]=OIIO::TypeDesc::HALF;
         std::vector<unsigned char> data(std::size_t(width)*height*spec.pixel_bytes(true));
         for(int p=0;p<width*height;++p) {
             std::uint32_t ids[6]={};float weights[6]={};
@@ -55,8 +60,8 @@ static Json fixtures(const fs::path& root) {
                 case 6:ids[0]=bunny;ids[1]=other;weights[0]=1.25f;weights[1]=-0.25f;break;
                 default:ids[0]=0x7fc00001U;weights[0]=0;ids[1]=other;weights[1]=1;break;
             }
-            if(kind=="bad" && p==1){ids[0]=0x7fc00001U;weights[0]=0.25f;}
-            if(kind=="bad" && p==2){weights[2]=std::numeric_limits<float>::infinity();}
+            if((kind=="bad" || kind=="strip_bad") && p%128==1){ids[0]=0x7fc00001U;weights[0]=0.25f;}
+            if((kind=="bad" || kind=="strip_bad") && p%128==2){weights[2]=std::numeric_limits<float>::infinity();}
             auto* target=data.data()+std::size_t(p)*spec.pixel_bytes(true);
             for(std::size_t c=0;c<names.size();++c) {
                 int role=roles[c];std::uint32_t bits=0;float weight=0;
@@ -86,6 +91,22 @@ static int run(const std::vector<fs::path>& args) {
         require(image.statistics.invalid_pixels==0,"valid signed/overshoot/unused-ID values rejected");
         float p0[4],p2[4],background[4];image.image.getpixel(0,0,p0,4);image.image.getpixel(2,0,p2,4);image.image.getpixel(3,0,background,4);
         require(std::memcmp(p0,p2,sizeof(p0))==0 && p0[3]==1 && background[0]==0 && background[3]==0,"rank accumulation/background semantics");
+        // Compare bounded all-rank strips against the retained whole-layer path,
+        // including partial last strips, native mixed types and nonzero windows.
+        for(const char* kind:{"strip_float","strip_half","strip_bad","strip_window","strip_tiled","strip_interleaved"}) {
+            auto source=OIIO::ImageInput::open(files[kind].get<std::string>());
+            auto spec=source->spec();auto ranks=crypto_layout(spec,"Object");
+            auto strip=read_crypto_image(*source,spec,0,*ranks,InvalidData::magenta,8*1024*1024,1);
+            require(source->close(),"close strip input");
+            source=OIIO::ImageInput::open(files[kind].get<std::string>());
+            spec.tile_width=1; // Select the original whole-layer fallback without changing file contents.
+            auto whole=read_crypto_image(*source,spec,0,*ranks,InvalidData::magenta,8*1024*1024,1);
+            require(source->close(),"close fallback input");
+            require(strip.decoded_bytes==whole.decoded_bytes &&
+                strip.statistics.invalid_pixels==whole.statistics.invalid_pixels &&
+                strip.statistics.clipped_components==whole.statistics.clipped_components,"strip statistics differ");
+            require(std::memcmp(strip.image.localpixels(),whole.image.localpixels(),std::size_t(spec.width)*spec.height*4*sizeof(float))==0,"strip rank order/native bits differ");
+        }
         thumbgen::Engine engine;auto job=[&](const char* name,const char* suffix){thumbgen::Job j;j.id=suffix;j.input=files[name];j.options.visualization="cryptomatte";j.options.channels="Object";j.outputs.push_back({(root/(std::string(suffix)+".png")).u8string(),"png",128,128,90});return j;};
         auto first=job("bad","bad-error");first.sequence_id="crypto-sequence";first.options.invalid_values="error";auto result=engine.convert(first);
         require(result["error"]["code"]=="data_invalid_value" && result["visualization"]["invalid_pixels"]==2 && !fs::exists(first.outputs[0].path),result.dump());
@@ -94,6 +115,17 @@ static int run(const std::vector<fs::path>& args) {
         require(result["ok"].get<bool>() && result["selection"]["lock_status"]=="reused",result.dump());
         auto many=job("many","bounded");many.options.max_decode_mib=1;result=engine.convert(many);require(result["ok"].get<bool>() && result["decoded_mib"]==0.25 && result["cryptomatte"]["ranks"]==20,result.dump());
         auto split=job("split","incomplete");split.options.part_name="left";result=engine.convert(split);require(result["error"]["code"]=="cryptomatte_layout_unsupported" && !fs::exists(split.outputs[0].path),result.dump());
+        auto truncated=root/"strip-truncated.exr";
+        fs::copy_file(files["strip_float"].get<std::string>(),truncated);
+        fs::resize_file(truncated,fs::file_size(truncated)-64);
+        auto broken=OIIO::ImageInput::open(truncated.u8string());require(bool(broken),"open truncated strip header");
+        auto broken_spec=broken->spec();auto broken_layout=crypto_layout(broken_spec,"Object");
+        bool refused=false;
+        try{read_crypto_image(*broken,broken_spec,0,*broken_layout,InvalidData::magenta,8*1024*1024,1);}
+        catch(const FileFailure& failure){require(failure.code=="decode_failed","strip failure classification changed");refused=true;}
+        require(refused,"partial strip failure accepted");broken->close();
+        auto recovery=job("strip_half","strip-recovery");recovery.options.threads=1;
+        require(engine.convert(recovery)["ok"].get<bool>(),"task after strip failure did not recover");
         auto plain=job("valid","default");plain.options.visualization="colour";plain.options.channels="";result=engine.convert(plain);require(result["error"]["code"]=="visualization_required",result.dump());
         std::cout<<"Cryptomatte opaque IDs, streamed ranks, coverage overview, metadata and stable sequence passed\n";return 0;
     }catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}

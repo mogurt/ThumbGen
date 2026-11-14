@@ -102,27 +102,48 @@ DataImage read_crypto_image(OIIO::ImageInput& input,const OIIO::ImageSpec& spec,
     if(pixels>limit/(4*sizeof(double)))throw FileFailure("canvas_limit_exceeded","Cryptomatte accumulation buffer exceeds limit");
     DataImage result;result.decoded_bytes=pixels*source_bytes;
     std::vector<double> sums(pixels*4,0);std::vector<unsigned char> bad(pixels,0);
-    for(const auto& layer:layout.layers) {
-        const auto plan=channel_plan(spec,layer.channels,true);std::vector<unsigned char> raw(pixels*plan.pixel_bytes);
-        auto tick=Clock::now();if(!read_selected(input,spec,part,plan,true,raw.data()))throw FileFailure("decode_failed",input.geterror());result.decode_ms+=ms(tick);tick=Clock::now();
+    // Read all contiguous ranks together in bounded scanline strips. This
+    // avoids decompressing the same EXR chunks once per rank layer, while
+    // keeping raw storage within the original single-layer allocation.
+    const auto combined=channel_plan(spec,layout.channels,true);
+    const auto compression=spec.get_string_attribute("compression");
+    // Concurrent strip scheduling regressed measured two-thread workers.
+    // Keep those and unmeasured codecs on the original whole-layer reader.
+    const bool strips=threads==1 && (compression=="zip" || compression=="zips") &&
+        !spec.tile_width && layout.layers.size()>1 && combined.runs.size()==1 &&
+        std::size_t(spec.height)*source_bytes/combined.pixel_bytes>=64;
+    const int rows=strips?64:spec.height;
+    const std::size_t batches=strips?1:layout.layers.size();
+    for(int row=0;row<spec.height;row+=rows)for(std::size_t batch=0;batch<batches;++batch) {
+        auto strip=spec;strip.height=std::min(rows,spec.height-row);
+        const auto& selected=strips?layout.channels:layout.layers[batch].channels;
+        const auto plan=channel_plan(strip,selected,true);
+        std::vector<unsigned char> raw(std::size_t(spec.width)*strip.height*plan.pixel_bytes);
+        auto tick=Clock::now();
+        const bool read=strips?input.read_scanlines(part,0,spec.y+row,spec.y+row+strip.height,spec.z,
+            plan.runs.front().first,plan.runs.front().end,OIIO::TypeDesc::UNKNOWN,raw.data()):
+            read_selected(input,spec,part,plan,true,raw.data());
+        if(!read)throw FileFailure("decode_failed",input.geterror());
+        result.decode_ms+=ms(tick);tick=Clock::now();
         struct Rank {const unsigned char* id;const unsigned char* coverage;std::size_t id_stride,coverage_stride;bool half_coverage;};
         std::vector<Rank> ranks;
-        for(std::size_t pair=0;pair<layer.channels.size();pair+=2) {
-            auto ii=std::size_t(std::lower_bound(plan.channels.begin(),plan.channels.end(),layer.channels[pair])-plan.channels.begin());
-            auto ci=std::size_t(std::lower_bound(plan.channels.begin(),plan.channels.end(),layer.channels[pair+1])-plan.channels.begin());
-            ranks.push_back({raw.data()+plan.offsets[ii],raw.data()+plan.offsets[ci],plan.strides[ii],plan.strides[ci],spec.channelformat(layer.channels[pair+1])==OIIO::TypeDesc::HALF});
+        for(std::size_t pair=0;pair<selected.size();pair+=2) {
+            auto ii=std::size_t(std::lower_bound(plan.channels.begin(),plan.channels.end(),selected[pair])-plan.channels.begin());
+            auto ci=std::size_t(std::lower_bound(plan.channels.begin(),plan.channels.end(),selected[pair+1])-plan.channels.begin());
+            ranks.push_back({raw.data()+plan.offsets[ii],raw.data()+plan.offsets[ci],plan.strides[ii],plan.strides[ci],spec.channelformat(selected[pair+1])==OIIO::TypeDesc::HALF});
         }
-        OIIO::parallel_for_chunked(0,spec.height,0,[&](int64_t begin,int64_t end) {
+        OIIO::parallel_for_chunked(0,strip.height,0,[&](int64_t begin,int64_t end) {
             for(std::size_t p=std::size_t(begin)*spec.width;p<std::size_t(end)*spec.width;++p)for(const auto& rank:ranks) {
+                const auto destination=std::size_t(row)*spec.width+p;
                 float weight=coverage(rank.coverage+p*rank.coverage_stride,rank.half_coverage);
-                if(!std::isfinite(weight)){bad[p]=1;continue;}
+                if(!std::isfinite(weight)){bad[destination]=1;continue;}
                 if(weight==0)continue; // Unused ranks may contain arbitrary ID padding.
                 auto bits=value<std::uint32_t>(rank.id+p*rank.id_stride);
                 if((bits&0x7fffffffU)==0)continue; // Null/background ID, including signed zero.
-                auto exponent=(bits>>23)&255U;if(exponent==0 || exponent==255){bad[p]=1;continue;}
+                auto exponent=(bits>>23)&255U;if(exponent==0 || exponent==255){bad[destination]=1;continue;}
                 float colour[4];id_palette(bits,colour);
-                for(int c=0;c<3;++c)sums[p*4+c]+=double(weight)*colour[c];
-                sums[p*4+3]+=double(weight);
+                for(int c=0;c<3;++c)sums[destination*4+c]+=double(weight)*colour[c];
+                sums[destination*4+3]+=double(weight);
             }
         },OIIO::paropt(threads,OIIO::paropt::SplitDir::Y,1));
         result.mapping_ms+=ms(tick);
