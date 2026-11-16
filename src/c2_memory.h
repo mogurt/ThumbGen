@@ -1,9 +1,12 @@
 #pragma once
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <stdexcept>
 namespace thumbgen::detail {
 inline constexpr std::uint64_t c2_workspace_limit=32ULL*1024*1024;
+inline constexpr std::size_t c2_metadata_limit=1024*1024;
+inline constexpr std::uint64_t c2_codec_reserve=32ULL*1024*1024;
 struct C2Memory {
     std::uint64_t source,working,output,codec;
     std::uint64_t dynamic()const{return source+working+output+codec;}
@@ -20,6 +23,6 @@ inline C2Memory c2_memory(std::uint64_t w,std::uint64_t h,std::uint64_t channels
     return {block*channels*2+2*w*channels*2+cms,
             c2_workspace_limit+block*channels*sizeof(float),
             preview*5*4*sizeof(float),
-            32ULL*1024*1024+preview*8+1024*1024};
+            c2_codec_reserve+preview*8+1024*1024};
 }
 }

@@ -9,6 +9,7 @@
 #include "c2_resize.h"
 #include "c2_png_rows.h"
 #include "c2_memory.h"
+#include "c2_png_metadata.h"
 #endif
 #include "cmyk_jpeg.h"
 #include "build_info.h"
@@ -554,7 +555,8 @@ Json Engine::convert(const Job& job) {
         std::uint64_t c2_dynamic_bytes=0;
         const bool c2_png=scanline_png || (integer_linear && spec.format==OIIO::TypeDesc::UINT8 &&
             std::uint64_t(spec.width)*spec.height>=detail::png_scanline_min_pixels && detail::png_scanline_eligible(source_path,spec,input_format,colour_plan,true));
-        if(c2_png && spec.width<=65536 && spec.height<=65536 && !job.outputs.empty() && job.outputs.size()<=2) {
+        if(c2_png && spec.width<=65536 && spec.height<=65536 && !job.outputs.empty() && job.outputs.size()<=2 &&
+           detail::c2_png_metadata_eligible(source_path,spec)) {
             bool c2_small_outputs=true;
             int c2_largest_w=0,c2_largest_h=0;
             for(const auto& output:job.outputs){
