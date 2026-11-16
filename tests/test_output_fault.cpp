@@ -1,6 +1,9 @@
 #include <thumbgen/core.h>
 #include "output_fault.h"
 #include "files.h"
+#ifdef THUMBGEN_EXPECT_C2
+#include "c2_resize.h"
+#endif
 #include <OpenImageIO/imageio.h>
 #include <chrono>
 #include <filesystem>
@@ -27,6 +30,9 @@ static bool hook(const char* phase,std::size_t index){
     const std::string key=phase;
     if(key=="read" && active->late_read && index>=1000)throw FileFailure("decode_failed","injected source read failure");
     if(key!=active->phase || (key=="read" || key=="resize_row"?index<std::size_t(active->index):index!=std::size_t(active->index)))return false;
+#ifdef THUMBGEN_EXPECT_C2
+    if(key=="invariant")throw thumbgen::detail::C2ContractError("injected workspace invariant failure");
+#endif
     if(key=="sampler")return true;
     if(key=="preview"){
         if(active->kind=="null")return true;
@@ -106,6 +112,8 @@ int main(int argc,char** argv){
 #ifdef THUMBGEN_EXPECT_C2
         cases.push_back({"single-resize-midstream","resize_row","throw","error","",1000});
         cases.push_back({"resize-midstream-late-read","resize_row","throw","error","",500,1,-1,true});
+        cases.push_back({"invariant-before-output-error","invariant","throw","error","",0,1,0});
+        cases.push_back({"invariant-before-skip-race","invariant","throw","skip","decoded-create"});
 #endif
         Json records=Json::array();std::size_t c2_allocations=0;bool planned=false;std::string race;
         Engine engine([&](const std::string& phase,const Job& job){
@@ -136,6 +144,7 @@ int main(int argc,char** argv){
             if(c.name=="dual-first-oom" || c.name=="dual-first-null")need(result["status"]=="partial" && result["outputs"][1]["status"]=="success",result.dump());
             if(c.name=="dual-second-oom" || c.name=="dual-second-null")need(result["status"]=="partial" && result["outputs"][0]["status"]=="success",result.dump());
             if(c.late_read)need(result["error"]["code"]=="decode_failed" && result["error"]["stage"]=="decode" && result["outputs"].empty(),result.dump());
+            if(c.phase=="invariant")need(result["error"]["code"]=="conversion_failed" && result["error"]["stage"]=="decode" && result["outputs"].empty(),"invariant error masked by output policy: "+result.dump());
             Json files=Json::array();for(const auto& o:job.outputs)files.push_back(fs::exists(fs::u8path(o.path))?Json(o.path):Json(nullptr));
             records.push_back({{"case",c.name},{"contract",contract(result)},{"files",files},{"stream",stream},{"c2_allocations",c2_allocations},{"trace",trace}});
             write(input,original);

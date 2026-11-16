@@ -56,7 +56,7 @@ struct Task {
     void next(){handle.resume();if(handle.promise().error)std::rethrow_exception(handle.promise().error);}
 };
 #include "c2_stb_loops.h"
-void require(bool value){if(!value)throw std::runtime_error("C2 resizer contract failed");}
+void require(bool value){if(!value)throw thumbgen::detail::C2ContractError("C2 resizer contract failed");}
 struct Owner {STBIR_RESIZE resize{};~Owner(){stbir_free_samplers(&resize);}};
 struct Slice {
     stbir__info* info=nullptr;
@@ -111,7 +111,7 @@ struct C2Resize::Impl {
         require(w>0 && h>0 && (c==3 || c==4) && !outputs.empty() && outputs.size()<=2);
         size_t planned=0;if(!plan(w,h,c,outputs,planned))throw C2PlanLimit();
         allocation.owner=this;
-        auto account=[&](size_t n){if(n>planned-bytes)throw std::runtime_error("C2 allocation exceeds admitted workspace");bytes+=n;};
+        auto account=[&](size_t n){if(n>planned-bytes)throw C2ContractError("C2 allocation exceeds admitted workspace");bytes+=n;};
         // Pointer-vector capacity and allocator overhead are reserved up front;
         // pinned geometry has at most one slice per input column, two outputs.
         account(sizeof(Impl)+size_t(w)*c*sizeof(float)+4*size_t(w)*sizeof(void*)+4096);

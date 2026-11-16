@@ -763,7 +763,8 @@ Json Engine::convert(const Job& job) {
                         if(!c2_previews.back().localpixels())throw Failure("resize_failed","linear float resize failed");
                         try {
                             c2_resize=std::make_unique<detail::C2Resize>(spec.width,spec.height,spec.nchannels,c2_sizes);
-                            if(c2_resize->workspace_bytes()!=c2_workspace_bytes)throw Failure("conversion_failed","C2 admitted workspace differs from allocation");
+                            if(c2_resize->workspace_bytes()!=c2_workspace_bytes)throw detail::C2ContractError("C2 admitted workspace differs from allocation");
+                            detail::output_fault("invariant",0);
                             detail::output_fault("resize",0);
                             c2_resize_ms=c2_resize->execute([&](int y,float* data){
                                 try {rows.get(y,data);}catch(...){source_error=std::current_exception();throw;}
@@ -773,7 +774,9 @@ Json Engine::convert(const Job& job) {
                             if(source_error)std::rethrow_exception(source_error);
                             throw Failure("resize_failed","linear float resize failed");
                         }
-                    } catch(...) {
+                    } catch(const detail::C2PlanLimit&) {throw;}
+                    catch(const detail::C2ContractError&) {throw;}
+                    catch(...) {
                         if(source_error)std::rethrow_exception(source_error);
                         c2_preview_error=std::current_exception();
                         c2_previews.clear();

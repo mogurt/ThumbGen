@@ -7,6 +7,7 @@
 #include <vector>
 namespace thumbgen::detail {
 struct C2PlanLimit:std::runtime_error {C2PlanLimit():std::runtime_error("C2 workspace limit"){} };
+struct C2ContractError:std::runtime_error {using std::runtime_error::runtime_error;};
 // Internal opt-in adapter. Construction fixes all geometry and allocates the
 // original sampler tables plus bounded concurrent slice state, before decode.
 class C2Resize {
