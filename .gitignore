@@ -5,11 +5,14 @@ benchmarks/output/
 .deps/
 build/
 CMakeUserPresets.json
-benchmarks/results/*
-!benchmarks/results/*/
-benchmarks/results/**/*
-!benchmarks/results/**/
-!benchmarks/results/**/SUMMARY.md
 
 # Local development notes and original documentation snapshots
 /.local/
+
+# Local benchmark narratives, experiment receipts and generated output
+/benchmarks/**/*.md
+/benchmarks/results/
+/benchmarks/assets/
+/benchmarks/c2_stream/*.json
+/benchmarks/public-results-v1.json
+/benchmarks/regression-thresholds.windows-local.json

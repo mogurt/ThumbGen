@@ -1,0 +1,410 @@
+{
+  "files": [
+    {
+      "name": "Lake_Mountain_Landscape.jpg",
+      "page": "https://commons.wikimedia.org/wiki/File:Lake_Mountain_Landscape.jpg",
+      "url": "https://upload.wikimedia.org/wikipedia/commons/7/75/Lake_Mountain_Landscape.jpg",
+      "id": "lake",
+      "license": "CC0-1.0",
+      "group": "sdr",
+      "filename": "lake.jpg",
+      "bytes": 2915869,
+      "sha256": "32c63883fbedbd2da1590245b1ccaa55bdb26ffa63bf3328456202356ed307d6",
+      "width": 5184,
+      "height": 3456,
+      "mode": "RGB",
+      "orientation": 1,
+      "icc": false,
+      "author": "Bonnie Moreland"
+    },
+    {
+      "name": "Bike_on_a_snowy_street_in_Quebec_City_at_night.jpg",
+      "page": "https://commons.wikimedia.org/wiki/File:Bike_on_a_snowy_street_in_Quebec_City_at_night.jpg",
+      "url": "https://upload.wikimedia.org/wikipedia/commons/3/30/Bike_on_a_snowy_street_in_Quebec_City_at_night.jpg",
+      "id": "snow",
+      "license": "CC0-1.0",
+      "group": "icc",
+      "filename": "snow.jpg",
+      "bytes": 17375849,
+      "sha256": "0c9965c2ad07f441cd13f2a57023a0035da3bc54da380fd7e4ed514f9f46c38a",
+      "width": 7728,
+      "height": 5162,
+      "mode": "RGB",
+      "orientation": 1,
+      "icc": true,
+      "author": "Wilfredor"
+    },
+    {
+      "id": "rocks",
+      "filename": "rocks.png",
+      "group": "sdr",
+      "license": "CC0-1.0",
+      "page": "https://polyhaven.com/a/aerial_rocks_02",
+      "url": "https://dl.polyhaven.org/file/ph-assets/Textures/png/4k/aerial_rocks_02/aerial_rocks_02_diff_4k.png",
+      "bytes": 30701993,
+      "sha256": "4170ef1faad95c04e7faf6a5c2d8a4c424c2da08d38f7c60c4aeeecfd0a19e5b",
+      "width": 4096,
+      "height": 4096,
+      "mode": "RGB",
+      "orientation": 1,
+      "icc": false,
+      "author": "Rob Tuytel / Poly Haven"
+    },
+    {
+      "name": "Sossusvlei_Dunes_Namib.jpg",
+      "page": "https://commons.wikimedia.org/wiki/File:Sossusvlei_Dunes_Namib.jpg",
+      "url": "https://upload.wikimedia.org/wikipedia/commons/2/2c/Sossusvlei_Dunes_Namib.jpg",
+      "id": "dunes",
+      "license": "CC0-1.0",
+      "group": "sdr",
+      "filename": "dunes.jpg",
+      "bytes": 5868537,
+      "sha256": "2d59d5b39f328bf4eac44fa75a88834136956f8026cb85872ec392e16d4ce274",
+      "width": 5184,
+      "height": 3888,
+      "mode": "RGB",
+      "orientation": 1,
+      "icc": false,
+      "author": "Vicartb"
+    },
+    {
+      "id": "asf-ScanLines-Desk.exr",
+      "url": "https://raw.githubusercontent.com/AcademySoftwareFoundation/openexr-images/e38ffb0790f62f05a6f083a6fa4cac150b3b7452/ScanLines/Desk.exr",
+      "sha256": "2734d15e1ce157f73feaae5033b148bdabc98acb3084e9d892c6b01f23c24854",
+      "license": "BSD-3-Clause",
+      "git_blob": "d6ed3923c15864b470cc3ea59d0c8ea271dad571",
+      "bytes": 2424523,
+      "filename": "asf-ScanLines-Desk.exr",
+      "page": "https://github.com/AcademySoftwareFoundation/openexr-images/tree/e38ffb0790f62f05a6f083a6fa4cac150b3b7452/ScanLines"
+    },
+    {
+      "id": "asf-ScanLines-StillLife.exr",
+      "url": "https://raw.githubusercontent.com/AcademySoftwareFoundation/openexr-images/e38ffb0790f62f05a6f083a6fa4cac150b3b7452/ScanLines/StillLife.exr",
+      "sha256": "86a04a36ec10983780d47ae33b2fba0dde269dd687bf53decf5ec0a726e50756",
+      "license": "BSD-3-Clause",
+      "git_blob": "68e8dff85ae273a196bc63907f9a59fd07166a01",
+      "bytes": 3783165,
+      "filename": "asf-ScanLines-StillLife.exr",
+      "page": "https://github.com/AcademySoftwareFoundation/openexr-images/tree/e38ffb0790f62f05a6f083a6fa4cac150b3b7452/ScanLines"
+    },
+    {
+      "id": "asf-Tiles-GoldenGate.exr",
+      "url": "https://raw.githubusercontent.com/AcademySoftwareFoundation/openexr-images/e38ffb0790f62f05a6f083a6fa4cac150b3b7452/Tiles/GoldenGate.exr",
+      "sha256": "8790ad440e8708a05044d646082e876327ceba759052dffa7adf8eb7c170bca0",
+      "license": "BSD-3-Clause",
+      "git_blob": "620d4121044642bd1180294b52a051ed258ecb1c",
+      "bytes": 3693609,
+      "filename": "asf-Tiles-GoldenGate.exr",
+      "page": "https://github.com/AcademySoftwareFoundation/openexr-images/tree/e38ffb0790f62f05a6f083a6fa4cac150b3b7452/Tiles"
+    },
+    {
+      "id": "asf-MultiResolution-Kapaa.exr",
+      "url": "https://raw.githubusercontent.com/AcademySoftwareFoundation/openexr-images/e38ffb0790f62f05a6f083a6fa4cac150b3b7452/MultiResolution/Kapaa.exr",
+      "sha256": "703477c8900ab1c2278544b89ee30cdc74b088202ac6d5b5bf918b21f0e24baa",
+      "license": "BSD-3-Clause",
+      "git_blob": "c7d6518b73f68192c500799f91dc1c332bdd9a2b",
+      "bytes": 6779689,
+      "filename": "asf-MultiResolution-Kapaa.exr",
+      "page": "https://github.com/AcademySoftwareFoundation/openexr-images/tree/e38ffb0790f62f05a6f083a6fa4cac150b3b7452/MultiResolution"
+    },
+    {
+      "id": "polyhaven-kiara_1_dawn-1k",
+      "url": "https://dl.polyhaven.org/file/ph-assets/HDRIs/exr/1k/kiara_1_dawn_1k.exr",
+      "sha256": "f111c387cfe4be12313357680cdca7cfade88b1066823d9ef8aecdfa4d006881",
+      "license": "CC0-1.0",
+      "git_blob": null,
+      "bytes": 1296516,
+      "filename": "polyhaven-kiara_1_dawn-1k.exr",
+      "page": "https://polyhaven.com/a/kiara_1_dawn"
+    },
+    {
+      "id": "polyhaven-kiara_1_dawn-4k",
+      "url": "https://dl.polyhaven.org/file/ph-assets/HDRIs/exr/4k/kiara_1_dawn_4k.exr",
+      "sha256": "9e322b7bf8e4e0df71dc556ea193ec5bf6241f2feafaf2e759b988f2f2475840",
+      "license": "CC0-1.0",
+      "git_blob": null,
+      "bytes": 20352270,
+      "filename": "polyhaven-kiara_1_dawn-4k.exr",
+      "page": "https://polyhaven.com/a/kiara_1_dawn"
+    },
+    {
+      "id": "polyhaven-kiara_1_dawn-8k",
+      "url": "https://dl.polyhaven.org/file/ph-assets/HDRIs/exr/8k/kiara_1_dawn_8k.exr",
+      "sha256": "fd2140f63089c8cb6bc814dd8bd422ecb100cc9a4668adeb2b85d088240d93eb",
+      "license": "CC0-1.0",
+      "git_blob": null,
+      "bytes": 80771200,
+      "filename": "polyhaven-kiara_1_dawn-8k.exr",
+      "page": "https://polyhaven.com/a/kiara_1_dawn"
+    },
+    {
+      "id": "beachball-0001",
+      "filename": "beachball-0001.exr",
+      "url": "https://raw.githubusercontent.com/AcademySoftwareFoundation/openexr-images/e38ffb0790f62f05a6f083a6fa4cac150b3b7452/Beachball/singlepart.0001.exr",
+      "bytes": 2347698,
+      "git_blob": "14db75cfe6f4471dc9c2b562394edb6b099fe530",
+      "page": "https://github.com/AcademySoftwareFoundation/openexr-images/tree/e38ffb0790f62f05a6f083a6fa4cac150b3b7452/Beachball",
+      "license": "BSD-3-Clause",
+      "sha256": "29719942ed3c095a8f8f111fc139fc4c28f446007f5bfce00177cae585b1a87a"
+    },
+    {
+      "id": "beachball-0002",
+      "filename": "beachball-0002.exr",
+      "url": "https://raw.githubusercontent.com/AcademySoftwareFoundation/openexr-images/e38ffb0790f62f05a6f083a6fa4cac150b3b7452/Beachball/singlepart.0002.exr",
+      "bytes": 2558932,
+      "git_blob": "f284b82c6b5c16fb88c857ebb1b49a272594565e",
+      "page": "https://github.com/AcademySoftwareFoundation/openexr-images/tree/e38ffb0790f62f05a6f083a6fa4cac150b3b7452/Beachball",
+      "license": "BSD-3-Clause",
+      "sha256": "7393fe8ad71830faf2ab25881a7a40e0afa09d82b35a6e5e018a7fe7ac4dc2fe"
+    },
+    {
+      "id": "beachball-0003",
+      "filename": "beachball-0003.exr",
+      "url": "https://raw.githubusercontent.com/AcademySoftwareFoundation/openexr-images/e38ffb0790f62f05a6f083a6fa4cac150b3b7452/Beachball/singlepart.0003.exr",
+      "bytes": 2319755,
+      "git_blob": "e4254ae97f15d3a70e590c2604dc3c2ee9b34362",
+      "page": "https://github.com/AcademySoftwareFoundation/openexr-images/tree/e38ffb0790f62f05a6f083a6fa4cac150b3b7452/Beachball",
+      "license": "BSD-3-Clause",
+      "sha256": "f0f65b3db3df3a07543e599baab02fe3323e242fcf40e247cd1bd992f03bc353"
+    },
+    {
+      "id": "beachball-0004",
+      "filename": "beachball-0004.exr",
+      "url": "https://raw.githubusercontent.com/AcademySoftwareFoundation/openexr-images/e38ffb0790f62f05a6f083a6fa4cac150b3b7452/Beachball/singlepart.0004.exr",
+      "bytes": 2389299,
+      "git_blob": "d1946e00eb324dff5b66d3c3261e04e15c92e6b2",
+      "page": "https://github.com/AcademySoftwareFoundation/openexr-images/tree/e38ffb0790f62f05a6f083a6fa4cac150b3b7452/Beachball",
+      "license": "BSD-3-Clause",
+      "sha256": "8bd77e7bea2fc2a060b93861ee3cc77407059437f7a82155def4aec8f010be0f"
+    },
+    {
+      "id": "beachball-0005",
+      "filename": "beachball-0005.exr",
+      "url": "https://raw.githubusercontent.com/AcademySoftwareFoundation/openexr-images/e38ffb0790f62f05a6f083a6fa4cac150b3b7452/Beachball/singlepart.0005.exr",
+      "bytes": 2587500,
+      "git_blob": "68f41598849820db0cec7070af18a87f9080a115",
+      "page": "https://github.com/AcademySoftwareFoundation/openexr-images/tree/e38ffb0790f62f05a6f083a6fa4cac150b3b7452/Beachball",
+      "license": "BSD-3-Clause",
+      "sha256": "12bf1558210aac22b33c74af316fc3d95669422f2e9a1a6ae98c3fe59e72e6b2"
+    },
+    {
+      "id": "beachball-0006",
+      "filename": "beachball-0006.exr",
+      "url": "https://raw.githubusercontent.com/AcademySoftwareFoundation/openexr-images/e38ffb0790f62f05a6f083a6fa4cac150b3b7452/Beachball/singlepart.0006.exr",
+      "bytes": 2288939,
+      "git_blob": "68925b41c9fcaa722174fe07b5dcce42db4bc676",
+      "page": "https://github.com/AcademySoftwareFoundation/openexr-images/tree/e38ffb0790f62f05a6f083a6fa4cac150b3b7452/Beachball",
+      "license": "BSD-3-Clause",
+      "sha256": "7449d65369448fabdb5c61e2146d39fb705a738bb89d7dcc35ead9dd19c1b86d"
+    },
+    {
+      "id": "beachball-0007",
+      "filename": "beachball-0007.exr",
+      "url": "https://raw.githubusercontent.com/AcademySoftwareFoundation/openexr-images/e38ffb0790f62f05a6f083a6fa4cac150b3b7452/Beachball/singlepart.0007.exr",
+      "bytes": 2299374,
+      "git_blob": "e6847b5c8392e5b52b9822aa484d566c53768eb1",
+      "page": "https://github.com/AcademySoftwareFoundation/openexr-images/tree/e38ffb0790f62f05a6f083a6fa4cac150b3b7452/Beachball",
+      "license": "BSD-3-Clause",
+      "sha256": "d11661be80cb8cbf01e29623edce99965745c4527a5e43a9edbfec632a2f09df"
+    },
+    {
+      "id": "beachball-0008",
+      "filename": "beachball-0008.exr",
+      "url": "https://raw.githubusercontent.com/AcademySoftwareFoundation/openexr-images/e38ffb0790f62f05a6f083a6fa4cac150b3b7452/Beachball/singlepart.0008.exr",
+      "bytes": 2535419,
+      "git_blob": "73ff01a8f07ee581f1ebaadb0faa15cb058fffa9",
+      "page": "https://github.com/AcademySoftwareFoundation/openexr-images/tree/e38ffb0790f62f05a6f083a6fa4cac150b3b7452/Beachball",
+      "license": "BSD-3-Clause",
+      "sha256": "f84689cdbd92be5e9ced647a5297d3e969a63744765b13a65ef6e4f17728a095"
+    },
+    {
+      "id": "crypto-bunny_CryptoAsset",
+      "filename": "bunny_CryptoAsset.exr",
+      "group": "crypto",
+      "license": "BSD-3-Clause",
+      "page": "https://github.com/Psyop/Cryptomatte",
+      "url": "https://raw.githubusercontent.com/Psyop/Cryptomatte/968d5e4b6171e29ba5f89d554117132a164e747e/sample_images/bunny_CryptoAsset.exr",
+      "bytes": 5871080,
+      "sha256": "b9a97c9ffa5c4e7378483c58d5cf6dd04f4f492b79e810508d240f521e6833dd"
+    },
+    {
+      "id": "crypto-cornellBox_CryptoWildcard-0001",
+      "filename": "cornellBox_CryptoWildcard.0001.exr",
+      "group": "crypto",
+      "license": "BSD-3-Clause",
+      "page": "https://github.com/Psyop/Cryptomatte",
+      "url": "https://raw.githubusercontent.com/Psyop/Cryptomatte/968d5e4b6171e29ba5f89d554117132a164e747e/sample_images/cornellBox_CryptoWildcard.0001.exr",
+      "bytes": 1654298,
+      "sha256": "94f70d9f3d2f457d1c89bf7b5ec6929fc6440310a23bba2c52347e48490f2080"
+    },
+    {
+      "id": "crypto-cornellBox_CryptoWildcard-0002",
+      "filename": "cornellBox_CryptoWildcard.0002.exr",
+      "group": "crypto",
+      "license": "BSD-3-Clause",
+      "page": "https://github.com/Psyop/Cryptomatte",
+      "url": "https://raw.githubusercontent.com/Psyop/Cryptomatte/968d5e4b6171e29ba5f89d554117132a164e747e/sample_images/cornellBox_CryptoWildcard.0002.exr",
+      "bytes": 1707273,
+      "sha256": "4eb1e12b9bd32abd5c05916975af0822fc90b5fd69a85a53b157c4367fa600e3"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/AcademySoftwareFoundation/openexr-images/e38ffb0790f62f05a6f083a6fa4cac150b3b7452/v2/LowResLeftView/Balls.exr",
+      "bytes": 1613377,
+      "git_blob": "38c037f895a8e7039ccc0c020c75643163c2fc8a",
+      "sha256": "9a60e6a3895f0a0f685a8af3b607ddc3d7e0d926e906a5f0175d3159b23131d2",
+      "id": "deep-balls",
+      "filename": "deep-balls.exr",
+      "license": "BSD-3-Clause",
+      "page": "https://github.com/AcademySoftwareFoundation/openexr-images/tree/e38ffb0790f62f05a6f083a6fa4cac150b3b7452/v2/LowResLeftView"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/AcademySoftwareFoundation/openexr-images/e38ffb0790f62f05a6f083a6fa4cac150b3b7452/v2/LowResLeftView/Ground.exr",
+      "bytes": 4946039,
+      "git_blob": "d09de9171fc52d130e061f9d9717d6b538763a78",
+      "sha256": "eef3de2ed0396735a6629a53cd775c28008c20b8d69c4bd979853bedbdad43c9",
+      "id": "deep-ground",
+      "filename": "deep-ground.exr",
+      "license": "BSD-3-Clause",
+      "page": "https://github.com/AcademySoftwareFoundation/openexr-images/tree/e38ffb0790f62f05a6f083a6fa4cac150b3b7452/v2/LowResLeftView"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/AcademySoftwareFoundation/openexr-images/e38ffb0790f62f05a6f083a6fa4cac150b3b7452/v2/LowResLeftView/Leaves.exr",
+      "bytes": 2665452,
+      "git_blob": "90a990e4b2614c1569f47ea2e01a58d6c829c815",
+      "sha256": "42a3a2b911c43c65574e7b9ae8b5baafd7cd0e09fb306b98d85cbcccc0f6c611",
+      "id": "deep-leaves",
+      "filename": "deep-leaves.exr",
+      "license": "BSD-3-Clause",
+      "page": "https://github.com/AcademySoftwareFoundation/openexr-images/tree/e38ffb0790f62f05a6f083a6fa4cac150b3b7452/v2/LowResLeftView"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/AcademySoftwareFoundation/openexr-images/e38ffb0790f62f05a6f083a6fa4cac150b3b7452/v2/LowResLeftView/Trunks.exr",
+      "bytes": 587334,
+      "git_blob": "4b5c34e90beb95997957a9d325e0f5e73614183b",
+      "sha256": "6867502b6ce564e1d3a909f307a2672511b0890ddc40eb9b5ba48ddae20299db",
+      "id": "deep-trunks",
+      "filename": "deep-trunks.exr",
+      "license": "BSD-3-Clause",
+      "page": "https://github.com/AcademySoftwareFoundation/openexr-images/tree/e38ffb0790f62f05a6f083a6fa4cac150b3b7452/v2/LowResLeftView"
+    }
+  ],
+  "license_files": [
+    {
+      "filename": "Cryptomatte-BSD-3-Clause.txt",
+      "url": "https://raw.githubusercontent.com/Psyop/Cryptomatte/968d5e4b6171e29ba5f89d554117132a164e747e/license.txt",
+      "bytes": 1524,
+      "sha256": "eec92b09fc66bf72d6f672d02537b053a9a65a23761c83c1923f5f715a44acd3"
+    },
+    {
+      "filename": "OpenEXR-BSD-3-Clause.txt",
+      "url": "https://raw.githubusercontent.com/AcademySoftwareFoundation/openexr-images/e38ffb0790f62f05a6f083a6fa4cac150b3b7452/LICENSE",
+      "bytes": 1697,
+      "sha256": "e09f669c94b61172cd355c36b8737721df12eb4e4fa570600ac1955c9686327f"
+    },
+    {
+      "filename": "Beachball-README.rst",
+      "url": "https://raw.githubusercontent.com/AcademySoftwareFoundation/openexr-images/e38ffb0790f62f05a6f083a6fa4cac150b3b7452/Beachball/README.rst",
+      "bytes": 4897,
+      "git_blob": "dc266190632ed448c47fd45b5ed5755d121c6eb5"
+    },
+    {
+      "filename": "ScanLines-README.rst",
+      "url": "https://raw.githubusercontent.com/AcademySoftwareFoundation/openexr-images/e38ffb0790f62f05a6f083a6fa4cac150b3b7452/ScanLines/README.rst",
+      "bytes": 690,
+      "git_blob": "ed0909aaf5930b39179afae905e93e15cccb284a"
+    },
+    {
+      "filename": "Tiles-README.rst",
+      "url": "https://raw.githubusercontent.com/AcademySoftwareFoundation/openexr-images/e38ffb0790f62f05a6f083a6fa4cac150b3b7452/Tiles/README.rst",
+      "bytes": 346,
+      "git_blob": "f086c7c66913935e2f054bc65b3609c1d36d9c71"
+    },
+    {
+      "filename": "MultiResolution-README.rst",
+      "url": "https://raw.githubusercontent.com/AcademySoftwareFoundation/openexr-images/e38ffb0790f62f05a6f083a6fa4cac150b3b7452/MultiResolution/README.rst",
+      "bytes": 4270,
+      "git_blob": "c2f1ffe9bc2d282bec7714e3bf9d6848c4a61324"
+    }
+  ],
+  "derived_variants": [
+    {
+      "id": "lake-tiff",
+      "filename": "lake.tiff",
+      "group": "sdr",
+      "license": "CC0-1.0",
+      "page": "https://commons.wikimedia.org/wiki/File:Lake_Mountain_Landscape.jpg",
+      "bytes": 33155368,
+      "sha256": "8b4f4ef3fd491e327fc8799f842c27da954cd731056655bae320851e3913ff37",
+      "derived_from": "lake",
+      "derivation": {
+        "tool": "Pillow",
+        "format": "TIFF",
+        "options": {
+          "compression": "tiff_lzw"
+        },
+        "mode": "RGB",
+        "resize": false
+      },
+      "width": 5184,
+      "height": 3456,
+      "mode": "RGB",
+      "orientation": 1,
+      "icc": false,
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "cohort": "ordinary-public7"
+    },
+    {
+      "id": "lake-webp",
+      "filename": "lake.webp",
+      "group": "sdr",
+      "license": "CC0-1.0",
+      "page": "https://commons.wikimedia.org/wiki/File:Lake_Mountain_Landscape.jpg",
+      "bytes": 10270550,
+      "sha256": "8b76b99f0e0357dcf9bbee2a92ab21990de1d31e5684a5e266a75cb9b443199b",
+      "derived_from": "lake",
+      "derivation": {
+        "tool": "Pillow",
+        "format": "WEBP",
+        "options": {
+          "lossless": true
+        },
+        "mode": "RGB",
+        "resize": false
+      },
+      "width": 5184,
+      "height": 3456,
+      "mode": "RGB",
+      "orientation": 1,
+      "icc": false,
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "cohort": "ordinary-public7"
+    },
+    {
+      "id": "snow-srgb",
+      "filename": "snow-srgb.jpg",
+      "group": "sdr",
+      "license": "CC0-1.0",
+      "page": "https://commons.wikimedia.org/wiki/File:Bike_on_a_snowy_street_in_Quebec_City_at_night.jpg",
+      "bytes": 14389814,
+      "sha256": "447a4ccab258dfe306099443d3439b5f9f05a5cab030d69251a63c1d594c766b",
+      "width": 7728,
+      "height": 5162,
+      "mode": "RGB",
+      "icc": false,
+      "orientation": 1,
+      "derived_from": "snow",
+      "derivation": {
+        "tool": "Pillow 13.0.0",
+        "operation": "ImageCms.profileToProfile",
+        "input_profile": "embedded ProPhoto RGB",
+        "output_profile": "sRGB",
+        "rendering_intent": 1,
+        "jpeg_quality": 95,
+        "subsampling": 0,
+        "resize": false
+      },
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "cohort": "ordinary-public7"
+    }
+  ]
+}
