@@ -1,6 +1,7 @@
 """Exercise failure detection without changing the checked-in examples."""
 import json
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -33,6 +34,19 @@ class PublicValidationTests(unittest.TestCase):
             target = self.root / summary.relative_to(ROOT)
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(summary, target)
+        # User guides link directly to benchmark tables and coverage receipts.
+        # Copy those actual targets without duplicating every historical result.
+        linked_documents = [ROOT / 'README.md', ROOT / 'README.en.md', ROOT / 'CHANGELOG.md',
+                            *(ROOT / 'docs').rglob('*.md'), *(ROOT / 'examples').rglob('*.md'),
+                            *(ROOT / 'benchmarks').glob('*.md'),
+                            *(ROOT / 'benchmarks/results').glob('*/SUMMARY.md')]
+        for document in linked_documents:
+            for link in re.findall(r'\]\(([^)#]+)(?:#[^)]*)?\)', document.read_text(encoding='utf-8')):
+                source = (document.parent / link).resolve()
+                if source.is_relative_to((ROOT / 'benchmarks/results').resolve()) and source.is_file():
+                    target = self.root / source.relative_to(ROOT)
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(source, target)
 
     def run_validator(self):
         return subprocess.run([sys.executable, str(self.root / "scripts/public/validate_examples.py")],
