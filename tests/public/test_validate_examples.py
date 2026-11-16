@@ -24,7 +24,6 @@ class PublicValidationTests(unittest.TestCase):
         (self.root / "tests/data").mkdir(exist_ok=True)
         shutil.copyfile(ROOT / "tests/data/deep-reference-v1.json",
                         self.root / "tests/data/deep-reference-v1.json")
-        shutil.copyfile(ROOT / "CHANGELOG.md", self.root / "CHANGELOG.md")
         shutil.copyfile(ROOT / "README.md", self.root / "README.md")
         shutil.copyfile(ROOT / "README.en.md", self.root / "README.en.md")
         for name in ('CMakeLists.txt', 'CMakePresets.json', 'LICENSE'):

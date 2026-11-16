@@ -16,3 +16,4 @@ CMakeUserPresets.json
 /benchmarks/c2_stream/*.json
 /benchmarks/public-results-v1.json
 /benchmarks/regression-thresholds.windows-local.json
+/CHANGELOG.md

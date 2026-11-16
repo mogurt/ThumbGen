@@ -8,7 +8,7 @@ from jsonschema import Draft202012Validator
 
 
 def public_documents(root):
-    return [root / 'README.md', root / 'README.en.md', root / 'CHANGELOG.md',
+    return [root / 'README.md', root / 'README.en.md',
             *sorted((root / 'docs').rglob('*.md')),
             *sorted((root / 'examples').rglob('*.md'))]
 
