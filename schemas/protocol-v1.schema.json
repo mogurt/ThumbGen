@@ -618,7 +618,8 @@
               "enum": [
                 "reference",
                 "srgb8-linear-v1",
-                "integer-linear-v1"
+                "integer-linear-v1",
+                "integer-linear-stream-v1"
               ]
             }
           },
@@ -1326,7 +1327,7 @@
         "oiio_version": {
           "type": "string"
         },
-        "colour_processing": {"type": "array", "items": {"enum": ["reference", "srgb8-linear-v1", "integer-linear-v1"]}},
+        "colour_processing": {"type": "array", "items": {"enum": ["reference", "srgb8-linear-v1", "integer-linear-v1", "integer-linear-stream-v1"]}},
         "icc_engines": {"type": "array", "items": {"enum": ["LittleCMS2 2.20", "skcms"]}},
         "quantization": {
           "const": "unorm8-half-up-v1"

@@ -308,7 +308,7 @@ bool run_isolated(const std::vector<Job>& jobs,const std::string& executable,con
         std::vector<std::optional<Json>> ledger;
         struct Owned {std::string id;std::unique_ptr<TemporaryOutput> file;};
         std::map<size_t,Owned> owned;std::set<size_t> reserved;std::optional<SourceStamp> source;
-        bool initialized=false,planned=false,ran=false,admitted=false,sent=false,queued=false,finished=false;
+        bool initialized=false,planned=false,ran=false,admitted=false,sent=false,queued=false,finished=false,c2_stream=false;
         double queue_ms=0;
         Task(Job value,size_t ordinal):job(std::move(value)),index(ordinal),base(task_base(job)),ledger(job.outputs.size()){}
     };
@@ -385,7 +385,7 @@ bool run_isolated(const std::vector<Job>& jobs,const std::string& executable,con
                         try {source=source_stamp(fs::u8path(job.input));}
                         catch(const FileFailure&){throw FileFailure("source_changed","source could not be verified after metadata preparation",true);}
                         if(stamp_json(*source)!=payload["source_stamp"])throw FileFailure("source_changed","source changed during metadata preparation",true);
-                        const auto& f=payload["footprint"];fields(f,{"data_width","data_height","display_width","display_height","channel_span","selected_channels","output_width","output_height","threads","source_sample_bytes","source_pixel_bytes","source_buffer_bytes","native_categorical","deep_buffer_bytes","cms_buffer_bytes","srgb8","integer_linear"});
+                        const auto& f=payload["footprint"];fields(f,{"data_width","data_height","display_width","display_height","channel_span","selected_channels","output_width","output_height","threads","source_sample_bytes","source_pixel_bytes","source_buffer_bytes","native_categorical","deep_buffer_bytes","cms_buffer_bytes","srgb8","integer_linear","c2_stream"});
                         const bool categorical=job.options.visualization=="id" || job.options.visualization=="id_rgb";
                         check(f["native_categorical"].is_boolean() && f["native_categorical"]==categorical,"worker categorical footprint mismatch");
                         check(number(f["threads"],256)==unsigned(job.options.threads),"plan thread quota mismatch");
@@ -398,6 +398,13 @@ bool run_isolated(const std::vector<Job>& jobs,const std::string& executable,con
                         shape.srgb8=srgb8;
                         check(f["integer_linear"].is_boolean(),"worker integer colour footprint mismatch");
                         const bool integer_linear=f["integer_linear"].get<bool>();shape.integer_linear=integer_linear;
+                        check(f["c2_stream"].is_boolean(),"worker C2 footprint mismatch");shape.c2_stream=f["c2_stream"].get<bool>();
+#ifndef THUMBGEN_C2_PNG_STREAM
+                        check(!shape.c2_stream,"C2 is unavailable in this build");
+#endif
+                        task.c2_stream=shape.c2_stream;
+                        check(!shape.c2_stream || (integer_linear && job.outputs.size()<=2 && (shape.source_sample_bytes==1 || shape.source_sample_bytes==2) &&
+                            shape.channel_span==shape.selected_channels && shape.data_width==shape.display_width && shape.data_height==shape.display_height),"invalid C2 processing footprint");
                         check(!integer_linear || (!srgb8 && job.options.visualization=="colour" && job.options.preset=="balanced" &&
                             job.options.display.empty() && !base.contains("deep") && base.contains("source") &&
                             ((shape.source_sample_bytes==1 && base["source"]["sample_type"]=="uint8") ||
@@ -435,6 +442,8 @@ bool run_isolated(const std::vector<Job>& jobs,const std::string& executable,con
                     check(planned && ran,"encoded output before run");fields(payload,{"output_index","temporary_id","encoded"});auto index=size_t(number(payload["output_index"],job.outputs.size()-1));
                     check(owned.count(index) && payload["temporary_id"]==owned.at(index).id && !ledger[index],"unknown or repeated encoded output");
                     const auto& encoded=payload["encoded"];fields(encoded,{"base","output"});base_check(encoded["base"],job);base=encoded["base"];
+                    const bool stream_result=base.contains("colour") && base["colour"].value("processing",std::string{})=="integer-linear-stream-v1";
+                    check(stream_result==task.c2_stream,"worker C2 processing changed after admission");
                     Json output=encoded["output"];check(output.value("path",std::string{})==job.outputs[index].path && output.value("status",std::string{})=="success" &&
                         output.value("format",std::string{})==job.outputs[index].format && output.value("existing_policy",std::string{})==job.outputs[index].existing,"encoded output identity mismatch");
                     output_check(output,job.outputs[index]);
@@ -451,6 +460,8 @@ bool run_isolated(const std::vector<Job>& jobs,const std::string& executable,con
                 } else if(message.type=="result") {
                     check(!queued,"worker returned a result while awaiting admission");
                     fields(payload,{"record","pin"});result=payload["record"];base_check(result,job);accept_pin(payload["pin"]);
+                    if(result.contains("colour") && result["colour"].contains("processing"))
+                        check((result["colour"]["processing"]=="integer-linear-stream-v1")==task.c2_stream,"worker result processing changed after admission");
                     check(result.contains("outputs") && result["outputs"].is_array(),"invalid worker outputs");
                     auto size=result["outputs"].size();check(size==job.outputs.size() || (size==0 && result.contains("error")),"worker result output count mismatch");
                     check(planned || result.value("status",std::string{})=="failed" || result.value("status",std::string{})=="skipped","worker result bypassed admission");

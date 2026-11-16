@@ -35,7 +35,7 @@ for nc,interlace in [(3,0),(4,0),(4,1)]:
   assert rows[0]['ok']==rows[1]['ok'],rows
   if rows[0]['ok']:
    assert Path(rows[0]['outputs'][0]['path']).read_bytes()==Path(rows[1]['outputs'][0]['path']).read_bytes(),rows
-   assert rows[1]['colour']['processing']=='integer-linear-v1',rows
+   assert rows[1]['colour']['processing'] in ('integer-linear-v1','integer-linear-stream-v1'),rows
   else:assert rows[0]['error']['code']==rows[1]['error']['code'],rows
   records.append(dict(channels=nc,adam7=interlace,case=label,ok=rows[1]['ok'],exact_png=rows[1]['ok'],error=rows[1].get('error')))
 (root/'results.json').write_text(json.dumps(records,indent=2));print(json.dumps(records,indent=2))

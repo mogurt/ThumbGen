@@ -98,7 +98,11 @@ static void eligibility() {
     header[28]=1;save();check(!eligible(),"Adam7 accepted");header[28]=0;save();
     check(!png_scanline_eligible(path,spec,"jpeg",plan),"extension dispatch");
     spec.attribute("Orientation",2);check(!eligible(),"orientation accepted");spec.attribute("Orientation",1);
-    spec.format=OIIO::TypeDesc::UINT8;check(!eligible(),"UINT8 accepted");spec.format=OIIO::TypeDesc::UINT16;
+    spec.format=OIIO::TypeDesc::UINT8;check(!eligible(),"UINT8 accepted");
+    check(!png_scanline_eligible(path,spec,"png",plan,true),"mismatched UINT8 header accepted");
+    header[24]=8;save();check(png_scanline_eligible(path,spec,"png",plan,true),"C2 UINT8 header rejected");
+    check(!eligible(),"C1 UINT8 default changed");
+    header[24]=16;save();spec.format=OIIO::TypeDesc::UINT16;
     spec.width=3999;check(!eligible(),"small image accepted");spec.width=4001;
     plan.route=ColourPlan::Route::reference;check(!eligible(),"reference override ignored");
     plan.route=ColourPlan::Route::srgb8;check(!eligible(),"srgb8 rerouted");plan.route=ColourPlan::Route::integer_linear;

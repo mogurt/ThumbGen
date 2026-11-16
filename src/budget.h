@@ -20,6 +20,7 @@ struct ImageFootprint {
     std::uint64_t cms_buffer_bytes=0; // ICC bytes + request CMS allocator + block scratch.
     bool integer_linear=false; // Native integer source plus full linear float image and orientation.
     bool srgb8=false; // Native UINT8 source and bounded linear-preview resize workspace.
+    bool c2_stream=false; // Opt-in bounded integer PNG plan; never a full-source fallback.
 };
 struct MemoryEstimate {
     // incremental is charged per active task; worker is already reserved by the pool.

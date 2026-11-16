@@ -1,4 +1,5 @@
 #include "budget.h"
+#include "c2_memory.h"
 #include <iostream>
 #include <limits>
 #include <stdexcept>
@@ -27,6 +28,19 @@ int main() {
         require(estimate_memory(fast).source==5184ULL*3456*3 && estimate_memory(fast).total<estimate_memory(reference).total,"sRGB8 memory estimate still charges full FLOAT image");
         rejects<std::invalid_argument>([&]{auto invalid=fast;invalid.source_sample_bytes=4;estimate_memory(invalid);});
         auto integer=reference;integer.integer_linear=true;integer.source_sample_bytes=2;integer.source_pixel_bytes=6;
+        auto incremental=integer;incremental.c2_stream=true;
+        const auto bounded=estimate_memory(incremental);
+        const auto shared=c2_memory(incremental.data_width,incremental.data_height,incremental.selected_channels,incremental.output_width,incremental.output_height);
+        require(bounded.source+bounded.working+bounded.output+bounded.codec==shared.dynamic(),"C2 execution/admission envelope differs");
+        require(bounded.total<estimate_memory(integer).total && bounded.codec>=32ULL*1024*1024,"C2 source reduction or codec allowance missing");
+        rejects<std::invalid_argument>([&]{auto invalid=incremental;invalid.source_sample_bytes=1;estimate_memory(invalid);});
+        rejects<std::invalid_argument>([&]{auto invalid=incremental;invalid.channel_span=4;estimate_memory(invalid);});
+        auto bounded8=incremental;bounded8.source_sample_bytes=1;bounded8.source_pixel_bytes=bounded8.selected_channels;
+        require(estimate_memory(bounded8).total==bounded.total,"UINT8 C2 must retain the declared UINT16 worst-case reserve");
+        rejects<std::invalid_argument>([&]{auto invalid=incremental;invalid.data_width=invalid.display_width=1;estimate_memory(invalid);});
+        rejects<std::invalid_argument>([&]{auto invalid=incremental;invalid.output_width=2000;estimate_memory(invalid);});
+        rejects<std::invalid_argument>([]{c2_memory(65537,2000,4,425,212);});
+        rejects<std::invalid_argument>([]{c2_memory(4000,2000,4,std::numeric_limits<std::uint64_t>::max(),212);});
         require(estimate_memory(integer).source==5184ULL*3456*6,"native integer source missing");
         require(estimate_memory(integer).working>=5184ULL*3456*3*3*sizeof(float),"complete linear image/orientation missing");
         require(estimate_memory(integer).total<estimate_memory(reference).total,"integer reservation exceeds reference");

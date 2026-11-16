@@ -16,9 +16,9 @@ inline constexpr std::uint64_t png_scanline_min_pixels=8000000;
 // format/layout is known. Unknown or inconsistent headers keep the old reader.
 inline bool png_scanline_eligible(const std::filesystem::path& path,
                                   const OIIO::ImageSpec& s,
-                                  const std::string& format,const ColourPlan& plan) {
+                                  const std::string& format,const ColourPlan& plan,bool include_uint8=false) {
     if(format!="png" || plan.route!=ColourPlan::Route::integer_linear ||
-       s.format!=OIIO::TypeDesc::UINT16 || s.width<=0 || s.height<=0 ||
+       (s.format!=OIIO::TypeDesc::UINT16 && !(include_uint8 && s.format==OIIO::TypeDesc::UINT8)) || s.width<=0 || s.height<=0 ||
        std::uint64_t(s.width)*std::uint64_t(s.height)<png_scanline_min_pixels || s.get_int_attribute("Orientation",1)!=1)
         return false;
     unsigned char h[33]{};
@@ -28,7 +28,7 @@ inline bool png_scanline_eligible(const std::filesystem::path& path,
     auto be32=[](const unsigned char* p){return (std::uint32_t(p[0])<<24)|
         (std::uint32_t(p[1])<<16)|(std::uint32_t(p[2])<<8)|p[3];};
     return !std::memcmp(h,prefix,sizeof(prefix)) && be32(h+16)==std::uint32_t(s.width) &&
-        be32(h+20)==std::uint32_t(s.height) && h[24]==16 &&
+        be32(h+20)==std::uint32_t(s.height) && h[24]==(s.format==OIIO::TypeDesc::UINT16?16:8) &&
         ((h[25]==2 && s.nchannels==3) || (h[25]==6 && s.nchannels==4)) && h[26]==0 && h[27]==0 && h[28]==0;
 }
 

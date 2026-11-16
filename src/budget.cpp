@@ -1,4 +1,5 @@
 #include "budget.h"
+#include "c2_memory.h"
 #include <algorithm>
 #include <limits>
 #include <stdexcept>
@@ -77,6 +78,14 @@ MemoryEstimate estimate_memory(const ImageFootprint& s) {
     e.output=multiply(preview,5*4*sizeof(float));
     // Includes JPEG's compressed memory destination; not a codec allocation bound.
     e.codec=add(multiply(preview,8),mib);
+    if(s.c2_stream){
+        if(!s.integer_linear || s.srgb8 || s.native_categorical || s.deep_buffer_bytes || s.source_buffer_bytes ||
+           (s.source_sample_bytes!=1 && s.source_sample_bytes!=2) || s.source_pixel_bytes!=s.selected_channels*s.source_sample_bytes ||
+           s.channel_span!=s.selected_channels || data!=canvas)
+            throw std::invalid_argument("invalid C2 source footprint");
+        const auto bounded=c2_memory(s.data_width,s.data_height,s.selected_channels,s.output_width,s.output_height,s.cms_buffer_bytes);
+        e.source=bounded.source;e.working=bounded.working;e.output=bounded.output;e.codec=bounded.codec;
+    }
     // Provisional measured-headroom model, to calibrate across codecs and platforms.
     e.worker=add(128*mib,multiply(s.threads,8*mib));
     Bytes dynamic=add(add(e.source,e.working),add(e.output,e.codec));

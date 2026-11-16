@@ -5,6 +5,11 @@
 #include "cms_input.h"
 #include "colour_plan.h"
 #include "png_scanline.h"
+#ifdef THUMBGEN_C2_PNG_STREAM
+#include "c2_resize.h"
+#include "c2_png_rows.h"
+#include "c2_memory.h"
+#endif
 #include "cmyk_jpeg.h"
 #include "build_info.h"
 #include "files.h"
@@ -237,7 +242,11 @@ Json Engine::capabilities() {
         {"selection_policy","v2"},
         {"quantization","unorm8-half-up-v1"},
         {"png_encoding",{{"compression_levels",{{"fast",1},{"balanced",3},{"quality",6}}},{"filter","adaptive"}}},
+#ifdef THUMBGEN_C2_PNG_STREAM
+        {"colour_processing",{"reference","srgb8-linear-v1","integer-linear-v1","integer-linear-stream-v1"}},
+#else
         {"colour_processing",{"reference","srgb8-linear-v1","integer-linear-v1"}},
+#endif
         {"icc_engines",{"LittleCMS2 2.20","skcms"}},
         {"visualization_modes",{"colour","depth","normal","vector","id","id_rgb","cryptomatte"}},
         {"deep_modes",{"reject","flatten"}},
@@ -532,6 +541,40 @@ Json Engine::convert(const Job& job) {
 #else
         const bool scanline_png=false;
 #endif
+        bool c2_active=false;
+#ifdef THUMBGEN_C2_PNG_STREAM
+        std::unique_ptr<detail::C2Resize> c2_resize;
+        std::vector<std::pair<int,int>> c2_sizes;
+        std::vector<OIIO::ImageBuf> c2_previews;
+        std::vector<double> c2_resize_ms;
+        // Explicit opt-in scope: integer-linear PNG and <=2 small downscaled outputs.
+        // Execution and admission share the same bounded buffer envelope.
+        const auto c2_decode_budget=job.options.max_decode_mib*1024ULL*1024ULL;
+        const auto c2_cms_reserve=use_icc?detail::cms_reservation:0;
+        std::uint64_t c2_dynamic_bytes=0;
+        const bool c2_png=scanline_png || (integer_linear && spec.format==OIIO::TypeDesc::UINT8 &&
+            std::uint64_t(spec.width)*spec.height>=detail::png_scanline_min_pixels && detail::png_scanline_eligible(source_path,spec,input_format,colour_plan,true));
+        if(c2_png && spec.width<=65536 && spec.height<=65536 && !job.outputs.empty() && job.outputs.size()<=2) {
+            bool c2_small_outputs=true;
+            int c2_largest_w=0,c2_largest_h=0;
+            for(const auto& output:job.outputs){
+                double scale=std::min({double(output.width)/spec.width,double(output.height)/spec.height,1.0});
+                int w=std::max(1,int(std::lround(spec.width*scale))),h=std::max(1,int(std::lround(spec.height*scale)));
+                if(std::uint64_t(w)*h>960ULL*960 || w>=spec.width || h>=spec.height)c2_small_outputs=false;
+                c2_sizes.emplace_back(w,h);
+                if(std::uint64_t(w)*h>std::uint64_t(c2_largest_w)*c2_largest_h){c2_largest_w=w;c2_largest_h=h;}
+            }
+            if(c2_small_outputs){
+                c2_dynamic_bytes=detail::c2_memory(spec.width,spec.height,spec.nchannels,c2_largest_w,c2_largest_h,c2_cms_reserve).dynamic();
+                if(c2_dynamic_bytes<=c2_decode_budget){
+                    try{
+                        c2_resize=std::make_unique<detail::C2Resize>(spec.width,spec.height,spec.nchannels,c2_sizes);
+                        c2_active=true;
+                    }catch(const detail::C2PlanLimit&){c2_resize.reset();}
+                }
+            }
+        }
+#endif
         if(impl_->control.planned) {
             auto span=std::minmax_element(channels.begin(),channels.end());
             int display_width=spec.full_width,display_height=spec.full_height;
@@ -553,7 +596,7 @@ Json Engine::convert(const Job& job) {
                     {"source_buffer_bytes",sampled?sampled->peak_bytes:0},
                     {"deep_buffer_bytes",deep?job.options.max_decode_mib*1024ULL*1024ULL:0},
                     {"cms_buffer_bytes",use_icc?detail::cms_reservation:0},
-                    {"native_categorical",categorical},{"srgb8",fast_srgb},{"integer_linear",integer_linear},
+                    {"native_categorical",categorical},{"srgb8",fast_srgb},{"integer_linear",integer_linear},{"c2_stream",c2_active},
                     {"output_width",largest_w},{"output_height",largest_h},{"threads",job.options.threads}}},
                 {"sequence_pin",sequence_lock(job.sequence_id)}};
             impl_->control.planned(job,plan);
@@ -647,7 +690,7 @@ Json Engine::convert(const Job& job) {
                 if(!found)throw Failure("colour_space_not_found","standard linear Rec.709 space is unavailable");
             }
             r["colour"]["working_space"]=working_space;
-            r["colour"]["processing"]=colour_plan.processing();
+            r["colour"]["processing"]=c2_active?"integer-linear-stream-v1":colour_plan.processing();
             if(!colour_plan.fallback.empty())r["colour"]["fallback_reason"]=colour_plan.fallback;
             if(use_icc)r["colour"]["icc"]={{"engine","LittleCMS2 2.20"},{"intent","relative_colorimetric"},{"black_point_compensation",false},
                 {"model",cmyk?"CMYK":chosen.candidate.kind=="grey"?"Gray":"RGB"},
@@ -680,7 +723,7 @@ Json Engine::convert(const Job& job) {
             // before allocation. Reference ICC validation fits the same reserve.
             const std::size_t per_pixel=channels.size()*(colour_plan.sample_bytes+2*sizeof(float));
             std::size_t count=std::size_t(spec.width);
-            if(reservation>budget || count>(budget-reservation)/per_pixel/std::size_t(spec.height))
+            if(!c2_active && (reservation>budget || count>(budget-reservation)/per_pixel/std::size_t(spec.height)))
                 throw Failure("decode_limit_exceeded","native colour source and linear buffers exceed decode budget");
             count*=std::size_t(spec.height);
             if(use_icc) {
@@ -690,6 +733,29 @@ Json Engine::convert(const Job& job) {
                 catch(const detail::CmsFailure& e){throw Failure("colour_input_unsupported",e.what());}
                 r["colour"]["icc"]["engine"]="skcms";r["colour"]["icc"]["peak_bytes"]=stats.peak;
             }
+#ifdef THUMBGEN_C2_PNG_STREAM
+            if(c2_active){
+                order=channels;c2_previews.reserve(c2_sizes.size());std::vector<float*> pointers;
+                for(auto [w,h]:c2_sizes){
+                    auto linear=spec;linear.set_format(OIIO::TypeDesc::FLOAT);linear.erase_attribute("ICCProfile");linear.attribute("oiio:UnassociatedAlpha",0);
+                    linear.x=linear.y=linear.z=linear.full_x=linear.full_y=linear.full_z=0;
+                    linear.width=linear.full_width=w;linear.height=linear.full_height=h;linear.depth=linear.full_depth=1;
+                    c2_previews.emplace_back(linear);
+                    if(!c2_previews.back().localpixels())throw Failure("resize_failed","cannot allocate incremental preview");
+                    pointers.push_back(static_cast<float*>(c2_previews.back().localpixels()));
+                }
+                double decode_ms=0,colour_ms=0;
+                try{
+                    detail::C2PngRows rows(spec.width,spec.height,spec.nchannels,colour_plan,
+                        [&](int first,int last,void* data){auto start=Clock::now();bool ok=in->read_scanlines(part,0,first,last,0,0,spec.nchannels,spec.format,data);decode_ms+=ms(start);if(!ok)throw Failure("decode_failed",in->geterror());},
+                        [&](const void* data,float* out,std::size_t n){auto start=Clock::now();colour_plan.transform(data,out,n,spec.nchannels);colour_ms+=ms(start);});
+                    c2_resize_ms=c2_resize->execute([&](int y,float* data){rows.get(y,data);},pointers);rows.finish();
+                }catch(const detail::CmsFailure& error){throw Failure("colour_input_unsupported",error.what());}
+                in->close();if(impl_->observer)impl_->observer("decoded",job);verify_source();
+                r["timings_ms"]["decode"]=decode_ms;r["timings_ms"]["input_colour"]=colour_ms;
+                c2_resize.reset();
+            }else
+#endif
             if(scanline_png) {
                 auto linear=spec;linear.set_format(OIIO::TypeDesc::FLOAT);linear.erase_attribute("ICCProfile");linear.attribute("oiio:UnassociatedAlpha",0);
                 working.reset(linear);order=channels;
@@ -875,7 +941,7 @@ Json Engine::convert(const Job& job) {
         const size_t limit=job.options.max_decode_mib*1024ULL*1024ULL/sizeof(float);
         // resize() clamps outside the data window. Pad a cropped display window
         // with zero pixels first, rather than stretching edge pixels into it.
-        if(!categorical) {
+        if(!categorical && !c2_active) {
             const auto& window=working.spec();
             if(window.x!=window.full_x || window.y!=window.full_y ||
                window.width!=window.full_width || window.height!=window.full_height) {
@@ -895,7 +961,7 @@ Json Engine::convert(const Job& job) {
         }
         // Orient a complete, zero-origin display canvas. Some OIIO rotations
         // position cropped data incorrectly when the full window has an origin.
-        if(!categorical){working.set_origin(0,0,0);working.set_roi_full(working.roi());}
+        if(!categorical && !c2_active){working.set_origin(0,0,0);working.set_roi_full(working.roi());}
         if(!categorical && spec.get_int_attribute("Orientation",1)!=1) {
             OIIO::ImageBuf oriented;
             check(iba::reorient(oriented,working),oriented,"orientation_failed");working=std::move(oriented);
@@ -923,14 +989,18 @@ Json Engine::convert(const Job& job) {
                     r["outputs"].push_back(result);continue;
                 }
                 verify_source();
-                int display_width=categorical?spec.full_width:working.spec().full_width;
-                int display_height=categorical?spec.full_height:working.spec().full_height;
+                int display_width=(categorical || c2_active)?spec.full_width:working.spec().full_width;
+                int display_height=(categorical || c2_active)?spec.full_height:working.spec().full_height;
                 if(categorical && spec.get_int_attribute("Orientation",1)>=5 && spec.get_int_attribute("Orientation",1)<=8)std::swap(display_width,display_height);
                 double scale=std::min({double(out.width)/display_width,double(out.height)/display_height,1.0});
                 int w=std::max(1,int(std::lround(display_width*scale))),h=std::max(1,int(std::lround(display_height*scale)));
                 OIIO::ImageBuf preview;
                 tick=Clock::now();
                 TG_EXR_TICK(resize_tick);
+#ifdef THUMBGEN_C2_PNG_STREAM
+                if(c2_active)preview=std::move(c2_previews[output_index]);
+                else
+#endif
                 if(fast_srgb)
                     preview=detail::resize_srgb8(working,w,h);
                 else if(integer_linear)
@@ -942,6 +1012,9 @@ Json Engine::convert(const Job& job) {
                 else check(iba::resize(preview,working,{{"filtername",filter}},OIIO::ROI(0,w,0,h,0,1,0,int(order.size())),job.options.threads),preview,"resize_failed");
                 TG_EXR_TOCK(resize_tick,"exr_resize_sum_ms");
                 result["resize_ms"]=ms(tick);tick=Clock::now();
+#ifdef THUMBGEN_C2_PNG_STREAM
+                if(c2_active)result["resize_ms"]=c2_resize_ms[output_index];
+#endif
                 TG_EXR_TICK(finish_tick);
                 if(job.options.background!="transparent" && preview.nchannels()==4) {
                     OIIO::ImageSpec bs(w,h,4,OIIO::TypeDesc::FLOAT);bs.alpha_channel=3;
