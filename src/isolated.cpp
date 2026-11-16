@@ -403,7 +403,7 @@ bool run_isolated(const std::vector<Job>& jobs,const std::string& executable,con
                         check(!shape.c2_stream,"C2 is unavailable in this build");
 #endif
                         task.c2_stream=shape.c2_stream;
-                        check(!shape.c2_stream || (integer_linear && job.outputs.size()<=2 && (shape.source_sample_bytes==1 || shape.source_sample_bytes==2) &&
+                        check(!shape.c2_stream || (integer_linear && job.outputs.size()==1 && (shape.source_sample_bytes==1 || shape.source_sample_bytes==2) &&
                             shape.channel_span==shape.selected_channels && shape.data_width==shape.display_width && shape.data_height==shape.display_height),"invalid C2 processing footprint");
                         check(!integer_linear || (!srgb8 && job.options.visualization=="colour" && job.options.preset=="balanced" &&
                             job.options.display.empty() && !base.contains("deep") && base.contains("source") &&

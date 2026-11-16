@@ -1,7 +1,17 @@
 #include "resize_srgb.h"
+#include "output_fault.h"
 #include "files.h"
 #ifdef _MSC_VER
 #pragma warning(push,0)
+#endif
+#ifdef THUMBGEN_OUTPUT_FAULT_TESTS
+#include <cstdlib>
+static void* fault_sampler_allocate(std::size_t size){
+    if(thumbgen::detail::output_fault("sampler",thumbgen::detail::output_fault_index()))return nullptr;
+    return std::malloc(size);
+}
+#define STBIR_MALLOC(size,user) fault_sampler_allocate(size)
+#define STBIR_FREE(pointer,user) std::free(pointer)
 #endif
 #define STB_IMAGE_RESIZE_IMPLEMENTATION
 #include "../third_party/stb/stb_image_resize2.h"
@@ -41,7 +51,8 @@ OIIO::ImageBuf resize_linear(const OIIO::ImageBuf& source,int width,int height) 
     spec.x=spec.y=spec.z=spec.full_x=spec.full_y=spec.full_z=0;
     spec.width=spec.full_width=width;spec.height=spec.full_height=height;
     spec.depth=spec.full_depth=1;spec.alpha_channel=channels==4?3:-1;
-    OIIO::ImageBuf output(spec);
+    OIIO::ImageBuf output=preview_storage(spec);
+    output_fault("resize",output_fault_index());
     if(!output.localpixels() || !stbir_resize(source.localpixels(),source.spec().width,source.spec().height,0,
         output.localpixels(),width,height,0,channels==4?STBIR_RGBA_PM:STBIR_RGB,
         STBIR_TYPE_FLOAT,STBIR_EDGE_CLAMP,STBIR_FILTER_TRIANGLE))

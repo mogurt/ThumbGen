@@ -16,6 +16,8 @@
 #include "files.h"
 #include "quantize.h"
 #include "resize_srgb.h"
+#include "output_fault.h"
+#include <exception>
 #include "data_image.h"
 #include "selected_input.h"
 #include "cryptomatte.h"
@@ -549,14 +551,18 @@ Json Engine::convert(const Job& job) {
         std::vector<std::pair<int,int>> c2_sizes;
         std::vector<OIIO::ImageBuf> c2_previews;
         std::vector<double> c2_resize_ms;
-        // Explicit opt-in scope: integer-linear PNG and <=2 small downscaled outputs.
+        std::exception_ptr c2_preview_error;
+        // A second output must allocate only after the first finishes/commits.
+        // Its streaming consumer would need retired source rows: fall back
+        // structurally before admission instead of buffering or redecoding.
+        // A single output may defer resize errors until its original policy check.
         // Execution and admission share the same bounded buffer envelope.
         const auto c2_decode_budget=job.options.max_decode_mib*1024ULL*1024ULL;
         const auto c2_cms_reserve=use_icc?detail::cms_reservation:0;
         std::uint64_t c2_dynamic_bytes=0;
         const bool c2_png=scanline_png || (integer_linear && spec.format==OIIO::TypeDesc::UINT8 &&
             std::uint64_t(spec.width)*spec.height>=detail::png_scanline_min_pixels && detail::png_scanline_eligible(source_path,spec,input_format,colour_plan,true));
-        if(c2_png && spec.width<=65536 && spec.height<=65536 && !job.outputs.empty() && job.outputs.size()<=2 &&
+        if(c2_png && spec.width<=65536 && spec.height<=65536 && job.outputs.size()==1 &&
            detail::c2_png_metadata_eligible(source_path,spec)) {
             bool c2_small_outputs=true;
             int c2_largest_w=0,c2_largest_h=0;
@@ -602,15 +608,6 @@ Json Engine::convert(const Job& job) {
             impl_->control.planned(job,plan);
             verify_source();
         }
-#ifdef THUMBGEN_C2_PNG_STREAM
-        if(c2_active){
-            // The worker has received run/admission before any row, sampler or
-            // slice storage is allocated. A mismatch is an error, never retry.
-            if(impl_->observer)impl_->observer("c2_allocate",job);
-            c2_resize=std::make_unique<detail::C2Resize>(spec.width,spec.height,spec.nchannels,c2_sizes);
-            if(c2_resize->workspace_bytes()!=c2_workspace_bytes)throw Failure("conversion_failed","C2 admitted workspace differs from allocation");
-        }
-#endif
         TG_EXR_TICK(config_setup_tick);
         OIIO::ColorConfig* config=nullptr;
         std::string working_space,input_space,output_space;
@@ -744,25 +741,51 @@ Json Engine::convert(const Job& job) {
             }
 #ifdef THUMBGEN_C2_PNG_STREAM
             if(c2_active){
-                order=channels;c2_previews.reserve(c2_sizes.size());std::vector<float*> pointers;
-                for(auto [w,h]:c2_sizes){
-                    auto linear=spec;linear.set_format(OIIO::TypeDesc::FLOAT);linear.erase_attribute("ICCProfile");linear.attribute("oiio:UnassociatedAlpha",0);
-                    linear.x=linear.y=linear.z=linear.full_x=linear.full_y=linear.full_z=0;
-                    linear.width=linear.full_width=w;linear.height=linear.full_height=h;linear.depth=linear.full_depth=1;
-                    c2_previews.emplace_back(linear);
-                    if(!c2_previews.back().localpixels())throw Failure("resize_failed","cannot allocate incremental preview");
-                    pointers.push_back(static_cast<float*>(c2_previews.back().localpixels()));
-                }
+                order=channels;
                 double decode_ms=0,colour_ms=0;
                 try{
                     detail::C2PngRows rows(spec.width,spec.height,spec.nchannels,colour_plan,
-                        [&](int first,int last,void* data){auto start=Clock::now();bool ok=in->read_scanlines(part,0,first,last,0,0,spec.nchannels,spec.format,data);decode_ms+=ms(start);if(!ok)throw Failure("decode_failed",in->geterror());},
+                        [&](int first,int last,void* data){detail::output_fault("read",std::size_t(first));auto start=Clock::now();bool ok=in->read_scanlines(part,0,first,last,0,0,spec.nchannels,spec.format,data);decode_ms+=ms(start);if(!ok)throw Failure("decode_failed",in->geterror());},
                         [&](const void* data,float* out,std::size_t n){auto start=Clock::now();colour_plan.transform(data,out,n,spec.nchannels);colour_ms+=ms(start);});
-                    c2_resize_ms=c2_resize->execute([&](int y,float* data){rows.get(y,data);},pointers);rows.finish();
+                    std::exception_ptr source_error;
+                    try {
+                        // All allocations remain after planned/admission. Resize
+                        // failures belong to the later per-output try/catch;
+                        // source failures must still take job-level precedence.
+                        if(impl_->observer)impl_->observer("c2_allocate",job);
+                        c2_previews.reserve(1);
+                        auto [w,h]=c2_sizes.front();
+                        auto linear=spec;linear.set_format(OIIO::TypeDesc::FLOAT);linear.erase_attribute("ICCProfile");linear.attribute("oiio:UnassociatedAlpha",0);
+                        linear.x=linear.y=linear.z=linear.full_x=linear.full_y=linear.full_z=0;
+                        linear.width=linear.full_width=w;linear.height=linear.full_height=h;linear.depth=linear.full_depth=1;
+                        detail::output_fault_index(0);
+                        c2_previews.emplace_back(detail::preview_storage(linear));
+                        if(!c2_previews.back().localpixels())throw Failure("resize_failed","linear float resize failed");
+                        try {
+                            c2_resize=std::make_unique<detail::C2Resize>(spec.width,spec.height,spec.nchannels,c2_sizes);
+                            if(c2_resize->workspace_bytes()!=c2_workspace_bytes)throw Failure("conversion_failed","C2 admitted workspace differs from allocation");
+                            detail::output_fault("resize",0);
+                            c2_resize_ms=c2_resize->execute([&](int y,float* data){
+                                try {rows.get(y,data);}catch(...){source_error=std::current_exception();throw;}
+                                detail::output_fault("resize_row",std::size_t(y));
+                            },{static_cast<float*>(c2_previews.front().localpixels())});
+                        } catch(const std::bad_alloc&) {
+                            if(source_error)std::rethrow_exception(source_error);
+                            throw Failure("resize_failed","linear float resize failed");
+                        }
+                    } catch(...) {
+                        if(source_error)std::rethrow_exception(source_error);
+                        c2_preview_error=std::current_exception();
+                        c2_previews.clear();
+                    }
+                    c2_resize.reset();
+                    // Even when resize failed before reading anything, consume
+                    // the source exactly once with original colour block/tail
+                    // calls. Decode/ICC/source failures outrank output failures.
+                    rows.finish();
                 }catch(const detail::CmsFailure& error){throw Failure("colour_input_unsupported",error.what());}
                 in->close();if(impl_->observer)impl_->observer("decoded",job);verify_source();
                 r["timings_ms"]["decode"]=decode_ms;r["timings_ms"]["input_colour"]=colour_ms;
-                c2_resize.reset();
             }else
 #endif
             if(scanline_png) {
@@ -772,7 +795,7 @@ Json Engine::convert(const Job& job) {
                 double colour_ms=0;
                 try {
                     const bool ok=detail::png_scanline_blocks(spec.width,spec.height,spec.nchannels,
-                        [&](int ybegin,int yend,void* rows) {return in->read_scanlines(part,0,ybegin,yend,0,0,spec.nchannels,spec.format,rows);},
+                        [&](int ybegin,int yend,void* rows) {detail::output_fault("read",std::size_t(ybegin));return in->read_scanlines(part,0,ybegin,yend,0,0,spec.nchannels,spec.format,rows);},
                         [&](const void* block,std::size_t base,std::size_t n) {
                             const auto start=Clock::now();
                             colour_plan.transform(block,static_cast<float*>(working.localpixels())+base*spec.nchannels,n,spec.nchannels);
@@ -1007,13 +1030,18 @@ Json Engine::convert(const Job& job) {
                 tick=Clock::now();
                 TG_EXR_TICK(resize_tick);
 #ifdef THUMBGEN_C2_PNG_STREAM
-                if(c2_active)preview=std::move(c2_previews[output_index]);
+                if(c2_active){
+                    if(c2_preview_error)std::rethrow_exception(c2_preview_error);
+                    preview=std::move(c2_previews.front());
+                }
                 else
 #endif
                 if(fast_srgb)
                     preview=detail::resize_srgb8(working,w,h);
-                else if(integer_linear)
+                else if(integer_linear){
+                    detail::output_fault_index(output_index);
                     preview=detail::resize_linear(working,w,h);
+                }
                 else if(crypto && w==display_width && h==display_height)
                     check(preview.copy(working),preview,"resize_failed");
                 else if(categorical)
@@ -1092,11 +1120,13 @@ Json Engine::convert(const Job& job) {
                     temp=std::make_unique<detail::TemporaryOutput>(dest,out.format);temporary=temp->path();
                 }
                 TG_EXR_TOCK(reserve_tick,"exr_output_reserve_sum_ms");
+                detail::output_fault("encode",output_index);
                 write_preview(preview,temporary,job.options.threads,
                     !data && job.options.background=="transparent" && preview.nchannels()==4 TG_EXR_PROFILE_ARG);
                 if(impl_->observer)impl_->observer("encoded",job);
                 verify_source();
                 TG_EXR_TICK(commit_tick);
+                detail::output_fault("commit",output_index);
                 bool committed;
                 if(impl_->control.commit) {
                     auto encoded=result;encoded["status"]="success";encoded["width"]=w;encoded["height"]=h;

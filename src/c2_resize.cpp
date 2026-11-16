@@ -1,5 +1,8 @@
 #include "c2_resize.h"
 #include "c2_memory.h"
+#ifdef THUMBGEN_OUTPUT_FAULT_TESTS
+#include "output_fault.h"
+#endif
 #include <algorithm>
 #include <chrono>
 #include <coroutine>
@@ -15,6 +18,9 @@ void* sampler_allocate(size_t size,void* user){
 #endif
     auto& context=*static_cast<AllocationContext*>(user);
     if(size>context.available){context.limited=true;return nullptr;}
+#ifdef THUMBGEN_OUTPUT_FAULT_TESTS
+    if(thumbgen::detail::output_fault("sampler",thumbgen::detail::output_fault_index()))return nullptr;
+#endif
     auto* memory=std::malloc(size);if(!memory)throw std::bad_alloc();
     context.available-=size;return memory;
 }
@@ -115,7 +121,7 @@ struct C2Resize::Impl {
             account(sizeof(Owner));auto owner=std::make_unique<Owner>();auto& r=owner->resize;
             setup(r,w,h,c,dw,dh,row.data(),&allocation);
             allocation.available=planned-bytes;
-            if(!stbir_build_samplers(&r)){if(allocation.limited)throw C2PlanLimit();throw std::runtime_error("C2 sampler build failed");}
+            if(!stbir_build_samplers(&r)){if(allocation.limited)throw C2PlanLimit();throw std::bad_alloc();}
             require(r.splits==1 && r.samplers->num_column_slices<=w);
             auto* info=r.samplers;
             // Input callbacks supply the row; zero stride avoids forming a
