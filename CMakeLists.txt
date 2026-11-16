@@ -528,6 +528,10 @@ endif()
 
 # Standalone numerical diagnostic; never linked into the product.
 option(THUMBGEN_BUILD_STREAM_CONTRACT_PROBE "Build locked stb streaming contract diagnostics" OFF)
+option(THUMBGEN_BUILD_C2_PAUSE_PROBE "Build diagnostic-only C++20 paused resizer" OFF)
+if(THUMBGEN_BUILD_C2_PAUSE_PROBE)
+    add_subdirectory(benchmarks/c2_stream)
+endif()
 if(THUMBGEN_BUILD_STREAM_CONTRACT_PROBE)
     add_executable(thumbgen_stream_contract_probe tests/stream_contract_probe.cpp)
     target_compile_features(thumbgen_stream_contract_probe PRIVATE cxx_std_17)
