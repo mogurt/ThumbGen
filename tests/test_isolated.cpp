@@ -74,6 +74,7 @@ static int test_main(const std::vector<std::string>& args) {
         std::map<std::string,int> encoded;
         return serve_worker(args[2],args[3],unsigned(std::stoi(args[4])),[&](const std::string& phase,const Job& job) {
 #ifdef THUMBGEN_C2_TESTS
+            if(phase=="c2_allocate"){std::ofstream marker(fs::u8path(job.input+".c2-allocated"));marker<<"allocate";}
             if(phase=="decoded" && job.id=="c2-crash")crash();
             if(phase=="encoded" && job.id=="c2-partial" && ++encoded[job.id]==2)crash();
             if(phase=="decoded" && job.id=="c2-protocol")std::cout<<"not-json\n"<<std::flush;
@@ -281,7 +282,9 @@ static int test_main(const std::vector<std::string>& args) {
         auto c2changed=c2job("c2-source-change");rows=run({c2changed});require(rows[0]["error"]["code"]=="source_changed" && rows[0]["source_check"]["stable"]==false,rows.dump());
         {std::ofstream restore(fs::u8path(c2changed.input),std::ios::binary);restore<<originals.at(c2changed.input);}
         IsolationOptions c2timeout;c2timeout.task_timeout=std::chrono::milliseconds(500);rows=run({c2job("c2-sleep")},c2timeout);require(rows[0]["error"]["code"]=="worker_timeout",rows.dump());
-        IsolationOptions c2budget;c2budget.memory_mib=129;rows=run({c2job("c2-low-memory")},c2budget);require(rows[0]["error"]["code"]=="task_memory_exceeds_budget",rows.dump());
+        IsolationOptions c2budget;c2budget.memory_mib=300;auto c2low=c2job("c2-low-memory");rows=run({c2low},c2budget);
+        require(rows[0]["error"]["code"]=="task_memory_exceeds_budget" && rows[0]["execution"].contains("estimated_task_mib") &&
+            !fs::exists(fs::u8path(c2low.input+".c2-allocated")) && fs::exists(fs::u8path(c2normal.input+".c2-allocated")),rows.dump());
         auto c2cancel=c2job("c2-cancel");IsolationOptions c2stop;c2stop.cancelled=[&]{return fs::exists(fs::u8path(c2cancel.input+".ready"));};
         rows=run({c2cancel},c2stop);require(rows[0]["status"]=="cancelled" && rows[0]["error"]["code"]=="task_cancelled",rows.dump());
         rows=run({c2job("c2-after-cancel")});require(rows[0]["ok"]==true,rows.dump());

@@ -545,6 +545,7 @@ Json Engine::convert(const Job& job) {
         bool c2_active=false;
 #ifdef THUMBGEN_C2_PNG_STREAM
         std::unique_ptr<detail::C2Resize> c2_resize;
+        std::size_t c2_workspace_bytes=0;
         std::vector<std::pair<int,int>> c2_sizes;
         std::vector<OIIO::ImageBuf> c2_previews;
         std::vector<double> c2_resize_ms;
@@ -569,10 +570,7 @@ Json Engine::convert(const Job& job) {
             if(c2_small_outputs){
                 c2_dynamic_bytes=detail::c2_memory(spec.width,spec.height,spec.nchannels,c2_largest_w,c2_largest_h,c2_cms_reserve).dynamic();
                 if(c2_dynamic_bytes<=c2_decode_budget){
-                    try{
-                        c2_resize=std::make_unique<detail::C2Resize>(spec.width,spec.height,spec.nchannels,c2_sizes);
-                        c2_active=true;
-                    }catch(const detail::C2PlanLimit&){c2_resize.reset();}
+                    c2_active=detail::C2Resize::workspace_plan(spec.width,spec.height,spec.nchannels,c2_sizes,c2_workspace_bytes);
                 }
             }
         }
@@ -604,6 +602,15 @@ Json Engine::convert(const Job& job) {
             impl_->control.planned(job,plan);
             verify_source();
         }
+#ifdef THUMBGEN_C2_PNG_STREAM
+        if(c2_active){
+            // The worker has received run/admission before any row, sampler or
+            // slice storage is allocated. A mismatch is an error, never retry.
+            if(impl_->observer)impl_->observer("c2_allocate",job);
+            c2_resize=std::make_unique<detail::C2Resize>(spec.width,spec.height,spec.nchannels,c2_sizes);
+            if(c2_resize->workspace_bytes()!=c2_workspace_bytes)throw Failure("conversion_failed","C2 admitted workspace differs from allocation");
+        }
+#endif
         TG_EXR_TICK(config_setup_tick);
         OIIO::ColorConfig* config=nullptr;
         std::string working_space,input_space,output_space;

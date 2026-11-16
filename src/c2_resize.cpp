@@ -10,6 +10,9 @@
 namespace {
 struct AllocationContext {void* owner=nullptr;size_t available=0;bool limited=false;};
 void* sampler_allocate(size_t size,void* user){
+#ifdef THUMBGEN_C2_ALLOCATION_WITNESS
+    THUMBGEN_C2_ALLOCATION_WITNESS(size);
+#endif
     auto& context=*static_cast<AllocationContext*>(user);
     if(size>context.available){context.limited=true;return nullptr;}
     auto* memory=std::malloc(size);if(!memory)throw std::bad_alloc();
@@ -23,6 +26,7 @@ void* sampler_allocate(size_t size,void* user){
 #include "../third_party/stb/stb_image_resize2.h"
 
 namespace {
+#include "c2_stb_size_query.h"
 // The frame limit is reserved for every slice in the plan. Compiler/layout
 // changes fail closed rather than allocating beyond that reservation.
 constexpr size_t frame_limit=4096;
@@ -72,10 +76,36 @@ struct C2Resize::Impl {
         require(y==self.current && x>=0 && n>=0 && x<=self.width-n);
         return self.row.data()+size_t(x)*self.channels;
     }
+    static void setup(STBIR_RESIZE& r,int w,int h,int c,int dw,int dh,const void* input,void* context){
+        stbir_resize_init(&r,input,w,h,0,nullptr,dw,dh,0,c==4?STBIR_RGBA_PM:STBIR_RGB,STBIR_TYPE_FLOAT);
+        stbir_set_filters(&r,STBIR_FILTER_TRIANGLE,STBIR_FILTER_TRIANGLE);
+        stbir_set_edgemodes(&r,STBIR_EDGE_CLAMP,STBIR_EDGE_CLAMP);
+        stbir_set_pixel_callbacks(&r,callback,nullptr);stbir_set_user_data(&r,context);
+    }
+    static bool plan(int w,int h,int c,const std::vector<std::pair<int,int>>& outputs,size_t& total){
+        total=0;
+        if(w<=0 || h<=0 || w>65536 || h>65536 || (c!=3 && c!=4) || outputs.empty() || outputs.size()>2)return false;
+        auto account=[&](size_t n){if(n>c2_workspace_limit-total)return false;total+=n;return true;};
+        if(!account(sizeof(Impl)+size_t(w)*c*sizeof(float)+4*size_t(w)*sizeof(void*)+4096))return false;
+        for(auto [dw,dh]:outputs){
+            if(dw<=0 || dh<=0 || dw>w || dh>h)return false;
+            STBIR_RESIZE r{};C2LayoutQuery query;
+            setup(r,w,h,c,dw,dh,nullptr,&query);
+            c2_query_build(&r,1);
+            if(query.splits!=1 || query.columns<1 || query.columns>w || query.mutable_end<=query.mutable_begin || !query.total)return false;
+            if(!account(sizeof(Owner)) || !account(query.total))return false;
+            const size_t state=sizeof(Slice)+sizeof(Task)+frame_limit;
+            const size_t slab=query.mutable_end-query.mutable_begin+15;
+            if(size_t(query.columns)>(c2_workspace_limit-total)/state || !account(size_t(query.columns)*state))return false;
+            if(size_t(query.columns-1)>(c2_workspace_limit-total)/slab || !account(size_t(query.columns-1)*slab))return false;
+        }
+        return true;
+    }
     Impl(int w,int h,int c,const std::vector<std::pair<int,int>>& outputs):width(w),height(h),channels(c){
         require(w>0 && h>0 && (c==3 || c==4) && !outputs.empty() && outputs.size()<=2);
+        size_t planned=0;if(!plan(w,h,c,outputs,planned))throw C2PlanLimit();
         allocation.owner=this;
-        auto account=[&](size_t n){if(n>c2_workspace_limit-bytes)throw C2PlanLimit();bytes+=n;};
+        auto account=[&](size_t n){if(n>planned-bytes)throw std::runtime_error("C2 allocation exceeds admitted workspace");bytes+=n;};
         // Pointer-vector capacity and allocator overhead are reserved up front;
         // pinned geometry has at most one slice per input column, two outputs.
         account(sizeof(Impl)+size_t(w)*c*sizeof(float)+4*size_t(w)*sizeof(void*)+4096);
@@ -83,11 +113,8 @@ struct C2Resize::Impl {
         for(size_t k=0;k<outputs.size();++k){
             auto [dw,dh]=outputs[k];require(dw>0 && dh>0 && dw<=w && dh<=h);
             account(sizeof(Owner));auto owner=std::make_unique<Owner>();auto& r=owner->resize;
-            stbir_resize_init(&r,row.data(),w,h,0,nullptr,dw,dh,0,c==4?STBIR_RGBA_PM:STBIR_RGB,STBIR_TYPE_FLOAT);
-            stbir_set_filters(&r,STBIR_FILTER_TRIANGLE,STBIR_FILTER_TRIANGLE);
-            stbir_set_edgemodes(&r,STBIR_EDGE_CLAMP,STBIR_EDGE_CLAMP);
-            stbir_set_pixel_callbacks(&r,callback,nullptr);stbir_set_user_data(&r,&allocation);
-            allocation.available=c2_workspace_limit-bytes;
+            setup(r,w,h,c,dw,dh,row.data(),&allocation);
+            allocation.available=planned-bytes;
             if(!stbir_build_samplers(&r)){if(allocation.limited)throw C2PlanLimit();throw std::runtime_error("C2 sampler build failed");}
             require(r.splits==1 && r.samplers->num_column_slices<=w);
             auto* info=r.samplers;
@@ -116,8 +143,10 @@ struct C2Resize::Impl {
             owners.push_back(std::move(owner));
         }
         require(owners.capacity()*sizeof(owners[0])+slices.capacity()*sizeof(slices[0])<=4*size_t(w)*sizeof(void*)+4096);
+        require(bytes==planned);
     }
 };
+bool C2Resize::workspace_plan(int w,int h,int c,const std::vector<std::pair<int,int>>& outputs,size_t& bytes){return Impl::plan(w,h,c,outputs,bytes);}
 C2Resize::C2Resize(int w,int h,int c,const std::vector<std::pair<int,int>>& outputs):impl_(std::make_unique<Impl>(w,h,c,outputs)){}
 C2Resize::~C2Resize()=default;
 size_t C2Resize::workspace_bytes()const{return impl_->bytes;}

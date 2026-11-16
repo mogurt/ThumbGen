@@ -11,6 +11,9 @@ struct C2PlanLimit:std::runtime_error {C2PlanLimit():std::runtime_error("C2 work
 // original sampler tables plus bounded concurrent slice state, before decode.
 class C2Resize {
 public:
+    // Geometry-only counting pass: no pixel access or dynamic allocations.
+    // False means structural fallback; call before admission, construct after it.
+    static bool workspace_plan(int width,int height,int channels,const std::vector<std::pair<int,int>>& outputs,std::size_t& bytes);
     C2Resize(int width,int height,int channels,const std::vector<std::pair<int,int>>& outputs);
     ~C2Resize();
     C2Resize(const C2Resize&)=delete;
