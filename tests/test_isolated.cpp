@@ -73,6 +73,16 @@ static int test_main(const std::vector<std::string>& args) {
     if(args.size()==5 && args[1]=="--internal-worker") {
         std::map<std::string,int> encoded;
         return serve_worker(args[2],args[3],unsigned(std::stoi(args[4])),[&](const std::string& phase,const Job& job) {
+#ifdef THUMBGEN_C2_TESTS
+            if(phase=="decoded" && job.id=="c2-crash")crash();
+            if(phase=="encoded" && job.id=="c2-partial" && ++encoded[job.id]==2)crash();
+            if(phase=="decoded" && job.id=="c2-protocol")std::cout<<"not-json\n"<<std::flush;
+            if(phase=="planned" && job.id=="c2-source-change"){std::ofstream changed(fs::u8path(job.input),std::ios::app|std::ios::binary);changed<<"source mutation";}
+            if(phase=="decoded" && (job.id=="c2-sleep" || job.id=="c2-cancel")){
+                {std::ofstream marker(fs::u8path(job.input+".ready"));marker<<"ready";}
+                std::this_thread::sleep_for(std::chrono::seconds(10));
+            }
+#endif
             if(phase=="encoded" && (job.id=="partial" || job.id=="parallel-partial") && ++encoded[job.id]==2)crash();
             if(phase=="decoded" && (job.id=="crash" || job.id=="restart-anchor" || job.id=="budget" || job.id=="data-crash"))crash();
             if(phase=="committed" && job.id=="after-commit")crash();
@@ -230,6 +240,52 @@ static int test_main(const std::vector<std::string>& args) {
             while(running(pid) && std::chrono::steady_clock::now()<deadline)std::this_thread::sleep_for(std::chrono::milliseconds(5));
             require(!running(pid),"worker survived forced owner exit");
         }
+#ifdef THUMBGEN_C2_TESTS
+        // Exercise the real opt-in path in the same controller/worker fault
+        // harness, rather than transferring tiny EXR fault coverage to C2.
+        fs::create_directory(root/"c2-template");auto png=root/"c2-template"/"source.png";
+        {
+            OIIO::ImageSpec spec(4000,2000,4,OIIO::TypeDesc::UINT16);spec.attribute("oiio:UnassociatedAlpha",1);
+            auto writer=OIIO::ImageOutput::create(png.u8string());require(bool(writer),OIIO::geterror());require(writer->open(png.u8string(),spec),writer->geterror());
+            std::vector<std::uint16_t> row(4000*4,32768);
+            for(int y=0;y<2000;++y)require(writer->write_scanline(y,0,OIIO::TypeDesc::UINT16,row.data()),writer->geterror());
+            require(writer->close(),writer->geterror());
+        }
+        {
+            // The PNG writer may add ancillary EXIF/CICP. This synthetic
+            // pixel fixture deliberately contains only IHDR/IDAT/IEND; tests
+            // of unknown metadata fallback are separate and keep their data.
+            const auto encoded=bytes(png);std::string plain=encoded.substr(0,8);
+            for(size_t offset=8;offset<encoded.size();){
+                require(encoded.size()-offset>=12,"short fixture chunk");
+                const auto* h=reinterpret_cast<const unsigned char*>(encoded.data()+offset);
+                const auto length=(std::uint32_t(h[0])<<24)|(std::uint32_t(h[1])<<16)|(std::uint32_t(h[2])<<8)|h[3];
+                require(length<=encoded.size()-offset-12,"fixture chunk overrun");
+                const auto type=encoded.substr(offset+4,4);
+                if(type=="IHDR" || type=="IDAT" || type=="IEND")plain.append(encoded,offset,size_t(length)+12);
+                else std::cerr<<"C2 synthetic fixture excludes generated "<<type<<" metadata\n";
+                offset+=size_t(length)+12;
+            }
+            std::ofstream file(png,std::ios::binary);file.write(plain.data(),plain.size());require(bool(file),"fixture write failed");
+        }
+        auto c2job=[&](const std::string& id,int count=1){
+            auto dir=root/id;fs::create_directory(dir);Job value;value.id=id;value.input=(dir/"source.png").u8string();
+            fs::copy_file(png,fs::u8path(value.input));originals[value.input]=bytes(fs::u8path(value.input));
+            value.options.threads=1;value.options.background="transparent";
+            for(int i=0;i<count;++i)value.outputs.push_back({(dir/(std::to_string(i)+".png")).u8string(),"png",i?960:425,i?960:260,90});return value;
+        };
+        auto c2normal=c2job("c2-normal",2);rows=run({c2normal,c2job("c2-crash"),c2job("c2-after-crash")});
+        require(rows[0]["ok"]==true && rows[0]["colour"]["processing"]=="integer-linear-stream-v1" && rows[1]["error"]["code"]=="worker_crashed" && rows[2]["ok"]==true,rows.dump());
+        rows=run({c2job("c2-partial",2),c2job("c2-protocol"),c2job("c2-after-protocol")});
+        require(rows[0]["status"]=="partial" && rows[0]["outputs"][0]["status"]=="success" && rows[0]["outputs"][1]["error"]["code"]=="worker_crashed" && rows[1]["error"]["code"]=="worker_protocol_error" && rows[2]["ok"]==true,rows.dump());
+        auto c2changed=c2job("c2-source-change");rows=run({c2changed});require(rows[0]["error"]["code"]=="source_changed" && rows[0]["source_check"]["stable"]==false,rows.dump());
+        {std::ofstream restore(fs::u8path(c2changed.input),std::ios::binary);restore<<originals.at(c2changed.input);}
+        IsolationOptions c2timeout;c2timeout.task_timeout=std::chrono::milliseconds(500);rows=run({c2job("c2-sleep")},c2timeout);require(rows[0]["error"]["code"]=="worker_timeout",rows.dump());
+        IsolationOptions c2budget;c2budget.memory_mib=129;rows=run({c2job("c2-low-memory")},c2budget);require(rows[0]["error"]["code"]=="task_memory_exceeds_budget",rows.dump());
+        auto c2cancel=c2job("c2-cancel");IsolationOptions c2stop;c2stop.cancelled=[&]{return fs::exists(fs::u8path(c2cancel.input+".ready"));};
+        rows=run({c2cancel},c2stop);require(rows[0]["status"]=="cancelled" && rows[0]["error"]["code"]=="task_cancelled",rows.dump());
+        rows=run({c2job("c2-after-cancel")});require(rows[0]["ok"]==true,rows.dump());
+#endif
         for(const auto& original:originals)require(bytes(fs::u8path(original.first))==original.second,"isolated source changed");
         for(const auto& entry:fs::recursive_directory_iterator(root))require(entry.path().filename().u8string().rfind(".thumbgen-tmp-",0)!=0,"isolated temporary leaked");
         std::cout<<Json({{"ok",true},{"records",all}}).dump(-1,' ',false,Json::error_handler_t::replace)<<'\n';return 0;

@@ -106,8 +106,15 @@ class Protocol(unittest.TestCase):
         records=json.loads(result.stdout)['records']
         self.assertEqual(len(records),count)
         for record in records:validator.validate(record)
+        return records
     def test_control_records(self):self.native_records(args.control_exe,14)
-    def test_isolated_records(self):self.native_records(args.isolated_exe,77)
+    def test_isolated_records(self):
+        enabled='integer-linear-stream-v1' in self.records('capabilities')[0]['colour_processing']
+        records=self.native_records(args.isolated_exe,88 if enabled else 77)
+        c2={r['id'] for r in records if r['id'].startswith('c2-')}
+        expected={'c2-normal','c2-crash','c2-after-crash','c2-partial','c2-protocol','c2-after-protocol',
+                  'c2-source-change','c2-sleep','c2-low-memory','c2-cancel','c2-after-cancel'}
+        self.assertEqual(c2,expected if enabled else set())
     def test_deep_runtime_records(self):self.native_records(args.deep_runtime_exe,13)
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory(prefix='thumbgen-protocol-')
