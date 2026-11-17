@@ -223,7 +223,6 @@ def execute(args, repo, logs, env, run):
         failure='Protocol tests require tests/requirements.txt')
     result = dict(platform=args.platform, registered_tests=count, executed_tests=count,
                   public_examples_checked=True,
-                  benchmark_tools_checked=True,
                   packaging_checks_checked=True,
                   public_example_runtime_checked=True,
                   release_targets=targets, release_test_python=False,

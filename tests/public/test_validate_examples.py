@@ -17,7 +17,7 @@ class PublicValidationTests(unittest.TestCase):
         self.addCleanup(self.directory.cleanup)
         self.root = Path(self.directory.name)
         # Copy referenced files so this tests the same link surface as the real run.
-        for directory in ("docs", "examples", "schemas", "scripts", "tests", "benchmarks",
+        for directory in ("docs", "examples", "schemas", "scripts", "tests",
                           "src", "include", "cmake", "dependencies", ".github"):
             shutil.copytree(ROOT / directory, self.root / directory,
                             ignore=shutil.ignore_patterns("__pycache__", "results", "data", "output"))
