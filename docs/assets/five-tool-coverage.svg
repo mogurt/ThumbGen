@@ -154,9 +154,17 @@ L 775.944 199.98
 L 775.944 252.45
 L 629.928 252.45
 z
-" clip-path="url(#p86f328b126)" style="fill: #fecdd3; stroke: #ffffff; stroke-width: 4; stroke-linejoin: miter"/>
+" clip-path="url(#p86f328b126)" style="fill: #d1fae5; stroke: #ffffff; stroke-width: 4; stroke-linejoin: miter"/>
    </g>
    <g id="patch_18">
+    <path d="M 629.928 244.954286
+L 775.944 244.954286
+L 775.944 252.45
+L 629.928 252.45
+z
+" clip-path="url(#p86f328b126)" style="fill: #fecdd3"/>
+   </g>
+   <g id="patch_19">
     <path d="M 775.944 199.98
 L 921.96 199.98
 L 921.96 252.45
@@ -164,7 +172,7 @@ L 775.944 252.45
 z
 " clip-path="url(#p86f328b126)" style="fill: #e2e8f0; stroke: #ffffff; stroke-width: 4; stroke-linejoin: miter"/>
    </g>
-   <g id="patch_19">
+   <g id="patch_20">
     <path d="M 191.88 252.45
 L 337.896 252.45
 L 337.896 304.92
@@ -172,7 +180,7 @@ L 191.88 304.92
 z
 " clip-path="url(#p86f328b126)" style="fill: #d1fae5; stroke: #ffffff; stroke-width: 4; stroke-linejoin: miter"/>
    </g>
-   <g id="patch_20">
+   <g id="patch_21">
     <path d="M 337.896 252.45
 L 483.912 252.45
 L 483.912 304.92
@@ -180,7 +188,7 @@ L 337.896 304.92
 z
 " clip-path="url(#p86f328b126)" style="fill: #fed7aa; stroke: #ffffff; stroke-width: 4; stroke-linejoin: miter"/>
    </g>
-   <g id="patch_21">
+   <g id="patch_22">
     <path d="M 483.912 252.45
 L 629.928 252.45
 L 629.928 304.92
@@ -188,7 +196,7 @@ L 483.912 304.92
 z
 " clip-path="url(#p86f328b126)" style="fill: #fed7aa; stroke: #ffffff; stroke-width: 4; stroke-linejoin: miter"/>
    </g>
-   <g id="patch_22">
+   <g id="patch_23">
     <path d="M 629.928 252.45
 L 775.944 252.45
 L 775.944 304.92
@@ -196,7 +204,7 @@ L 629.928 304.92
 z
 " clip-path="url(#p86f328b126)" style="fill: #fed7aa; stroke: #ffffff; stroke-width: 4; stroke-linejoin: miter"/>
    </g>
-   <g id="patch_23">
+   <g id="patch_24">
     <path d="M 775.944 252.45
 L 921.96 252.45
 L 921.96 304.92
@@ -304,42 +312,44 @@ z
     <text style="font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #0f172a" x="556.92" y="228.813047" transform="rotate(-0 556.92 228.813047)">Supported</text>
    </g>
    <g id="text_23">
-    <text style="font-size: 10px; font-family: 'DejaVu Sans'; fill: #0f172a" transform="translate(652.950063 222.81168)">6 images supported</text>
-    <text style="font-size: 10px; font-family: 'DejaVu Sans'; fill: #0f172a" transform="translate(659.150844 234.814414)">Kapaa: read error</text>
+    <text style="font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #0f172a" x="702.936" y="224.615447" transform="rotate(-0 702.936 224.615447)">6/7 supported</text>
    </g>
    <g id="text_24">
-    <text style="font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #0f172a" x="848.952" y="228.813047" transform="rotate(-0 848.952 228.813047)">Unsupported</text>
+    <text style="font-size: 8.5px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #475569" x="702.936" y="238.91734" transform="rotate(-0 702.936 238.91734)">Kapaa unavailable</text>
    </g>
    <g id="text_25">
-    <text style="font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #0f172a" x="264.888" y="281.283047" transform="rotate(-0 264.888 281.283047)">Supported</text>
+    <text style="font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #0f172a" x="848.952" y="228.813047" transform="rotate(-0 848.952 228.813047)">Unsupported</text>
    </g>
    <g id="text_26">
-    <text style="font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #0f172a" x="410.904" y="281.282656" transform="rotate(-0 410.904 281.282656)">Wrong canvas</text>
+    <text style="font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #0f172a" x="264.888" y="281.283047" transform="rotate(-0 264.888 281.283047)">Supported</text>
    </g>
    <g id="text_27">
-    <text style="font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #0f172a" x="556.92" y="281.282656" transform="rotate(-0 556.92 281.282656)">Wrong canvas</text>
+    <text style="font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #0f172a" x="410.904" y="281.282656" transform="rotate(-0 410.904 281.282656)">Wrong canvas</text>
    </g>
    <g id="text_28">
-    <text style="font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #0f172a" x="702.936" y="281.282656" transform="rotate(-0 702.936 281.282656)">Wrong canvas</text>
+    <text style="font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #0f172a" x="556.92" y="281.282656" transform="rotate(-0 556.92 281.282656)">Wrong canvas</text>
    </g>
    <g id="text_29">
+    <text style="font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #0f172a" x="702.936" y="281.282656" transform="rotate(-0 702.936 281.282656)">Wrong canvas</text>
+   </g>
+   <g id="text_30">
     <text style="font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #0f172a" x="848.952" y="281.283047" transform="rotate(-0 848.952 281.283047)">Unsupported</text>
    </g>
   </g>
-  <g id="text_30">
+  <g id="text_31">
    <text style="font-weight: 700; font-size: 22px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #0f172a" x="32.76" y="24.636563" transform="rotate(-0 32.76 24.636563)">Image support at a glance</text>
   </g>
-  <g id="text_31">
+  <g id="text_32">
    <text style="font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #475569" x="32.76" y="43.56" transform="rotate(-0 32.76 43.56)">Public image examples · color and precision vary between tools</text>
   </g>
-  <g id="text_32">
+  <g id="text_33">
    <text style="font-size: 9px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #475569" x="32.76" y="366.3" transform="rotate(-0 32.76 366.3)">Canvas mismatch: the full EXR display window is not restored.</text>
   </g>
-  <g id="text_33">
+  <g id="text_34">
    <text style="font-size: 9px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #475569" x="32.76" y="380.16" transform="rotate(-0 32.76 380.16)">The EXR color issue applies to this libvips Magick loader. Source images and settings: comparison guide.</text>
   </g>
   <g id="legend_1">
-   <g id="patch_24">
+   <g id="patch_25">
     <path d="M 36.18 344.157891
 L 54.18 344.157891
 L 54.18 337.857891
@@ -347,10 +357,10 @@ L 36.18 337.857891
 z
 " style="fill: #d1fae5"/>
    </g>
-   <g id="text_34">
+   <g id="text_35">
     <text style="font-size: 9px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #0f172a" x="61.38" y="344.157891" transform="rotate(-0 61.38 344.157891)">Supported</text>
    </g>
-   <g id="patch_25">
+   <g id="patch_26">
     <path d="M 126.210938 344.157891
 L 144.210938 344.157891
 L 144.210938 337.857891
@@ -358,10 +368,10 @@ L 126.210938 337.857891
 z
 " style="fill: #e2e8f0"/>
    </g>
-   <g id="text_35">
+   <g id="text_36">
     <text style="font-size: 9px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #0f172a" x="151.410937" y="344.157891" transform="rotate(-0 151.410937 344.157891)">Decoder unavailable</text>
    </g>
-   <g id="patch_26">
+   <g id="patch_27">
     <path d="M 262.178437 344.157891
 L 280.178437 344.157891
 L 280.178437 337.857891
@@ -369,10 +379,10 @@ L 262.178437 337.857891
 z
 " style="fill: #fde68a"/>
    </g>
-   <g id="text_36">
+   <g id="text_37">
     <text style="font-size: 9px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #0f172a" x="287.378437" y="344.157891" transform="rotate(-0 287.378437 344.157891)">Color issue</text>
    </g>
-   <g id="patch_27">
+   <g id="patch_28">
     <path d="M 354.855937 344.157891
 L 372.855937 344.157891
 L 372.855937 337.857891
@@ -380,10 +390,10 @@ L 354.855937 337.857891
 z
 " style="fill: #fed7aa"/>
    </g>
-   <g id="text_37">
+   <g id="text_38">
     <text style="font-size: 9px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #0f172a" x="380.055937" y="344.157891" transform="rotate(-0 380.055937 344.157891)">Canvas mismatch</text>
    </g>
-   <g id="patch_28">
+   <g id="patch_29">
     <path d="M 478.368281 344.157891
 L 496.368281 344.157891
 L 496.368281 337.857891
@@ -391,7 +401,7 @@ L 478.368281 337.857891
 z
 " style="fill: #fecdd3"/>
    </g>
-   <g id="text_38">
+   <g id="text_39">
     <text style="font-size: 9px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #0f172a" x="503.568281" y="344.157891" transform="rotate(-0 503.568281 344.157891)">Read error</text>
    </g>
   </g>

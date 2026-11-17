@@ -41,5 +41,13 @@
     "FFmpeg": "qscale=2",
     "other_tools": "quality=90"
   },
-  "upscale": false
+  "upscale": false,
+  "output_issue_timing": {
+    "date": "2026-11-17",
+    "issues": [
+      "wrong-colour",
+      "wrong-geometry"
+    ],
+    "image_counts_labelled": true
+  }
 }

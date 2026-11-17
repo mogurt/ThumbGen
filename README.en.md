@@ -33,9 +33,11 @@ Speed and format support for everyday images, EXRs and tiny-image batches. Value
 | 7 everyday images / two JPEGs | 4 × 1 | 1.106 | 4.311 | 1.083 | 6.537 | 1.289 |
 | 12 synthetic PNG16 images / one PNG | 4 × 1 | 1.564 | 3.238 | 2.604 | 3.623 | 1.141 |
 | 1,000 tiny PNG copies / one PNG | 4 × 1 | 4.331 | 47.686 | 9.589 | 11.043 | 1.408 |
-| 7 still EXRs / two PNGs | 1 × 4 | 1.435 | Highlight color issue / unreadable input | 2.136 | 6 supported; Kapaa unreadable | Unsupported |
-| 7 still EXRs / two PNGs | 4 × 1 | 2.437 | Highlight color issue / unreadable input | 1.511 | 6 supported; Kapaa unreadable | Unsupported |
-| 8 Beachball EXR frames / two PNGs | 4 × 1 | 0.710 | Wrong canvas | Wrong canvas | Wrong canvas | Unsupported |
+| 7 still EXRs / two PNGs | 1 × 4 | 1.435 | 6.789*† | 2.136 | 2.674* | Unsupported |
+| 7 still EXRs / two PNGs | 4 × 1 | 2.437 | 5.056*† | 1.511 | 1.729* | Unsupported |
+| 8 Beachball EXR frames / two PNGs | 4 × 1 | 0.710 | 3.002† | 0.235† | 1.094† | Unsupported |
+
+<sub>* 6 of 7 images; Kapaa is unreadable. † Outputs have color or canvas issues.</sub>
 
 ![EXR dual-output speed with different thread allocations](docs/assets/five-tool-exr.svg)
 

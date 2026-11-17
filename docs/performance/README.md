@@ -5,6 +5,7 @@
 | [timings.csv](timings.csv) | Processing time, memory and output size |
 | [aggregates.json](aggregates.json) | Values used by the charts |
 | [coverage.json](coverage.json) | Image support and limitations |
+| [issue-timings.json](issue-timings.json) | Processing time for outputs with color or canvas issues |
 | [settings.json](settings.json) | Hardware, software versions and output settings |
 | [public-assets.json](public-assets.json) | Image downloads, authors, licenses and checksums |
 

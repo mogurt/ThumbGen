@@ -16,6 +16,8 @@
 
 不同工具的色彩处理、滤波和压缩设置不同。Pillow 使用 8-bit 缩放；FFmpeg JPEG 使用 q2，其他工具为 Q90，两者并非相同画质。所用 ImageMagick 不含 OpenMP；libvips 的 EXR 读取经由 Magick loader，存在高光颜色问题。
 
+静态 EXR 中，ImageMagick 和 libvips 可读取六份图片，Kapaa 无法读取。libvips 的输出存在高光颜色异常；Beachball 序列在 libvips、FFmpeg 和 ImageMagick 中有输出，但画布尺寸不符。
+
 ## 数据下载
 
 - [处理耗时与内存](performance/timings.csv)
