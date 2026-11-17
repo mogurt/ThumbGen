@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(ThumbGen VERSION 0.1.0 LANGUAGES CXX)
+project(ThumbGen VERSION 0.1.1 LANGUAGES CXX)
 
 find_package(OpenImageIO 3.2 CONFIG REQUIRED)
 find_package(Imath CONFIG REQUIRED)

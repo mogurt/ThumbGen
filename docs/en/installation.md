@@ -4,7 +4,23 @@
 
 Use the complete ThumbGen folder for your platform. Keep the supplied DLLs on Windows; preserve the bin/lib layout and executable permissions on Linux. Do not copy only the executable.
 
-Add the program directory to PATH or use its full path. In PowerShell, run `& "C:/Tools/ThumbGen/thumbgen.exe" --version --json`; on Linux, run `./bin/thumbgen --version --json`.
+Download the matching `thumbgen-0.1.1-*.zip` or `.tar.gz` and check the accompanying `SHA256SUMS`. Both archives contain one fixed `ThumbGen/` directory, with `bin/`, `share/`, `licenses/` and, on Linux, `lib/` immediately underneath. The directory name has no version or platform suffix; no renaming or moving is needed.
+
+On Windows, extract into `%LOCALAPPDATA%/Programs/` to get `%LOCALAPPDATA%/Programs/ThumbGen/bin/thumbgen.exe`. In PowerShell:
+
+```powershell
+& "$env:LOCALAPPDATA/Programs/ThumbGen/bin/thumbgen.exe" --version --json
+```
+
+On Linux, extract into `$HOME/.local/opt/` to get `$HOME/.local/opt/ThumbGen/bin/thumbgen`:
+
+```sh
+mkdir -p "$HOME/.local/opt"
+tar -xzf thumbgen-0.1.1-linux-x86_64-glibc217.tar.gz -C "$HOME/.local/opt"
+"$HOME/.local/opt/ThumbGen/bin/thumbgen" --version --json
+```
+
+Extract into the installation directory's **parent**, avoiding `ThumbGen/ThumbGen/`. Use the full executable path; the archives do not install automatically or modify PATH.
 
 Python and separate image-processing applications are not needed at runtime. For missing-library errors, check that extraction completed and the package matches your platform.
 

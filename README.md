@@ -6,7 +6,7 @@
 
 ThumbGen 为普通图片和复杂 EXR 快速生成缩略图。一次解码输出多个尺寸，并行处理大批图片，运行时不需要 Python。
 
-`0.1.0` · [Apache-2.0](LICENSE)
+`0.1.1` · [Apache-2.0](LICENSE)
 
 ## 能做些什么
 
