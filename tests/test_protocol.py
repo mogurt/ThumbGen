@@ -100,8 +100,8 @@ class Protocol(unittest.TestCase):
                 invalid['jobs'][0]['outputs'][0]['path']=str(self.root/'never.png')
                 path.write_text(json.dumps(invalid));self.records('batch','--manifest',path,exit=2)
                 self.assertFalse((self.root/'never.png').exists())
-    def native_records(self,executable,count):
-        result=subprocess.run([str(executable)],env=ENV,capture_output=True,text=True,encoding='utf-8',timeout=30)
+    def native_records(self,executable,count,timeout=30):
+        result=subprocess.run([str(executable)],env=ENV,capture_output=True,text=True,encoding='utf-8',timeout=timeout)
         self.assertEqual(result.returncode,0,result.stderr)
         records=json.loads(result.stdout)['records']
         self.assertEqual(len(records),count)
@@ -110,7 +110,8 @@ class Protocol(unittest.TestCase):
     def test_control_records(self):self.native_records(args.control_exe,14)
     def test_isolated_records(self):
         enabled='integer-linear-stream-v1' in self.records('capabilities')[0]['colour_processing']
-        records=self.native_records(args.isolated_exe,88 if enabled else 77)
+        # Reuse worker_isolated's existing native test budget (CMakeLists.txt).
+        records=self.native_records(args.isolated_exe,88 if enabled else 77,timeout=60)
         c2={r['id'] for r in records if r['id'].startswith('c2-')}
         expected={'c2-normal','c2-crash','c2-after-crash','c2-partial','c2-protocol','c2-after-protocol',
                   'c2-source-change','c2-sleep','c2-low-memory','c2-cancel','c2-after-cancel'}
