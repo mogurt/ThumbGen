@@ -1,0 +1,45 @@
+{
+  "platform": "Windows",
+  "cpu": "Intel Core i7-13700K",
+  "physical_cpu_budget": 4,
+  "tools": {
+    "ThumbGen": "0.1.0-dev",
+    "libvips": "8.18.7 linear",
+    "FFmpeg": "9.0.1",
+    "ImageMagick": "7.1.2-31 Q16-HDRI, no OpenMP",
+    "Pillow": "12.3.0"
+  },
+  "sizes": {
+    "single": [
+      425,
+      260
+    ],
+    "dual": [
+      [
+        425,
+        260
+      ],
+      [
+        960,
+        960
+      ]
+    ]
+  },
+  "timing": {
+    "unit": "seconds",
+    "statistic": "median",
+    "repetitions": 5,
+    "warmup": 1,
+    "scope": "process launch through process exit"
+  },
+  "memory": {
+    "unit": "MiB",
+    "statistic": "maximum sampled process-tree peak across repetitions",
+    "sampling_limitations": "Short-lived peaks and processes may be missed."
+  },
+  "jpeg": {
+    "FFmpeg": "qscale=2",
+    "other_tools": "quality=90"
+  },
+  "upscale": false
+}
