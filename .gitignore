@@ -17,3 +17,12 @@ CMakeUserPresets.json
 /benchmarks/public-results-v1.json
 /benchmarks/regression-thresholds.windows-local.json
 /CHANGELOG.md
+
+# Archived experiment harnesses remain local only
+/benchmarks/
+/tests/benchmarks/
+/scripts/linux/audit-current-colour-deep.py
+/scripts/linux/audit-deep-runtime-reference.py
+/scripts/linux/audit-sampled-id-validation.py
+/scripts/linux/collect-quantize-results.py
+/scripts/linux/run-resource-pressure.sh

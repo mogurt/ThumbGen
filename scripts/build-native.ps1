@@ -3,7 +3,7 @@ $ErrorActionPreference = 'Stop'
 $thumbRoot = Split-Path -Parent $PSScriptRoot
 $thumbSdk = Join-Path $thumbRoot '.deps/oiio/Library'
 if (-not (Test-Path -LiteralPath $thumbSdk)) {
-    throw 'Native SDK missing. Create .deps/oiio using benchmarks/native-win64.explicit.txt first.'
+    throw 'Native SDK missing. Create .deps/oiio using dependencies/native-win64.explicit.txt first.'
 }
 $thumbArgs = @('-S', $thumbRoot, '-B', (Join-Path $thumbRoot 'build'),
     '-G', 'Visual Studio 17 2022', '-A', 'x64', "-DCMAKE_PREFIX_PATH=$thumbSdk")

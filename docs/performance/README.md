@@ -14,10 +14,10 @@
 Download the source images:
 
 ```sh
-python benchmarks/five_tool_study/fetch_assets.py --output comparison-inputs
+python scripts/public/comparison/fetch_assets.py --output comparison-inputs
 ```
 
-Synthetic images use the [PNG generator](../../benchmarks/five_tool_study/generate_assets.py). Conversion options are in the [tool adapters](../../benchmarks/five_tool_study/adapters.py).
+Synthetic images use the [PNG generator](../../scripts/public/comparison/generate_assets.py). Conversion options are in the [tool adapters](../../scripts/public/comparison/adapters.py).
 
 Redraw the charts with Matplotlib:
 
