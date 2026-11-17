@@ -6,7 +6,7 @@
 
 ThumbGen makes thumbnails from everyday images and complex EXRs, fast. Decode once for multiple sizes, process large batches with parallel jobs, and run without Python.
 
-`0.1.0-dev` · [Apache-2.0](LICENSE)
+`0.1.0` · [Apache-2.0](LICENSE)
 
 ## What can it do?
 
