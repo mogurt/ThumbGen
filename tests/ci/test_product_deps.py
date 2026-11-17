@@ -18,7 +18,7 @@ class ProductDependencies(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()
         self.sdk = self.root / 'sdk'
         for name in ('sdk', 'oiio-source', 'oiio-deps/dist', 'oiio-deps/OpenEXR', 'oiio-deps/libjpeg-turbo'):
             (self.sdk / name).mkdir(parents=True)
