@@ -65,7 +65,7 @@ public:
 }
 
 static void usage() {
-    std::cout << "ThumbGen 0.1.0\n"
+    std::cout << "ThumbGen 0.1.1\n"
         "  thumbgen convert INPUT --output-dir DIR [--size 1024] [--json]\n"
         "  thumbgen convert INPUT --output FILE [--json]\n"
         "  thumbgen batch --manifest FILE [--json]\n"
