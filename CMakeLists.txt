@@ -205,7 +205,8 @@ if(BUILD_TESTING)
     if(Python3_EXECUTABLE)
         add_test(NAME core_exr_pipeline COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_exr_pipeline.py --exe $<TARGET_FILE:thumbgen_exr_pipeline_tests>)
-        set_tests_properties(core_exr_pipeline PROPERTIES TIMEOUT 120 LABELS "exr;regression")
+        set_tests_properties(core_exr_pipeline PROPERTIES TIMEOUT 120 LABELS "exr;regression" ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:$<TARGET_FILE_DIR:OpenImageIO::OpenImageIO>;LD_LIBRARY_PATH=path_list_prepend:$<TARGET_FILE_DIR:OpenImageIO::OpenImageIO>")
     endif()
     add_executable(thumbgen_skcms_tests tests/test_skcms.cpp)
     target_link_libraries(thumbgen_skcms_tests PRIVATE thumbgen_skcms)

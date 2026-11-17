@@ -32,4 +32,5 @@ if(THUMBGEN_C2_PNG_STREAM)
     target_compile_definitions(thumbgen_output_fault_tests PRIVATE THUMBGEN_EXPECT_C2=1)
 endif()
 add_test(NAME core_output_fault COMMAND thumbgen_output_fault_tests)
-set_tests_properties(core_output_fault PROPERTIES TIMEOUT 240 LABELS "protocol;allocation;regression")
+set_tests_properties(core_output_fault PROPERTIES TIMEOUT 240 LABELS "protocol;allocation;regression" ENVIRONMENT_MODIFICATION
+    "PATH=path_list_prepend:$<TARGET_FILE_DIR:OpenImageIO::OpenImageIO>;LD_LIBRARY_PATH=path_list_prepend:$<TARGET_FILE_DIR:OpenImageIO::OpenImageIO>")
