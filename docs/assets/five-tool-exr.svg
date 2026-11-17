@@ -260,7 +260,7 @@ L 432.028235 325.872
     <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #0f172a" x="229.994121" y="269.667268" transform="rotate(-0 229.994121 269.667268)">2.674</text>
    </g>
    <g id="text_19">
-    <text style="font-size: 8.5px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #64748b" x="137.059765" y="282.307171" transform="rotate(-0 137.059765 282.307171)">6/7 images · Kapaa unavailable</text>
+    <text style="font-size: 8.5px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #64748b" x="137.059765" y="282.307171" transform="rotate(-0 137.059765 282.307171)">6/7 images · multiresolution EXR unavailable</text>
    </g>
    <g id="text_20">
     <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #0f172a" x="373.010293" y="195.839576" transform="rotate(-0 373.010293 195.839576)">6.789</text>
@@ -503,7 +503,7 @@ L 898.56 325.872
     <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #0f172a" x="663.696509" y="269.667268" transform="rotate(-0 663.696509 269.667268)">1.729</text>
    </g>
    <g id="text_42">
-    <text style="font-size: 8.5px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #64748b" x="603.591529" y="282.307171" transform="rotate(-0 603.591529 282.307171)">6/7 images · Kapaa unavailable</text>
+    <text style="font-size: 8.5px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #64748b" x="603.591529" y="282.307171" transform="rotate(-0 603.591529 282.307171)">6/7 images · multiresolution EXR unavailable</text>
    </g>
    <g id="text_43">
     <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #0f172a" x="779.304307" y="195.839576" transform="rotate(-0 779.304307 195.839576)">5.056</text>
@@ -525,7 +525,7 @@ L 898.56 325.872
    <text style="font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #475569" x="42.12" y="53.568" transform="rotate(-0 42.12 53.568)">7 public images · 4 CPU cores</text>
   </g>
   <g id="text_49">
-   <text style="font-size: 9px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #475569" x="42.12" y="397.296" transform="rotate(-0 42.12 397.296)">ImageMagick and libvips cover six images; ThumbGen and FFmpeg cover seven. Kapaa is a multilevel EXR.</text>
+   <text style="font-size: 9px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #475569" x="42.12" y="397.296" transform="rotate(-0 42.12 397.296)">ImageMagick and libvips: 6/7 images (multiresolution EXR unavailable). ThumbGen and FFmpeg: 7/7 images.</text>
   </g>
   <g id="text_50">
    <text style="font-size: 9px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #475569" x="42.12" y="417.384" transform="rotate(-0 42.12 417.384)">Image colors and filtering differ. See the comparison guide for sample downloads and settings.</text>

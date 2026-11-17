@@ -37,7 +37,7 @@ Speed and format support for everyday images, EXRs and tiny-image batches. Value
 | 7 still EXRs / two PNGs | 4 × 1 | 2.437 | 5.056*† | 1.511 | 1.729* | Unsupported |
 | 8 Beachball EXR frames / two PNGs | 4 × 1 | 0.710 | 3.002† | 0.235† | 1.094† | Unsupported |
 
-<sub>* 6 of 7 images; Kapaa is unreadable. † Outputs have color or canvas issues.</sub>
+<sub>* 6 of 7 images; the multiresolution EXR is unreadable. † Outputs have color or canvas issues.</sub>
 
 ![EXR dual-output speed with different thread allocations](docs/assets/five-tool-exr.svg)
 

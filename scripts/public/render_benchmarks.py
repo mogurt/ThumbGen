@@ -33,7 +33,7 @@ def panel(ax,rows,title,limit=None):
 def exr_rows(data,issue_data,config):
     rows=select(data,'exr-public7','png','dual',config,['thumbgen','ffmpeg'])
     im=select(data,'exr-public7-supporters3','png','dual',config,['magick'])[0]
-    rows.append({**im,'display_note':'6/7 images · Kapaa unavailable'})
+    rows.append({**im,'display_note':'6/7 images · multiresolution EXR unavailable'})
     matches=[r for r in issue_data if r['cohort']=='exr-public7-supporters3' and r['tool']=='vips' and r['config']==config and r['profile']=='dual']
     if len(matches)>1:raise ValueError('Duplicate libvips EXR timing')
     if matches:rows.append({**matches[0],'display_note':'6/7 images · HDR color issue'})
@@ -75,7 +75,7 @@ def coverage_chart(coverage,output):
             if cohort=='exr-public7' and tool=='magick':
                 ax.add_patch(Rectangle((x,y+6/7),1,1/7,facecolor=palette['read-failure'],edgecolor='none'))
                 ax.text(x+.5,y+.42,text,ha='center',va='center',fontsize=10,color='#0f172a')
-                ax.text(x+.5,y+.7,'Kapaa unavailable',ha='center',va='center',fontsize=8.5,color='#475569')
+                ax.text(x+.5,y+.7,'Multiresolution EXR unavailable',ha='center',va='center',fontsize=8.5,color='#475569')
             else:ax.text(x+.5,y+.5,text,ha='center',va='center',fontsize=10,color='#0f172a')
     ax.set_xlim(0,5);ax.set_ylim(4,0)
     ax.set_xticks([x+.5 for x in range(5)],[LABELS[t] for t in TOOLS],fontsize=11)
@@ -114,7 +114,7 @@ def main():
     for ax,rows,title in zip(axes,sets,['1 job × 4 threads','4 jobs × 1 thread']):exr_panel(ax,rows,title,limit)
     fig.suptitle('EXR previews / two output sizes',x=.045,ha='left',fontsize=21,fontweight='bold')
     fig.text(.045,.88,'7 public images · 4 CPU cores',fontsize=10,color='#475569')
-    fig.text(.045,.11,'ImageMagick and libvips cover six images; ThumbGen and FFmpeg cover seven. Kapaa is a multilevel EXR.',fontsize=9,color='#475569')
+    fig.text(.045,.11,'ImageMagick and libvips: 6/7 images (multiresolution EXR unavailable). ThumbGen and FFmpeg: 7/7 images.',fontsize=9,color='#475569')
     fig.text(.045,.065,'Image colors and filtering differ. See the comparison guide for sample downloads and settings.',fontsize=9,color='#475569')
     fig.text(.045,.022,'2026-11-16–17 · ThumbGen · libvips 8.18.7 · FFmpeg 9.0.1 · ImageMagick 7.1.2-31 Q16-HDRI, no OpenMP',fontsize=8.5,color='#475569')
     fig.subplots_adjust(left=.14,right=.96,top=.7,bottom=.27,wspace=.55)
