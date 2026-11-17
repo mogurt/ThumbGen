@@ -4,9 +4,20 @@
 
 **Native speed. OCIO color. Crypto, Deep and Z previews.**
 
-ThumbGen makes thumbnails from everyday images and complex EXRs, fast. Decode once for multiple sizes, process large batches with parallel jobs, and run without Python.
+ThumbGen makes thumbnails from standard images and complex EXRs, fast. Decode once for multiple sizes, process large batches with parallel jobs, and run without Python.
+
+Fast, EXR-aware previews for production pipelines.
 
 `0.1.1` · [Apache-2.0](LICENSE)
+
+## Where it fits
+
+For production workflows that need both batch throughput and access to EXR layers, channels and color information:
+
+- **Render farms and result inspection**: generate multiple preview sizes in batches and browse color, normals, depth and Crypto to help inspect renders and AOVs.
+- **Art, compositing and technical art pipelines**: use project OCIO settings to preview layered EXRs, data channels and supported Deep content.
+- **Asset ingestion, version management and delivery**: create list and detail previews for EXRs, textures and HDR images, making assets, versions and deliverables easier to browse.
+- **Desktop tools and cloud platforms**: integrate through the CLI and JSONL with file pickers, publishing panels or remote asset libraries. Generate previews where the files live to reduce large-file transfers while browsing.
 
 ## What can it do?
 
@@ -19,35 +30,37 @@ ThumbGen makes thumbnails from everyday images and complex EXRs, fast. Decode on
 | **[Deep](docs/en/public-deep.md)** | Opt-in flattening of supported Deep EXRs into regular previews |
 | **[Z depth](docs/en/data-preview.md)** | Fixed-range grayscale depth previews, consistent across a sequence |
 
-Everyday PNG, JPEG, TIFF and other images work too, with alpha, orientation, multipart and channel selection. Integrating with scripts? Read file-by-file progress and results as JSONL.
+Standard PNG, JPEG, TIFF and other images work too, with alpha, orientation, multipart and channel selection. Integrating with scripts? Read file-by-file progress and results as JSONL.
 
 ## Speed and format support
 
-Speed and format support for everyday images, EXRs and tiny-image batches. Values are **seconds per batch (lower is faster)** on Windows / i7-13700K with four CPU cores.
+**Fast previews, with support for complex EXR.** Select channels, retain transparency and preserve the full display canvas. The comparison below shows processing times alongside format support and output limitations.
 
-![Five-tool image batch speed](docs/assets/five-tool-overview.svg)
+![Five-tool comparison: EXR, standard images and tiny-image batches](docs/assets/five-tool-overview.svg)
 
-| Input / output | Parallel jobs × threads | ThumbGen | libvips linear | FFmpeg | ImageMagick | Pillow |
-| --- | --- | ---: | --- | ---: | --- | --- |
-| 7 everyday images / two PNGs | 4 × 1 | 1.326 | 4.324 | 1.110 | 6.659 | 1.335 |
-| 7 everyday images / two JPEGs | 4 × 1 | 1.106 | 4.311 | 1.083 | 6.537 | 1.289 |
-| 12 synthetic PNG16 images / one PNG | 4 × 1 | 1.564 | 3.238 | 2.604 | 3.623 | 1.141 |
-| 1,000 tiny PNG copies / one PNG | 4 × 1 | 4.331 | 47.686 | 9.589 | 11.043 | 1.408 |
-| 7 still EXRs / two PNGs | 1 × 4 | 1.435 | 6.789*† | 2.136 | 2.674* | Unsupported |
-| 7 still EXRs / two PNGs | 4 × 1 | 2.437 | 5.056*† | 1.511 | 1.729* | Unsupported |
-| 8 Beachball EXR frames / two PNGs | 4 × 1 | 0.710 | 3.002† | 0.235† | 1.094† | Unsupported |
+In the chart, each EXR and standard image produces two previews, small and large; each tiny image produces one. Previews preserve the original aspect ratio without stretching. Color, filtering and compression differ between tools. [Full results, output sizes and image sources →](docs/en/benchmarks.md)
 
-<sub>* 6 of 7 images; the multiresolution EXR is unreadable. † Outputs have color or canvas issues.</sub>
+## See the previews
 
-![EXR dual-output speed with different thread allocations](docs/assets/five-tool-exr.svg)
+### Cryptomatte: scene IDs and transparent edges
 
-![Five-tool image format support and limitations](docs/assets/five-tool-coverage.svg)
+![Cryptomatte previews of two scenes, showing stable ID colors, fine edges and coverage transparency](docs/assets/features/cryptomatte.png)
 
-ThumbGen supports layered EXRs and full sequence display canvases. Parallel jobs and thread counts can be adjusted to suit your images.
+Turn IDs and coverage into a stable-color overview for checking objects and edges. This previews the whole family rather than extracting a named matte. [Using Cryptomatte →](docs/en/cryptomatte.md)
 
-Single output fits 425×260; dual output adds 960×960. Color processing, filters and compression differ between tools, so consider image quality alongside speed. [Images and settings](docs/en/benchmarks.md).
+### Depth: make data channels visible
 
-[Performance data](docs/en/benchmarks.md) · [Public sample images](docs/en/public-assets.md)
+![Color and Z-depth previews of the same EXR, using a fixed range of 9 to 11 in source units](docs/assets/features/depth.png)
+
+Select the Z channel and a range to create a grayscale preview. Keep the same range across frames for a consistent depth mapping. [Depth and data previews →](docs/en/data-preview.md)
+
+### OpenColorIO: follow your project color settings
+
+![The same linear Rec.709 EXR with Un-tone-mapped and ACES 1.0 SDR Video views on an sRGB display](docs/assets/features/ocio.png)
+
+Use a project OCIO configuration and choose the input space, Display and View. Only the view changes above, showing different highlight and tone rendering. [Color management →](docs/en/color-cms.md)
+
+These are actual ThumbGen outputs from publicly redistributable EXR samples. [Image sources and settings →](docs/en/public-assets.md#homepage-preview-images)
 
 ## Platforms and formats
 

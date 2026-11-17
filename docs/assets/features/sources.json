@@ -1,0 +1,160 @@
+{
+  "thumbgen_version": "0.1.1",
+  "sources": [
+    {
+      "filename": "asf-ScanLines-StillLife.exr",
+      "url": "https://raw.githubusercontent.com/AcademySoftwareFoundation/openexr-images/e38ffb0790f62f05a6f083a6fa4cac150b3b7452/ScanLines/StillLife.exr",
+      "page": "https://github.com/AcademySoftwareFoundation/openexr-images/tree/e38ffb0790f62f05a6f083a6fa4cac150b3b7452/ScanLines",
+      "sha256": "86a04a36ec10983780d47ae33b2fba0dde269dd687bf53decf5ec0a726e50756",
+      "license": "BSD-3-Clause"
+    },
+    {
+      "filename": "beachball-0001.exr",
+      "url": "https://raw.githubusercontent.com/AcademySoftwareFoundation/openexr-images/e38ffb0790f62f05a6f083a6fa4cac150b3b7452/Beachball/singlepart.0001.exr",
+      "page": "https://github.com/AcademySoftwareFoundation/openexr-images/tree/e38ffb0790f62f05a6f083a6fa4cac150b3b7452/Beachball",
+      "sha256": "29719942ed3c095a8f8f111fc139fc4c28f446007f5bfce00177cae585b1a87a",
+      "license": "BSD-3-Clause"
+    },
+    {
+      "filename": "bunny_CryptoAsset.exr",
+      "url": "https://raw.githubusercontent.com/Psyop/Cryptomatte/968d5e4b6171e29ba5f89d554117132a164e747e/sample_images/bunny_CryptoAsset.exr",
+      "page": "https://github.com/Psyop/Cryptomatte",
+      "sha256": "b9a97c9ffa5c4e7378483c58d5cf6dd04f4f492b79e810508d240f521e6833dd",
+      "license": "BSD-3-Clause"
+    },
+    {
+      "filename": "cornellBox_CryptoWildcard.0001.exr",
+      "url": "https://raw.githubusercontent.com/Psyop/Cryptomatte/968d5e4b6171e29ba5f89d554117132a164e747e/sample_images/cornellBox_CryptoWildcard.0001.exr",
+      "page": "https://github.com/Psyop/Cryptomatte",
+      "sha256": "94f70d9f3d2f457d1c89bf7b5ec6929fc6440310a23bba2c52347e48490f2080",
+      "license": "BSD-3-Clause"
+    }
+  ],
+  "previews": [
+    {
+      "name": "crypto-room",
+      "source": "cornellBox_CryptoWildcard.0001.exr",
+      "options": [
+        "--visualize",
+        "cryptomatte",
+        "--channels",
+        "uCryptoWildcard",
+        "--size",
+        "800",
+        "--background",
+        "transparent",
+        "--threads",
+        "1",
+        "--preset",
+        "balanced"
+      ],
+      "preview_sha256": "f1e0b4f0832451a2f496129d9f13d23a19f5bba1a65a95646be266d57bb689e9"
+    },
+    {
+      "name": "crypto-bunny",
+      "source": "bunny_CryptoAsset.exr",
+      "options": [
+        "--visualize",
+        "cryptomatte",
+        "--channels",
+        "uCryptoAsset",
+        "--size",
+        "800",
+        "--background",
+        "transparent",
+        "--threads",
+        "1",
+        "--preset",
+        "balanced"
+      ],
+      "preview_sha256": "431fcc4eac874af259f734a3ee6254abe2e1ae14ca44b7f61b2876beeaedd277"
+    },
+    {
+      "name": "depth-colour",
+      "source": "beachball-0001.exr",
+      "options": [
+        "--channels",
+        "RGB",
+        "--input-space",
+        "linear",
+        "--size",
+        "800",
+        "--background",
+        "black",
+        "--threads",
+        "1",
+        "--preset",
+        "balanced"
+      ],
+      "preview_sha256": "1edc9a6e0bf53e7405febdbf9d013d3c69e87049fd38ac74389b59125dbf4659"
+    },
+    {
+      "name": "depth-z",
+      "source": "beachball-0001.exr",
+      "options": [
+        "--visualize",
+        "depth",
+        "--channels",
+        "Z",
+        "--data-range",
+        "9,11",
+        "--size",
+        "800",
+        "--background",
+        "black",
+        "--threads",
+        "1",
+        "--preset",
+        "balanced"
+      ],
+      "preview_sha256": "a3dd87a737d63d55782ed24175647ea7c571b926ada689b0d2a49dbe020f180a"
+    },
+    {
+      "name": "ocio-untonemapped",
+      "source": "asf-ScanLines-StillLife.exr",
+      "options": [
+        "--input-space",
+        "Linear Rec.709 (sRGB)",
+        "--ocio-config",
+        "ocio://cg-config-v2.2.0_aces-v1.3_ocio-v2.4",
+        "--display",
+        "sRGB - Display",
+        "--view",
+        "Un-tone-mapped",
+        "--size",
+        "800",
+        "--background",
+        "black",
+        "--threads",
+        "1",
+        "--preset",
+        "balanced"
+      ],
+      "preview_sha256": "c2f33701a5f4672c61341c7087dc2bfc0f13125bc00ae2af0c898215675fc109"
+    },
+    {
+      "name": "ocio-aces",
+      "source": "asf-ScanLines-StillLife.exr",
+      "options": [
+        "--input-space",
+        "Linear Rec.709 (sRGB)",
+        "--ocio-config",
+        "ocio://cg-config-v2.2.0_aces-v1.3_ocio-v2.4",
+        "--display",
+        "sRGB - Display",
+        "--view",
+        "ACES 1.0 - SDR Video",
+        "--size",
+        "800",
+        "--background",
+        "black",
+        "--threads",
+        "1",
+        "--preset",
+        "balanced"
+      ],
+      "preview_sha256": "ba8ef5c928ffc40d82555a00d2762286a44fec3956ca51777374cc1a3b90f861"
+    }
+  ],
+  "layout": "Uncropped, proportionally resized previews; checkerboard shows transparency."
+}

@@ -57,9 +57,67 @@ def exr_panel(ax,rows,title,limit):
     for side in ['top','right','left']:ax.spines[side].set_visible(False)
     ax.tick_params(axis='y',length=0,pad=8)
 
+def overview_chart(data,issue_data,output):
+    still={r['tool']:r for r in exr_rows(data,issue_data,'w1t4')}
+    sequence={r['tool']:r for r in select(data,'exr-sequence8','png','dual','w4t1',['thumbgen'])}
+    for tool in ['vips','ffmpeg','magick']:
+        sequence[tool]=next(r for r in issue_data if
+            (r['cohort'],r['tool'],r['config'],r['profile'])==('exr-sequence8',tool,'w4t1','dual'))
+    columns=[
+        ('EXR stills','7 images / two sizes','1 job × 4 threads',still),
+        ('EXR sequence','8 frames / two sizes','4 jobs × 1 thread',sequence),
+        ('Standard images','7 images / two sizes','4 jobs × 1 thread',
+         {r['tool']:r for r in select(data,'ordinary-public7','png','dual','w4t1')}),
+        ('Tiny-image batch','1,000 copies / one size','4 jobs × 1 thread',
+         {r['tool']:r for r in select(data,'tiny-1000','png','425','w4t1')})]
+    blue='#2563eb';ink='#172b45';muted='#62748b';gray='#9aa9bb';amber='#b56b13'
+    fig=plt.figure(figsize=(14,7.2),facecolor='white')
+    ax=fig.add_axes([0,0,1,1]);ax.set_xlim(0,1);ax.set_ylim(0,1);ax.axis('off')
+    ax.text(.035,.945,'Fast previews for images and EXR',fontsize=23,fontweight='bold',color=ink)
+    ax.text(.035,.898,'Batch time in seconds · lower is faster',fontsize=11,color=muted)
+    ax.text(.965,.898,'Windows / i7-13700K / 4 CPU cores',fontsize=10,ha='right',color=muted)
+    starts=[.205,.405,.605,.805];width=.16
+    row_y=[.70,.59,.48,.37,.26]
+    ax.add_patch(Rectangle((.025,.654),.95,.092,facecolor='#edf4ff',edgecolor='none'))
+    for i,tool in enumerate(TOOLS):
+        ax.text(.035,row_y[i],LABELS[tool],va='center',fontsize=12,
+                fontweight='bold' if tool=='thumbgen' else 'normal',color=blue if tool=='thumbgen' else ink)
+        if i:ax.plot([.035,.965],[row_y[i]+.055]*2,color='#e6ebf1',lw=.7)
+    for col,(title,description,config,rows) in enumerate(columns):
+        x=starts[col]
+        ax.text(x,.832,title,fontsize=13,fontweight='bold',color=ink)
+        ax.text(x,.798,description,fontsize=10,color=muted)
+        ax.text(x,.770,config,fontsize=9,color=muted)
+        maximum=max(r['median_seconds'] for r in rows.values())
+        for i,tool in enumerate(TOOLS):
+            y=row_y[i];row=rows.get(tool)
+            if row is None:
+                ax.text(x,y,'Not supported',fontsize=10,color=muted,va='center')
+                continue
+            value=row['median_seconds'];issue=row.get('output_issue') in ('wrong-colour','wrong-geometry')
+            color=blue if tool=='thumbgen' else amber if issue else gray
+            ax.text(x,y+.008,f'{value:.3f} s',fontsize=12,fontweight='bold' if tool=='thumbgen' else 'normal',color=blue if tool=='thumbgen' else ink)
+            ax.add_patch(Rectangle((x,y-.013),width,.007,facecolor='#e8edf3',edgecolor='none'))
+            ax.add_patch(Rectangle((x,y-.013),width*value/maximum,.007,facecolor=color,edgecolor='none'))
+            note=''
+            if col==0:
+                note={'thumbgen':'7/7 images','ffmpeg':'7/7 images',
+                      'vips':'6/7 · color issue','magick':'6/7 · one unreadable'}[tool]
+            elif col==1:
+                note='8/8 · full display canvas' if tool=='thumbgen' else '8/8 · canvas mismatch'
+            if note:ax.text(x,y-.039,note,fontsize=9,color=amber if issue else muted)
+    ax.plot([.035,.965],[.195]*2,color='#ccd6e2',lw=.8)
+    ax.text(.035,.150,'All outputs: PNG. Five-round medians; bars are scaled within each column.',fontsize=9.5,color=muted)
+    ax.text(.035,.114,'Amber bars: output issues. EXR stills: ImageMagick / libvips cannot read the multiresolution image.',fontsize=9.5,color=muted)
+    ax.text(.035,.078,'Color, filtering and startup differ between tools. libvips color issues apply to this Magick-loader build.',fontsize=9.5,color=muted)
+    ax.text(.035,.035,'2026-11-16–17 · ThumbGen · libvips 8.18.7 · FFmpeg 9.0.1 · ImageMagick 7.1.2-31 · Pillow 12.3',fontsize=8.5,color=muted)
+    for ext in ['svg','png']:
+        fig.savefig(output/f'five-tool-overview.{ext}',dpi=150,metadata={'Date':None} if ext=='svg' else {})
+    plt.close(fig)
+
 def coverage_chart(coverage,output):
     cohorts=['ordinary-public7','png16-synthetic12','exr-public7','exr-sequence8']
-    names=['Everyday images · 7','Synthetic PNG16 · 12','Still EXRs · 7','Beachball EXR frames · 8']
+    names=['Standard images · 7','Synthetic PNG16 · 12','Still EXRs · 7','Beachball EXR frames · 8']
     palette={'valid':'#d1fae5','unsupported':'#e2e8f0','wrong-colour':'#fde68a','wrong-geometry':'#fed7aa','read-failure':'#fecdd3'}
     fig,ax=plt.subplots(figsize=(13,5.5))
     for y,cohort in enumerate(cohorts):
@@ -96,19 +154,9 @@ def main():
     p=argparse.ArgumentParser();p.add_argument('--results',type=Path,default=Path(__file__).resolve().parents[2]/'docs/performance/aggregates.json');p.add_argument('--output',type=Path,default=Path(__file__).resolve().parents[2]/'docs/assets');a=p.parse_args()
     data=json.loads(a.results.read_text(encoding='utf-8'));a.output.mkdir(parents=True,exist_ok=True)
     plt.rcParams.update({'svg.fonttype':'none','font.family':'DejaVu Sans','axes.labelcolor':'#475569','text.color':'#0f172a','svg.hashsalt':'thumbgen-five-tool-20261116'})
-    fig,axes=plt.subplots(2,2,figsize=(13,9.6))
-    panels=[('ordinary-public7','png','425','7 inputs / one PNG size'),('ordinary-public7','png','dual','7 inputs / two PNG sizes'),('ordinary-public7','jpeg','dual','7 inputs / two JPEG sizes'),('tiny-1000','png','425','1,000 tiny PNG copies / one size')]
-    for ax,(cohort,fmt,profile,title) in zip(axes.flat,panels):panel(ax,select(data,cohort,fmt,profile,'w4t1'),title)
-    fig.suptitle('Five ways to make previews',x=.045,ha='left',fontsize=22,fontweight='bold')
-    fig.text(.045,.925,'4 CPU cores · 4 parallel jobs · batch time in seconds',fontsize=10,color='#475569')
-    fig.text(.045,.065,'Shorter is faster. Color, transparency and filtering differ between tools.',fontsize=9,color='#475569')
-    fig.text(.045,.043,'JPEG settings differ: FFmpeg qscale=2; other tools Q90. See the comparison guide for details.',fontsize=9,color='#475569')
-    fig.text(.045,.021,'2026-11-16 · ThumbGen · libvips 8.18.7 · FFmpeg 9.0.1 · ImageMagick 7.1.2-31 · Pillow 12.3',fontsize=8.5,color='#475569')
-    fig.subplots_adjust(left=.14,right=.96,top=.85,bottom=.15,hspace=.65,wspace=.55)
-    for ext in ['svg','png']:fig.savefig(a.output/f'five-tool-overview.{ext}',dpi=150,metadata={'Date':None} if ext=='svg' else {})
-    plt.close(fig)
     issue_path=a.results.with_name('issue-timings.json')
     issue_data=json.loads(issue_path.read_text(encoding='utf-8')) if issue_path.exists() else []
+    overview_chart(data,issue_data,a.output)
     fig,axes=plt.subplots(1,2,figsize=(13,6.2));sets=[exr_rows(data,issue_data,config) for config in ['w1t4','w4t1']]
     limit=max(r['max_seconds'] for rows in sets for r in rows)
     for ax,rows,title in zip(axes,sets,['1 job × 4 threads','4 jobs × 1 thread']):exr_panel(ax,rows,title,limit)
