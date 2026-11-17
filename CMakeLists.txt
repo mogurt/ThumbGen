@@ -501,7 +501,7 @@ if(BUILD_TESTING)
                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_integer_cli.py --exe $<TARGET_FILE:thumbgen>
                 --schema-dir ${CMAKE_CURRENT_SOURCE_DIR}/schemas --runtime-dir $<TARGET_FILE_DIR:OpenImageIO::OpenImageIO>)
             set_tests_properties(public_integer_colour PROPERTIES TIMEOUT 120 LABELS "protocol;colour;scheduler")
-            add_test(NAME public_color_input COMMAND ${Python3_EXECUTABLE}
+            add_test(NAME public_color_input COMMAND ${Python3_EXECUTABLE} -u
                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_color_input.py --exe $<TARGET_FILE:thumbgen>
                 --probe-exe $<TARGET_FILE:thumbgen_color_input_probe> --schema-dir ${CMAKE_CURRENT_SOURCE_DIR}/schemas
                 --runtime-dir $<TARGET_FILE_DIR:OpenImageIO::OpenImageIO>)

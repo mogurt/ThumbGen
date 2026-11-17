@@ -4,6 +4,7 @@ No product/OIIO writer, colour processor or generated product pixels are used
 as the oracle. PNG/TIFF/JPEG fixtures below follow the respective file layouts.
 """
 import argparse
+import faulthandler
 import hashlib
 import itertools
 import json
@@ -12,7 +13,9 @@ import os
 from pathlib import Path
 import struct
 import subprocess
+import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 import zlib
@@ -174,7 +177,15 @@ class ColourInput(unittest.TestCase):
         path=self.root/name;path.write_bytes(data);return path
     def run_json(self,exe,command,exit=0):
         command=[str(exe),*map(str,command)]
-        run=subprocess.run(command,env=env,capture_output=True,text=True,encoding='utf-8',timeout=45)
+        started=time.monotonic()
+        print(f'child start: {command!r}',file=sys.stderr,flush=True)
+        try:
+            run=subprocess.run(command,env=env,capture_output=True,text=True,encoding='utf-8',timeout=45)
+        except BaseException as error:
+            print(f'child exception: {error!r}',file=sys.stderr,flush=True)
+            raise
+        finally:
+            print(f'child end: elapsed={time.monotonic()-started:.3f}s command={command!r}',file=sys.stderr,flush=True)
         diagnostic=f'command={command!r}\nreturncode={run.returncode}\nstdout={run.stdout!r}\nstderr={run.stderr!r}'
         self.assertEqual(run.returncode,exit,diagnostic)
         try:rows=[json.loads(line) for line in run.stdout.splitlines() if line.strip()]
@@ -428,4 +439,9 @@ colorspaces:
                 for text in (reason,'fake-probe','--presence','empty.bin',f'returncode={code}',f'stdout={stdout!r}',"stderr='diagnostic stderr'"):
                     self.assertIn(text,message)
 
-if __name__=='__main__':unittest.main(argv=[__file__,*remaining])
+if __name__=='__main__':
+    faulthandler.dump_traceback_later(90,repeat=False)
+    try:
+        unittest.main(argv=[__file__,*remaining],verbosity=2)
+    finally:
+        faulthandler.cancel_dump_traceback_later()
