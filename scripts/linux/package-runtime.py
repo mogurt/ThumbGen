@@ -116,6 +116,13 @@ with tempfile.TemporaryDirectory(prefix='candidate-', dir=work) as temporary:
     for directory in ('bin', 'lib', 'licenses'):
         (root / directory).mkdir(parents=True, exist_ok=True)
     shutil.copy2(exe, root / 'bin/thumbgen')
+    branding = root / 'share/ThumbGen/branding'
+    branding.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(repo / 'docs/assets/branding/thumbgen-icon-concept-v1.png', branding / 'thumbgen.png')
+    for size in (16, 24, 32, 48, 64, 128, 256, 512):
+        icon_dir = root / f'share/icons/hicolor/{size}x{size}/apps'
+        icon_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(repo / f'resources/icons/{size}x{size}/thumbgen.png', icon_dir / 'thumbgen.png')
     # Recompute the executable's closure: the validation closure also contains
     # two test executables, which must never be copied into a runtime package.
     queue, seen, external = [exe.resolve()], set(), []

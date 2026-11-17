@@ -164,6 +164,8 @@ def pack(exe, sdk, evidence_file, output, runtime_notices, color_overlay=None, b
         for notice in component['notices']:
             notice_index.append('  ' + notice['file'] + '  sha256=' + notice['sha256'])
     add('LICENSE', (repo / 'LICENSE').read_bytes())
+    add('share/ThumbGen/branding/thumbgen.png', repo / 'docs/assets/branding/thumbgen-icon-concept-v1.png')
+    add('share/ThumbGen/branding/thumbgen.ico', repo / 'resources/icons/thumbgen.ico')
     add('NOTICE.txt', ('\n'.join(notice_index) + '\n').encode('utf-8'))
     add('SOURCE-PROVENANCE.json', encode(dict(source_lock=sdk_receipt['source_lock'],
         source_lock_sha256=sdk_receipt['source_lock_sha256'], build_scripts_sha256=sdk_receipt['build_scripts_sha256'],

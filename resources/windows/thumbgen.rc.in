@@ -1,0 +1,2 @@
+// Keep the application icon first so the Windows shell uses it for the EXE.
+1 ICON "@CMAKE_CURRENT_SOURCE_DIR@/resources/icons/thumbgen.ico"
