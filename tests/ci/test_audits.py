@@ -96,7 +96,8 @@ class Audits(unittest.TestCase):
             reply = directory / '.cmake/api/v1/reply'
             reply.mkdir(parents=True)
             expected = {'thumbgen': 'EXECUTABLE', 'thumbgen_core': 'STATIC_LIBRARY',
-                        'thumbgen_runtime': 'STATIC_LIBRARY', 'thumbgen_schedule': 'STATIC_LIBRARY'}
+                        'thumbgen_runtime': 'STATIC_LIBRARY', 'thumbgen_schedule': 'STATIC_LIBRARY',
+                        'thumbgen_skcms': 'STATIC_LIBRARY'}
             targets = []
             for name, kind in expected.items():
                 (reply / (name + '.json')).write_text(json.dumps(dict(name=name, type=kind)))
@@ -104,6 +105,16 @@ class Audits(unittest.TestCase):
             (reply / 'index-1.json').write_text(json.dumps({'reply': {'codemodel-v2': {'jsonFile': 'model.json'}}}))
             (reply / 'model.json').write_text(json.dumps(dict(configurations=[dict(targets=targets)])))
             self.assertEqual(ci.audit_release(directory), expected)
+            (reply / 'unexpected.json').write_text(json.dumps(dict(name='unexpected_library', type='STATIC_LIBRARY')))
+            for invalid in (targets[:-1], targets + [dict(jsonFile='unexpected.json')]):
+                (reply / 'model.json').write_text(json.dumps(dict(configurations=[dict(targets=invalid)])))
+                with self.assertRaisesRegex(RuntimeError, 'scope'):
+                    ci.audit_release(directory)
+            (reply / 'model.json').write_text(json.dumps(dict(configurations=[dict(targets=targets)])))
+            (reply / 'thumbgen_skcms.json').write_text(json.dumps(dict(name='thumbgen_skcms', type='SHARED_LIBRARY')))
+            with self.assertRaisesRegex(RuntimeError, 'scope'):
+                ci.audit_release(directory)
+            (reply / 'thumbgen_skcms.json').write_text(json.dumps(dict(name='thumbgen_skcms', type='STATIC_LIBRARY')))
             (reply / 'model.json').write_text(json.dumps(dict(configurations=[dict(targets=targets + targets[:1])])))
             with self.assertRaisesRegex(RuntimeError, 'scope'):
                 ci.audit_release(directory)

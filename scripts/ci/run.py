@@ -62,7 +62,8 @@ def audit_release(directory):
     if not model['configurations']:
         raise RuntimeError('Release codemodel has no configurations')
     expected = {'thumbgen': 'EXECUTABLE', 'thumbgen_core': 'STATIC_LIBRARY',
-                'thumbgen_runtime': 'STATIC_LIBRARY', 'thumbgen_schedule': 'STATIC_LIBRARY'}
+                'thumbgen_runtime': 'STATIC_LIBRARY', 'thumbgen_schedule': 'STATIC_LIBRARY',
+                'thumbgen_skcms': 'STATIC_LIBRARY'}
     for config in model['configurations']:
         targets = [json.loads((reply / item['jsonFile']).read_text()) for item in config['targets']]
         actual = {target['name']: target['type'] for target in targets if target['type'] != 'UTILITY'}
