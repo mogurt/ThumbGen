@@ -131,7 +131,12 @@ class Cryptomatte(unittest.TestCase):
         self.convert('window');width,height,pixels=png(self.output);self.assertEqual((width,height),(6,4))
         self.assertEqual(pixels,[EXPECTED[0] if x in (2,3) and y in (1,2) else (0,0,0) for y in range(4) for x in range(6)])
         self.output=self.directory/'oriented.png';self.convert('oriented');self.assertEqual(png(self.output),(3,2,[EXPECTED[0]]*3+[EXPECTED[7]]*3))
-    def test_split_parts_fail_instead_of_partial_preview(self):
+    def test_split_parts_combine_ranks(self):
+        result=self.convert('split')
+        self.assertEqual(result['cryptomatte']['layers'],['Object00','Object01'])
+        self.assertEqual(result['cryptomatte']['ranks'],4)
+        self.assertEqual(png(self.output),(2,2,[EXPECTED[1],EXPECTED[3],EXPECTED[3],EXPECTED[3]]))
+    def test_explicit_part_must_contain_complete_family(self):
         result=self.convert('split','--part-name','left',exit=4);self.assertEqual(result['error']['code'],'cryptomatte_layout_unsupported');self.assertFalse(self.output.exists())
     def test_pool_sequence_error_restore_and_rank_change(self):
         rows=self.batch([self.job('bad','bad'),self.job('good','valid'),self.job('changed','odd'),self.job('recovered','valid')]);results=rows[:-1]

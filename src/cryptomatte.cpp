@@ -11,6 +11,7 @@
 #include <map>
 #include <limits>
 #include <set>
+#include <tuple>
 
 namespace thumbgen::detail {
 namespace {
@@ -39,65 +40,109 @@ bool crypto_group(const std::vector<std::string>& names,const std::string& group
 Json CryptoLayout::info() const {
     Json names=Json::array();for(const auto& layer:layers)names.push_back(layer.name);
     return {{"name",name},{"metadata_key",metadata_key},{"hash","MurmurHash3_32"},{"conversion","uint32_to_float32"},
-        {"layers",names},{"ranks",channels.size()/2},{"manifest",{{"embedded_attribute",embedded_manifest},{"sidecar_attribute",sidecar_manifest},{"used",false}}}};
+        {"layers",names},{"ranks",channel_names.size()/2},{"manifest",{{"embedded_attribute",embedded_manifest},{"sidecar_attribute",sidecar_manifest},{"used",false}}}};
 }
-std::optional<CryptoLayout> crypto_layout(const OIIO::ImageSpec& spec,const std::string& family) {
-    std::vector<std::string> keys;
-    for(const auto& attribute:spec.extra_attribs)if(name_attribute(attribute.name().string()) && attribute.type()==OIIO::TypeDesc::STRING && spec.get_string_attribute(attribute.name())==family)
-        keys.push_back(attribute.name().string().substr(0,attribute.name().string().size()-5));
-    if(keys.empty())return std::nullopt;
-    struct Group {std::string name;std::map<int,int> components;};std::map<unsigned,Group> groups;
-    for(int c=0;c<spec.nchannels;++c) {
-        auto dot=spec.channelnames[c].rfind('.');if(dot==std::string::npos)continue;
-        auto name=spec.channelnames[c].substr(0,dot);
-        if(name.rfind(family,0)!=0 || !digits(name.substr(family.size())))continue;
-        unsigned rank=0;for(char digit:name.substr(family.size())) {
-            if(rank>(std::numeric_limits<unsigned>::max()-unsigned(digit-'0'))/10)throw FileFailure("cryptomatte_layout_unsupported","Cryptomatte layer index overflows");
-            rank=rank*10+unsigned(digit-'0');
+CryptoLayout crypto_layout(std::vector<OIIO::ImageSpec> specs,const std::string& family,int selected_part) {
+    struct Group {std::string name;int part;std::map<int,int> components;};
+    std::map<unsigned,Group> groups;
+    std::set<std::string> expected_layers;
+    std::set<int> rank_parts;
+    CryptoLayout result;result.name=family;
+    auto add_metadata=[&](const OIIO::ImageSpec& spec) {
+        for(const auto& attribute:spec.extra_attribs) {
+            const auto name=attribute.name().string();
+            if(!name_attribute(name) || attribute.type()!=OIIO::TypeDesc::STRING || spec.get_string_attribute(attribute.name())!=family)continue;
+            const auto key=name.substr(0,name.size()-5);
+            if(!result.metadata_key.empty() && result.metadata_key!=key)
+                throw FileFailure("cryptomatte_metadata_invalid","ambiguous Cryptomatte metadata for family");
+            result.metadata_key=key;
+            const auto* hash=spec.find_attribute(key+"/hash");
+            const auto* conversion=spec.find_attribute(key+"/conversion");
+            if(!hash || !conversion || hash->type()!=OIIO::TypeDesc::STRING || conversion->type()!=OIIO::TypeDesc::STRING)
+                throw FileFailure("cryptomatte_metadata_invalid","missing or non-string Cryptomatte metadata");
+            if(spec.get_string_attribute(key+"/hash")!="MurmurHash3_32" || spec.get_string_attribute(key+"/conversion")!="uint32_to_float32")
+                throw FileFailure("cryptomatte_metadata_invalid","unsupported Cryptomatte hash/conversion");
+            result.embedded_manifest|=spec.find_attribute(key+"/manifest")!=nullptr;
+            result.sidecar_manifest|=spec.find_attribute(key+"/manif_file")!=nullptr;
         }
-        auto& group=groups[rank];if(!group.name.empty() && group.name!=name)throw FileFailure("cryptomatte_layout_unsupported","duplicate Cryptomatte layer index");group.name=name;
-        auto component=lower(spec.channelnames[c].substr(dot+1));int index=-1;
-        if(component=="r" || component=="red")index=0;else if(component=="g" || component=="green")index=1;
-        else if(component=="b" || component=="blue")index=2;else if(component=="a" || component=="alpha")index=3;
-        if(index>=0 && !group.components.emplace(index,c).second)throw FileFailure("cryptomatte_layout_unsupported","duplicate Cryptomatte channel alias");
+    };
+    for(int part=0;part<int(specs.size());++part) {
+        const auto& spec=specs[part];
+        const auto part_name=std::string(spec.get_string_attribute("oiio:subimagename"));
+        if(part_name!=family && crypto_group({family},part_name))expected_layers.insert(part_name);
+        for(int c=0;c<spec.nchannels;++c) {
+            const auto& channel=spec.channelnames[c];
+            auto dot=channel.rfind('.');if(dot==std::string::npos)continue;
+            auto name=channel.substr(0,dot);
+            if(name.rfind(family,0)!=0 || !digits(name.substr(family.size())))continue;
+            // A selected part may repeat a complete family, but it must not omit any numbered layers.
+            if(selected_part>=0 && part!=selected_part){expected_layers.insert(std::move(name));continue;}
+            rank_parts.insert(part);
+            unsigned rank=0;
+            for(char digit:name.substr(family.size())) {
+                if(rank>(std::numeric_limits<unsigned>::max()-unsigned(digit-'0'))/10)throw FileFailure("cryptomatte_layout_unsupported","Cryptomatte layer index overflows");
+                rank=rank*10+unsigned(digit-'0');
+            }
+            auto& group=groups.try_emplace(rank,Group{name,part,{}}).first->second;
+            if(group.name!=name)
+                throw FileFailure("cryptomatte_layout_unsupported","duplicate Cryptomatte layer index");
+            if(group.part!=part)
+                throw FileFailure("ambiguous_parts","multiple parts contain the same Cryptomatte layer; select a part with the complete family");
+            auto component=lower(channel.substr(dot+1));int index=-1;
+            if(component=="r" || component=="red")index=0;else if(component=="g" || component=="green")index=1;
+            else if(component=="b" || component=="blue")index=2;else if(component=="a" || component=="alpha")index=3;
+            if(index>=0 && !group.components.emplace(index,c).second)
+                throw FileFailure("cryptomatte_layout_unsupported","duplicate Cryptomatte channel alias");
+        }
     }
-    if(groups.empty())return std::nullopt; // Metadata may be shared with an unrelated part.
-    if(keys.size()!=1)throw FileFailure("cryptomatte_metadata_invalid","ambiguous Cryptomatte metadata for family");
-    if(spec.deep)throw FileFailure("deep_requires_flattening","Cryptomatte overview requires flat ranks");
-    const auto& key=keys.front();
-    for(const char* field:{"hash","conversion"}) {
-        auto* attribute=spec.find_attribute(key+"/"+field);
-        if(!attribute || attribute->type()!=OIIO::TypeDesc::STRING)throw FileFailure("cryptomatte_metadata_invalid","missing or non-string Cryptomatte metadata");
-    }
-    if(spec.get_string_attribute(key+"/hash")!="MurmurHash3_32" || spec.get_string_attribute(key+"/conversion")!="uint32_to_float32")
-        throw FileFailure("cryptomatte_metadata_invalid","unsupported Cryptomatte hash/conversion");
-    CryptoLayout result;result.name=family;result.metadata_key=key;
-    result.embedded_manifest=spec.find_attribute(key+"/manifest")!=nullptr;result.sidecar_manifest=spec.find_attribute(key+"/manif_file")!=nullptr;
+    // Unrelated beauty parts can carry incomplete copies of the family metadata.
+    for(int part:rank_parts)add_metadata(specs[part]);
+    if(result.metadata_key.empty())
+        for(const auto& spec:specs)add_metadata(spec);
+    if(result.metadata_key.empty())throw FileFailure("cryptomatte_metadata_invalid","requested Cryptomatte family requires metadata");
+    if(groups.empty())throw FileFailure("cryptomatte_layout_unsupported","requested Cryptomatte family has no numbered layers");
+    const auto& reference=specs[groups.begin()->second.part];
+    auto windows=[](const OIIO::ImageSpec& s) {
+        return std::tie(s.x,s.y,s.z,s.width,s.height,s.depth,s.full_x,s.full_y,s.full_z,s.full_width,s.full_height,s.full_depth);
+    };
+    const auto orientation=reference.get_int_attribute("Orientation",1);
     unsigned expected=0;
     for(const auto& entry:groups) {
         const auto& group=entry.second;
         if(entry.first!=expected++)throw FileFailure("cryptomatte_layout_unsupported","Cryptomatte layers must start at zero without gaps");
-        auto components=group.components;
+        expected_layers.erase(group.name);
+        const auto& spec=specs[group.part];
+        if(spec.deep)throw FileFailure("deep_requires_flattening","Cryptomatte overview requires flat ranks");
+        if(windows(spec)!=windows(reference) || spec.get_int_attribute("Orientation",1)!=orientation)
+            throw FileFailure("cryptomatte_layout_unsupported","Cryptomatte parts must have matching data and display windows and orientation");
+        const auto& components=group.components;
         bool second=components.count(2) || components.count(3);
         if(!components.count(0) || !components.count(1) || (second && (!components.count(2) || !components.count(3))) ||
             (!second && entry.first!=groups.rbegin()->first))throw FileFailure("cryptomatte_layout_unsupported","incomplete Cryptomatte ID/coverage pair");
-        CryptoLayer layer;layer.name=group.name;
+        CryptoLayer layer{group.name,group.part,{}};
         for(int index=0;index<(second?4:2);++index) {
             int channel=components.at(index);auto type=spec.channelformat(channel);
             if((index%2==0 && type!=OIIO::TypeDesc::FLOAT) || (index%2==1 && type!=OIIO::TypeDesc::FLOAT && type!=OIIO::TypeDesc::HALF))
                 throw FileFailure("data_type_unsupported","Cryptomatte IDs require FLOAT; coverage requires FLOAT or HALF");
-            layer.channels.push_back(channel);result.channels.push_back(channel);
+            layer.channels.push_back(channel);result.channel_names.push_back(spec.channelnames[channel]);
         }
         result.layers.push_back(std::move(layer));
     }
+    if(!expected_layers.empty())
+        throw FileFailure("cryptomatte_layout_unsupported","selected Cryptomatte layers do not cover the complete family");
+    for(int part:rank_parts)result.parts.emplace(part,std::move(specs[part]));
     return result;
 }
-std::size_t crypto_source_pixel_bytes(const OIIO::ImageSpec& spec,const CryptoLayout& layout) {
-    std::size_t maximum=0;for(const auto& layer:layout.layers)maximum=std::max(maximum,channel_plan(spec,layer.channels,true).pixel_bytes);return maximum;
+std::size_t crypto_source_pixel_bytes(const CryptoLayout& layout) {
+    std::size_t maximum=0;
+    for(const auto& layer:layout.layers)
+        maximum=std::max(maximum,channel_plan(layout.parts.at(layer.part),layer.channels,true).pixel_bytes);
+    return maximum;
 }
-DataImage read_crypto_image(OIIO::ImageInput& input,const OIIO::ImageSpec& spec,int part,const CryptoLayout& layout,InvalidData invalid,std::size_t limit,int threads) {
-    if(spec.width<1 || spec.height<1 || spec.depth!=1 || layout.layers.empty())throw FileFailure("invalid_dimensions","invalid Cryptomatte image");
-    const auto pixels=std::size_t(spec.width)*spec.height,source_bytes=crypto_source_pixel_bytes(spec,layout);
+DataImage read_crypto_image(OIIO::ImageInput& input,const CryptoLayout& layout,InvalidData invalid,std::size_t limit,int threads) {
+    const auto& spec=layout.parts.at(layout.layers.front().part);
+    if(spec.width<1 || spec.height<1 || spec.depth!=1)throw FileFailure("invalid_dimensions","invalid Cryptomatte image");
+    const auto pixels=std::size_t(spec.width)*spec.height,source_bytes=crypto_source_pixel_bytes(layout);
     if(!source_bytes || pixels>limit/source_bytes)throw FileFailure("decode_limit_exceeded","Cryptomatte rank layer exceeds source limit");
     if(pixels>limit/(4*sizeof(double)))throw FileFailure("canvas_limit_exceeded","Cryptomatte accumulation buffer exceeds limit");
     DataImage result;result.decoded_bytes=pixels*source_bytes;
@@ -105,13 +150,18 @@ DataImage read_crypto_image(OIIO::ImageInput& input,const OIIO::ImageSpec& spec,
     // Read all contiguous ranks together in bounded scanline strips. This
     // avoids decompressing the same EXR chunks once per rank layer, while
     // keeping raw storage within the original single-layer allocation.
-    const auto combined=channel_plan(spec,layout.channels,true);
     const auto compression=spec.get_string_attribute("compression");
     // Concurrent strip scheduling regressed measured two-thread workers.
     // Keep those and unmeasured codecs on the original whole-layer reader.
-    const bool strips=std::strcmp(input.format_name(),"openexr")==0 && threads==1 && (compression=="zip" || compression=="zips") &&
-        !spec.tile_width && layout.layers.size()>1 && combined.runs.size()==1 &&
-        std::size_t(spec.height)*source_bytes/combined.pixel_bytes>=64;
+    std::vector<int> combined_channels;
+    bool strips=false;
+    if(layout.parts.size()==1 && std::strcmp(input.format_name(),"openexr")==0 && threads==1 &&
+        (compression=="zip" || compression=="zips") && !spec.tile_width && layout.layers.size()>1) {
+        for(const auto& layer:layout.layers)
+            combined_channels.insert(combined_channels.end(),layer.channels.begin(),layer.channels.end());
+        const auto combined=channel_plan(spec,combined_channels,true);
+        strips=combined.runs.size()==1 && std::size_t(spec.height)*source_bytes/combined.pixel_bytes>=64;
+    }
     const int rows=strips?64:spec.height;
     const std::size_t batches=strips?1:layout.layers.size();
     OIIO::ImageSpec strip_spec;
@@ -123,14 +173,16 @@ DataImage read_crypto_image(OIIO::ImageInput& input,const OIIO::ImageSpec& spec,
     }
     for(int row=0;row<spec.height;row+=rows)for(std::size_t batch=0;batch<batches;++batch) {
         if(strips)strip_spec.height=std::min(rows,spec.height-row);
-        const auto& strip=strips?strip_spec:spec;
-        const auto& selected=strips?layout.channels:layout.layers[batch].channels;
+        const auto& layer=layout.layers[batch];
+        const auto& source=layout.parts.at(layer.part);
+        const auto& strip=strips?strip_spec:source;
+        const auto& selected=strips?combined_channels:layer.channels;
         const auto plan=channel_plan(strip,selected,true);
         std::vector<unsigned char> raw(std::size_t(spec.width)*strip.height*plan.pixel_bytes);
         auto tick=Clock::now();
-        const bool read=strips?input.read_scanlines(part,0,spec.y+row,spec.y+row+strip.height,spec.z,
+        const bool read=strips?input.read_scanlines(layer.part,0,source.y+row,source.y+row+strip.height,source.z,
             plan.runs.front().first,plan.runs.front().end,OIIO::TypeDesc::UNKNOWN,raw.data()):
-            read_selected(input,spec,part,plan,true,raw.data());
+            read_selected(input,source,layer.part,plan,true,raw.data());
         if(!read)throw FileFailure("decode_failed",input.geterror());
         result.decode_ms+=ms(tick);tick=Clock::now();
         struct Rank {const unsigned char* id;const unsigned char* coverage;std::size_t id_stride,coverage_stride;bool half_coverage;};
@@ -138,7 +190,7 @@ DataImage read_crypto_image(OIIO::ImageInput& input,const OIIO::ImageSpec& spec,
         for(std::size_t pair=0;pair<selected.size();pair+=2) {
             auto ii=std::size_t(std::lower_bound(plan.channels.begin(),plan.channels.end(),selected[pair])-plan.channels.begin());
             auto ci=std::size_t(std::lower_bound(plan.channels.begin(),plan.channels.end(),selected[pair+1])-plan.channels.begin());
-            ranks.push_back({raw.data()+plan.offsets[ii],raw.data()+plan.offsets[ci],plan.strides[ii],plan.strides[ci],spec.channelformat(selected[pair+1])==OIIO::TypeDesc::HALF});
+            ranks.push_back({raw.data()+plan.offsets[ii],raw.data()+plan.offsets[ci],plan.strides[ii],plan.strides[ci],source.channelformat(selected[pair+1])==OIIO::TypeDesc::HALF});
         }
         OIIO::parallel_for_chunked(0,strip.height,0,[&](int64_t begin,int64_t end) {
             for(std::size_t p=std::size_t(begin)*spec.width;p<std::size_t(end)*spec.width;++p)for(const auto& rank:ranks) {

@@ -102,7 +102,9 @@ static Json fixtures(const fs::path& root) {
     auto path=root/"split.exr";OIIO::ImageSpec parts[2]={OIIO::ImageSpec(2,2,4,OIIO::TypeDesc::FLOAT),OIIO::ImageSpec(2,2,4,OIIO::TypeDesc::FLOAT)};
     for(int i=0;i<2;++i){metadata(parts[i]);parts[i].attribute("oiio:subimagename",i?"right":"left");for(int c=0;c<4;++c)parts[i].channelnames[c]="Object0"+std::to_string(i)+"."+"RGBA"[c];}
     auto output=OIIO::ImageOutput::create(path.u8string());require(bool(output) && output->open(path.u8string(),2,parts),"open split fixture");float pixels[16]={};
+    std::memcpy(pixels,&bunny,sizeof(bunny));pixels[1]=0.25f;
     require(output->write_image(OIIO::TypeDesc::FLOAT,pixels),output->geterror());require(output->open(path.u8string(),parts[1],OIIO::ImageOutput::AppendSubimage),output->geterror());
+    std::memcpy(pixels,&other,sizeof(other));pixels[1]=0.75f;
     require(output->write_image(OIIO::TypeDesc::FLOAT,pixels),output->geterror());require(output->close(),output->geterror());result["split"]=path.u8string();return result;
 }
 static int run(const std::vector<fs::path>& args) {
@@ -111,8 +113,8 @@ static int run(const std::vector<fs::path>& args) {
         auto root=fs::temp_directory_path()/("thumbgen-crypto-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));auto files=fixtures(root);
         struct Cleanup{fs::path root;~Cleanup(){std::error_code ec;if(root.parent_path()==fs::temp_directory_path())fs::remove_all(root,ec);}}cleanup{root};
         auto input=OIIO::ImageInput::open(files["valid"].get<std::string>());require(bool(input),OIIO::geterror());
-        auto layout=crypto_layout(input->spec(),"Object");require(layout && layout->layers.size()==3 && layout->channels.size()==12,"metadata/rank discovery");
-        auto image=read_crypto_image(*input,input->spec(),0,*layout,InvalidData::error,1024*1024,3);require(input->close(),"close input");
+        auto layout=crypto_layout({input->spec()},"Object");require(layout.layers.size()==3 && layout.channel_names.size()==12,"metadata/rank discovery");
+        auto image=read_crypto_image(*input,layout,InvalidData::error,1024*1024,3);require(input->close(),"close input");
         require(image.statistics.invalid_pixels==0,"valid signed/overshoot/unused-ID values rejected");
         float p0[4],p2[4],background[4];image.image.getpixel(0,0,p0,4);image.image.getpixel(2,0,p2,4);image.image.getpixel(3,0,background,4);
         require(std::memcmp(p0,p2,sizeof(p0))==0 && p0[3]==1 && background[0]==0 && background[3]==0,"rank accumulation/background semantics");
@@ -120,16 +122,16 @@ static int run(const std::vector<fs::path>& args) {
         // including partial last strips, native mixed types and nonzero windows.
         for(const char* kind:{"strip_float","strip_half","strip_bad","strip_window","strip_tiled","strip_interleaved","strip_zips"}) {
             auto source=OIIO::ImageInput::open(files[kind].get<std::string>());
-            auto spec=source->spec();auto ranks=crypto_layout(spec,"Object");
+            auto spec=source->spec();auto ranks=crypto_layout({spec},"Object");
             ReadWitness witness(*source);
-            auto strip=read_crypto_image(witness,spec,0,*ranks,InvalidData::magenta,8*1024*1024,1);
+            auto strip=read_crypto_image(witness,ranks,InvalidData::magenta,8*1024*1024,1);
             const bool fallback=std::string(kind)=="strip_tiled" || std::string(kind)=="strip_interleaved";
             require(fallback?(witness.strip_calls==0 && witness.whole_calls>0):
                 (witness.strip_calls==5 && witness.whole_calls==0),"strip/fallback qualification changed");
             require(source->close(),"close strip input");
             source=OIIO::ImageInput::open(files[kind].get<std::string>());
             spec.tile_width=1; // Select the original whole-layer fallback without changing file contents.
-            auto whole=read_crypto_image(*source,spec,0,*ranks,InvalidData::magenta,8*1024*1024,1);
+            auto whole=read_crypto_image(*source,crypto_layout({spec},"Object"),InvalidData::magenta,8*1024*1024,1);
             require(source->close(),"close fallback input");
             require(strip.decoded_bytes==whole.decoded_bytes &&
                 strip.statistics.invalid_pixels==whole.statistics.invalid_pixels &&
@@ -144,28 +146,45 @@ static int run(const std::vector<fs::path>& args) {
         require(result["ok"].get<bool>() && result["selection"]["lock_status"]=="reused",result.dump());
         auto many=job("many","bounded");many.options.max_decode_mib=1;result=engine.convert(many);require(result["ok"].get<bool>() && result["decoded_mib"]==0.25 && result["cryptomatte"]["ranks"]==20,result.dump());
         auto split=job("split","incomplete");split.options.part_name="left";result=engine.convert(split);require(result["error"]["code"]=="cryptomatte_layout_unsupported" && !fs::exists(split.outputs[0].path),result.dump());
+        auto split_source=OIIO::ImageInput::open(files["split"].get<std::string>());
+        require(bool(split_source),"open split rank fixture");
+        auto left=split_source->spec();OIIO::ImageSpec right;
+        require(split_source->seek_subimage(1,0,right) && split_source->close(),"read split rank metadata");
+        auto reject_split=[&](const OIIO::ImageSpec& other_part,const char* code,const char* message) {
+            try{crypto_layout({left,other_part},"Object");}
+            catch(const FileFailure& error){require(error.code==code,error.what());return;}
+            throw std::runtime_error(message);
+        };
+        auto offset=right;++offset.x;reject_split(offset,"cryptomatte_layout_unsupported","misaligned Cryptomatte parts accepted");
+        auto duplicate=right;duplicate.channelnames=left.channelnames;reject_split(duplicate,"ambiguous_parts","duplicate Cryptomatte layers accepted");
+        auto selected_copy=crypto_layout({left,duplicate},"Object",1);
+        require(selected_copy.parts.size()==1 && selected_copy.parts.count(1)==1,"explicit selection of a complete duplicate family failed");
+        OIIO::ImageSpec beauty(2,2,3,OIIO::TypeDesc::FLOAT);
+        beauty.attribute("cryptomatte/test123/name","Object");
+        auto with_beauty=crypto_layout({beauty,left,right},"Object");
+        require(with_beauty.parts.size()==2 && with_beauty.layers.size()==2,"rankless part metadata overrode rank metadata");
         auto truncated=root/"strip-truncated.exr";
         fs::copy_file(files["strip_float"].get<std::string>(),truncated);
         fs::resize_file(truncated,fs::file_size(truncated)-64);
         auto broken=OIIO::ImageInput::open(truncated.u8string());require(bool(broken),"open truncated strip header");
-        auto broken_spec=broken->spec();auto broken_layout=crypto_layout(broken_spec,"Object");
+        auto broken_layout=crypto_layout({broken->spec()},"Object");
         bool refused=false;
-        try{read_crypto_image(*broken,broken_spec,0,*broken_layout,InvalidData::magenta,8*1024*1024,1);}
+        try{read_crypto_image(*broken,broken_layout,InvalidData::magenta,8*1024*1024,1);}
         catch(const FileFailure& failure){require(failure.code=="decode_failed","strip failure classification changed");refused=true;}
         require(refused,"partial strip failure accepted");broken->close();
         for(int fail:{1,3,5}) {
             auto real=OIIO::ImageInput::open(files["strip_zips"].get<std::string>());
-            auto spec=real->spec();auto ranks=crypto_layout(spec,"Object");ReadWitness failing(*real,fail);
+            auto ranks=crypto_layout({real->spec()},"Object");ReadWitness failing(*real,fail);
             bool rejected=false;
-            try{read_crypto_image(failing,spec,0,*ranks,InvalidData::magenta,8*1024*1024,1);}
+            try{read_crypto_image(failing,ranks,InvalidData::magenta,8*1024*1024,1);}
             catch(const FileFailure& error){require(error.code=="decode_failed","injected strip error changed");rejected=true;}
             require(rejected && failing.strip_calls==fail && failing.whole_calls==0,"failed strip was reread");
             require(real->close(),"close injected strip input");
         }
         auto real=OIIO::ImageInput::open(files["strip_float"].get<std::string>());
-        auto foreign_spec=real->spec();auto foreign_ranks=crypto_layout(foreign_spec,"Object");
+        auto foreign_ranks=crypto_layout({real->spec()},"Object");
         ReadWitness foreign(*real,0,"unmeasured-codec");
-        read_crypto_image(foreign,foreign_spec,0,*foreign_ranks,InvalidData::magenta,8*1024*1024,1);
+        read_crypto_image(foreign,foreign_ranks,InvalidData::magenta,8*1024*1024,1);
         require(foreign.strip_calls==0 && foreign.whole_calls==3,"unmeasured decoder entered EXR strips");real->close();
         auto failed_job=job("strip_float","strip-error-stage");failed_job.input=truncated.u8string();failed_job.options.threads=1;
         auto failed_result=engine.convert(failed_job);

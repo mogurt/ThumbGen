@@ -40,7 +40,6 @@
 #include <cstdlib>
 #include <filesystem>
 #include <limits>
-#include <set>
 #include <map>
 #include <stdexcept>
 #ifdef _WIN32
@@ -351,9 +350,11 @@ Json Engine::convert(const Job& job) {
             {"candidates",Json::array()}};
         struct Choice {int part;OIIO::ImageSpec spec;detail::Candidate candidate;};
         std::vector<Choice> choices,all_choices;
-        int part_count=0;
-        bool part_exists=false,has_deep=false,has_data=false,matched_group=false,crypto_metadata_seen=false;
-        std::set<std::string> crypto_rank_groups;
+        int part_count=0,crypto_part=-1;
+        const bool explicit_part=job.options.part>=0 || !job.options.part_name.empty();
+        bool part_exists=false,has_deep=false,has_data=false,matched_group=false;
+        std::vector<OIIO::ImageSpec> crypto_parts;
+        std::optional<detail::CryptoLayout> crypto_layout;
         for(int p=0;;++p) {
             OIIO::ImageSpec candidate;
             if(!in->seek_subimage(p,0,candidate))break;
@@ -366,25 +367,18 @@ Json Engine::convert(const Job& job) {
                 throw Failure("colour_input_unsupported","CMYK/separated input requires an external profile-aware conversion to RGB; input_space cannot undo decoder conversion");
             ++part_count;
             auto groups=candidate.deep && job.options.deep_mode=="flatten"?detail::deep_colour_candidates(candidate):detail::classify(candidate);
-            if(crypto) {
-                const std::vector<std::string> family{job.options.channels};
-                auto record=[&](const std::string& group){if(group!=job.options.channels && detail::crypto_group(family,group))crypto_rank_groups.insert(group);};
-                for(const auto& channel:candidate.channelnames){auto dot=channel.rfind('.');if(dot!=std::string::npos)record(channel.substr(0,dot));}
-                record(std::string(candidate.get_string_attribute("oiio:subimagename")));
-            }
             for(const auto& group:groups)r["selection"]["candidates"].push_back(detail::candidate_json(candidate,group,p));
-            if(job.options.part>=0 && p!=job.options.part)continue;
-            if(!job.options.part_name.empty() && candidate.get_string_attribute("oiio:subimagename")!=job.options.part_name)continue;
-            part_exists=true;has_deep=has_deep || candidate.deep;
+            const bool matches_part=(job.options.part<0 || p==job.options.part) &&
+                (job.options.part_name.empty() || candidate.get_string_attribute("oiio:subimagename")==job.options.part_name);
+            if(matches_part){part_exists=true;has_deep=has_deep || candidate.deep;}
             if(crypto) {
-                const auto names=detail::crypto_names(candidate);
-                crypto_metadata_seen=crypto_metadata_seen || std::find(names.begin(),names.end(),job.options.channels)!=names.end();
-                if(auto layout=detail::crypto_layout(candidate,job.options.channels)) {
-                    detail::Candidate group{job.options.channels,"data","explicit Cryptomatte coverage overview",layout->channels};
-                    all_choices.push_back({p,candidate,group});choices.push_back({p,candidate,std::move(group)});
+                if(matches_part && explicit_part) {
+                    if(crypto_part>=0)throw Failure("ambiguous_parts","multiple parts match the requested part name");
+                    crypto_part=p;
                 }
-                continue;
+                crypto_parts.push_back(std::move(candidate));continue;
             }
+            if(!matches_part)continue;
             std::vector<detail::Candidate> eligible;
             for(const auto& group:groups) {
                 bool literal=data && std::any_of(group.channels.begin(),group.channels.end(),[&](int c){return candidate.channelnames[c]==job.options.channels;});
@@ -409,13 +403,26 @@ Json Engine::convert(const Job& job) {
             }
             for(const auto& group:eligible)choices.push_back({p,candidate,group});
         }
+        if(crypto && part_exists) {
+            crypto_layout=detail::crypto_layout(std::move(crypto_parts),job.options.channels,crypto_part);
+            const auto& first=crypto_layout->layers.front();
+            const auto& first_spec=crypto_layout->parts.at(first.part);
+            detail::Candidate group{job.options.channels,"data","explicit Cryptomatte coverage overview",first.channels};
+            all_choices.push_back({first.part,first_spec,group});
+            choices.push_back({first.part,first_spec,std::move(group)});
+        }
         if(job.options.channels.empty() && job.options.selection_policy=="primary" &&
            std::any_of(choices.begin(),choices.end(),[](const auto& c){return detail::is_primary(c.spec,c.candidate);}))
             choices.erase(std::remove_if(choices.begin(),choices.end(),[](const auto& c){return !detail::is_primary(c.spec,c.candidate);}),choices.end());
         Json request=detail::selection_request(job);
         auto pin=impl_->sequences.find(job.sequence_id);
-        auto key=[](const Choice& choice) {
+        auto describe=[&](const Choice& choice) {
             auto value=detail::candidate_json(choice.spec,choice.candidate,choice.part);
+            if(crypto_layout)value["channels"]=crypto_layout->channel_names;
+            return value;
+        };
+        auto key=[&](const Choice& choice) {
+            auto value=describe(choice);
             // Named parts may move in the file without changing their identity.
             if(!value["part_name"].get<std::string>().empty())value.erase("part");
             value.erase("reason");value.erase("primary");
@@ -436,7 +443,6 @@ Json Engine::convert(const Job& job) {
         if(!part_exists)throw Failure("part_not_found","requested part does not exist");
         if(choices.empty()) {
             if(has_deep)throw Failure(job.options.deep_mode=="flatten"?"deep_layout_unsupported":"deep_requires_flattening","Deep data requires an explicit supported colour mapping and flatten mode");
-            if(crypto)throw Failure(crypto_metadata_seen?"cryptomatte_layout_unsupported":"cryptomatte_metadata_invalid","requested Cryptomatte family requires metadata and complete same-part rank layers");
             if(has_data)throw Failure("visualization_required","data AOV requires dedicated visualization; colour selection cannot override it");
             if(!job.options.channels.empty() && !matched_group)throw Failure("channels_not_found","requested channel group does not exist");
             throw Failure("ambiguous_channels","no recognized colour or luminance layout; inspect candidates");
@@ -446,18 +452,12 @@ Json Engine::convert(const Job& job) {
             throw Failure(same?"ambiguous_channels":"ambiguous_parts","multiple colour candidates; specify part and/or channels");
         }
         auto chosen=std::move(choices[0]);const Json chosen_key=key(chosen);
+        r["selection"]["chosen"]=describe(chosen);
         part=chosen.part;spec=std::move(chosen.spec);channels=chosen.candidate.channels;
         std::optional<detail::DeepSelection> deep;
         if(spec.deep)deep=detail::deep_selection(spec,chosen.candidate);
-        r["selection"]["chosen"]=detail::candidate_json(spec,chosen.candidate,part);
         if(spec.width<1 || spec.height<1 || spec.depth!=1 || spec.full_width<1 || spec.full_height<1)
             throw Failure("invalid_dimensions","unsupported image dimensions");
-        auto crypto_layout=crypto?detail::crypto_layout(spec,job.options.channels):std::optional<detail::CryptoLayout>{};
-        if(crypto_layout) {
-            std::set<std::string> contained;for(const auto& layer:crypto_layout->layers)contained.insert(layer.name);
-            if(!std::includes(contained.begin(),contained.end(),crypto_rank_groups.begin(),crypto_rank_groups.end()))
-                throw Failure("cryptomatte_layout_unsupported","Cryptomatte ranks span parts; incomplete same-part preview is refused");
-        }
         if(crypto_layout)r["cryptomatte"]=crypto_layout->info();
         if(!job.sequence_id.empty() && pin==impl_->sequences.end()) {
             bool named=!spec.get_string_attribute("oiio:subimagename").empty();
@@ -469,8 +469,7 @@ Json Engine::convert(const Job& job) {
         if(deep)r["deep"]={{"mode","flatten"},{"policy","deep-colour-sweep-v1"},{"mapping",deep->identity()},
             {"sample_limit",job.options.deep_samples_per_pixel},{"buffer_limit_bytes",job.options.max_decode_mib*1024ULL*1024ULL},
             {"samples",0},{"chunks",0},{"peak_buffer_bytes",0}};
-        r["selected_channels"]=Json::array();
-        for(int c:channels)r["selected_channels"].push_back(spec.channelnames[c]);
+        r["selected_channels"]=r["selection"]["chosen"]["channels"];
         r["timings_ms"]["open_select"]=ms(tick);
         // Metadata snapshots can own independent ICC byte copies. Release
         // unselected candidates before admission and never propagate a source
@@ -488,7 +487,7 @@ Json Engine::convert(const Job& job) {
             for(const auto& output:job.outputs)r["outputs"].push_back({{"path",output.path},{"status","skipped"},{"reason","output_exists"},{"existing_policy","skip"}});
             r["status"]="skipped";r["ok"]=true;r["timings_ms"]["total"]=ms(started);return r;
         }
-        auto input_plan=detail::channel_plan(spec,crypto?crypto_layout->layers.front().channels:channels,data);
+        auto input_plan=detail::channel_plan(spec,channels,data);
         const bool cmyk=!data && detail::separated_colour(spec);
         const bool cmyk_jpeg=cmyk && std::string(in->format_name())=="jpeg";
         OIIO::ImageSpec raw_cmyk;
@@ -500,7 +499,7 @@ Json Engine::convert(const Job& job) {
         const std::string input_format=in->format_name();
         const bool icc_format=input_format=="png" || input_format=="jpeg" || input_format=="tiff" || input_format=="webp";
         const bool use_icc=!data && !deep && icc_format && job.options.input_space=="auto" && (container_icc || spec.find_attribute("ICCProfile"));
-        if(crypto)input_plan.pixel_bytes=detail::crypto_source_pixel_bytes(spec,*crypto_layout);
+        if(crypto)input_plan.pixel_bytes=detail::crypto_source_pixel_bytes(*crypto_layout);
         std::optional<detail::SampledIdPlan> sampled;
         if(mapping.mode==detail::DataMode::id) {
             int dw=spec.full_width,dh=spec.full_height;auto orientation=spec.get_int_attribute("Orientation",1);
@@ -841,7 +840,7 @@ Json Engine::convert(const Job& job) {
             stage="visualization";
             try {
                 data_image=sampled?detail::read_sampled_id(*in,spec,part,*sampled,mapping,job.options.max_decode_mib*1024ULL*1024ULL):
-                    crypto?detail::read_crypto_image(*in,spec,part,*crypto_layout,mapping.invalid,job.options.max_decode_mib*1024ULL*1024ULL,job.options.threads):
+                    crypto?detail::read_crypto_image(*in,*crypto_layout,mapping.invalid,job.options.max_decode_mib*1024ULL*1024ULL,job.options.threads):
                     detail::read_data_image(*in,spec,part,channels,mapping,job.options.max_decode_mib*1024ULL*1024ULL,job.options.threads);
                 working=std::move(data_image.image);order={0,1,2,3};
                 r["decoded_mib"]=double(data_image.decoded_bytes)/1048576;
