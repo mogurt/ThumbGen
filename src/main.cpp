@@ -78,7 +78,7 @@ static void usage() {
         "  --channels RGB|GRAY|GROUP, --part N or --part-name NAME\n"
         "  --selection-policy primary|root_rgb, --threads N, --max-decode-mib N\n"
         "  --deep-mode reject|flatten, --deep-samples-per-pixel 1..1048576\n"
-        "  --visualize colour|depth|normal|vector|id|id_rgb|cryptomatte, --data-range MIN,MAX, --invalid-values black|magenta|error\n"
+        "  --visualize auto|colour|depth|normal|vector|id|id_rgb|cryptomatte, --data-range MIN,MAX, --invalid-values black|magenta|error\n"
         "  --existing error|skip|replace (default: error)\n"
         "  --workers N, --thread-budget N, --memory-budget-mib N, --startup-timeout-ms N, --task-timeout-ms N\n"
         "Defaults: balanced, JPEG Q90, fit 1024x1024 without upscaling, black background.\n"
@@ -121,14 +121,14 @@ static void validate_options(const Options& o) {
     if(o.max_decode_mib<1||o.max_decode_mib>16384)throw std::invalid_argument("max_decode_mib must be in 1..16384");
     if(o.deep_mode!="reject" && o.deep_mode!="flatten")throw std::invalid_argument("invalid deep_mode");
     if(o.deep_samples_per_pixel<1 || o.deep_samples_per_pixel>1048576)throw std::invalid_argument("deep_samples_per_pixel must be in 1..1048576");
-    if(o.deep_mode=="flatten" && o.visualization!="colour")throw std::invalid_argument("Deep flattening requires colour visualization");
+    if(o.deep_mode=="flatten" && o.visualization!="colour" && o.visualization!="auto")throw std::invalid_argument("Deep flattening requires colour or auto visualization");
     if(o.part < -1)throw std::invalid_argument("part must be nonnegative");
     if(o.part>=0 && !o.part_name.empty())throw std::invalid_argument("part and part_name are mutually exclusive");
     if(o.selection_policy!="primary" && o.selection_policy!="root_rgb")throw std::invalid_argument("invalid selection_policy");
     if(o.input_space.empty())throw std::invalid_argument("input_space cannot be empty");
     if(o.display.empty()!=o.view.empty())throw std::invalid_argument("display and view must be specified together");
     auto mapping=thumbgen::detail::data_mapping(o.visualization,o.data_range,o.invalid_values);
-    if(mapping.mode!=thumbgen::detail::DataMode::colour) {
+    if(mapping.mode!=thumbgen::detail::DataMode::colour && mapping.mode!=thumbgen::detail::DataMode::automatic) {
         if(o.channels.empty())throw std::invalid_argument("data visualization requires explicit channels");
         if(o.input_space!="auto" || !o.ocio_config.empty() || !o.display.empty())throw std::invalid_argument("data visualization does not accept colour transform options");
     }

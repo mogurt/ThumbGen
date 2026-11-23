@@ -69,8 +69,9 @@ class Cryptomatte(unittest.TestCase):
         return rows
     def convert(self,source='valid',*options,exit=0):
         return self.invoke('convert',self.inputs[source],'--visualize','cryptomatte','--channels','Object','--output',self.output,*options,exit=exit)[0]
-    def batch(self,jobs,exit=3):
+    def batch(self,jobs,exit=3,defaults=None):
         request={'schema_version':1,'execution':{'workers':2,'thread_budget':4,'memory_budget_mib':1024},'jobs':jobs}
+        if defaults is not None:request['defaults']=defaults
         jobs_validator.validate(request);path=self.directory/'jobs.json';path.write_text(json.dumps(request),encoding='utf-8')
         rows=self.invoke('batch','--manifest',path,exit=exit);results={row['id']:row for row in rows if row['type']=='result'}
         self.assertEqual(set(results),{job['id'] for job in jobs});self.assertEqual(len(rows),len(jobs)+1)
@@ -79,6 +80,7 @@ class Cryptomatte(unittest.TestCase):
         return {'id':name,'input':self.inputs[source],'sequence_id':'fixed','options':{'visualization':'cryptomatte','channels':'Object','invalid_values':'error','threads':2,**options},'outputs':[{'path':str(self.directory/(name+'.png'))}]}
     def test_capabilities_inspect_and_default_classification(self):
         self.assertIn('cryptomatte',self.invoke('capabilities')[0]['visualization_modes'])
+        self.assertIn('auto',self.invoke('capabilities')[0]['visualization_modes'])
         part=self.invoke('inspect',self.inputs['valid'])[0]['parts'][0]
         self.assertEqual(part['cryptomatte_families'],['Object']);self.assertTrue(all(c['kind']=='data' for c in part['candidates']))
         result=self.invoke('convert',self.inputs['valid'],'--output',self.output,exit=4)[0]
@@ -138,6 +140,40 @@ class Cryptomatte(unittest.TestCase):
         self.assertEqual(png(self.output),(2,2,[EXPECTED[1],EXPECTED[3],EXPECTED[3],EXPECTED[3]]))
     def test_explicit_part_must_contain_complete_family(self):
         result=self.convert('split','--part-name','left',exit=4);self.assertEqual(result['error']['code'],'cryptomatte_layout_unsupported');self.assertFalse(self.output.exists())
+    def test_auto_batch_matches_colour_and_explicit_cryptomatte(self):
+        self.invoke('convert',self.inputs['with_beauty'],'--output',self.output,'--ocio-config','ocio://default')
+        colour=self.output.read_bytes()
+        self.output=self.directory/'explicit.png'
+        self.convert('split')
+        crypto=self.output.read_bytes()
+        jobs=[]
+        for name,source in [('colour','with_beauty'),('auto','split'),('override','split')]:
+            job=self.job(name,source)
+            del job['sequence_id']
+            if name=='colour':job['options']={'ocio_config':'ocio://default'}
+            if name=='auto':del job['options']
+            jobs.append(job)
+        rows=self.batch(jobs,exit=0,defaults={'visualization':'auto'})
+        self.assertNotIn('visualization',rows[0])
+        self.assertEqual(rows[1]['selection']['basis'],'automatic')
+        self.assertEqual(rows[1]['visualization']['mode'],'cryptomatte')
+        self.assertEqual(rows[1]['cryptomatte'],rows[2]['cryptomatte'])
+        self.assertEqual((self.directory/'colour.png').read_bytes(),colour)
+        self.assertEqual((self.directory/'auto.png').read_bytes(),crypto)
+        self.assertEqual((self.directory/'override.png').read_bytes(),crypto)
+    def test_auto_reports_ambiguity_and_invalid_layout(self):
+        for source,code in [('multiple_families','ambiguous_channels'),('gap','cryptomatte_layout_unsupported'),('bad_hash','cryptomatte_metadata_invalid')]:
+            with self.subTest(source=source):
+                result=self.invoke('convert',self.inputs[source],'--visualize','auto','--output',self.output,exit=4)[0]
+                self.assertEqual(result['error']['code'],code)
+                self.assertFalse(self.output.exists())
+    def test_auto_sequence_preserves_first_preview_kind(self):
+        jobs=[self.job(name,source,visualization='auto',channels='') for name,source in
+              [('first','split'),('changed','with_beauty'),('recovered','split')]]
+        rows=self.batch(jobs)
+        self.assertEqual([row['status'] for row in rows[:-1]],['success','failed','success'])
+        self.assertEqual(rows[1]['error']['code'],'sequence_selection_changed')
+        self.assertEqual(rows[2]['selection']['lock_status'],'reused')
     def test_pool_sequence_error_restore_and_rank_change(self):
         rows=self.batch([self.job('bad','bad'),self.job('good','valid'),self.job('changed','odd'),self.job('recovered','valid')]);results=rows[:-1]
         self.assertEqual([r.get('error',{}).get('code') for r in results],['data_invalid_value',None,'sequence_selection_changed',None])

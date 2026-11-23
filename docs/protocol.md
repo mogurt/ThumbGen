@@ -27,6 +27,8 @@ thumbgen batch --manifest jobs.json --json
 
 `defaults` 设置通用转换选项，任务的 `options` 可以覆盖它；输出可以单独指定 size、format、quality 和 existing。`id` 必须唯一，用来关联返回结果。`sequence_id` 可选，用于[连续帧选择](selection.md)。
 
+混合颜色图和 Cryptomatte 时，可设置 `"defaults": {"visualization": "auto"}`，一次批处理即可按文件选择预览。对已知 AOV，可在任务的 `options` 直接指定模式和通道。接入端可检查 `capabilities --json` 的 `visualization_modes` 是否包含 `auto`。
+
 ## 读取结果
 
 `--json` 将 UTF-8 JSON 按行输出到 stdout，诊断文字写到 stderr。每个任务一条 `type: result`，最后一条 `type: summary`。并行时按完成顺序返回，使用 `id` 关联，不要依赖行号。

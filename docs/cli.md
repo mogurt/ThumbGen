@@ -42,6 +42,8 @@ thumbgen convert frame.exr --output preview.jpg --ocio-config config.ocio --inpu
 
 数据预览使用 `--visualize`、`--channels`、`--data-range MIN,MAX` 和 `--invalid-values black|magenta|error`，详见[数据预览](data-preview.md)。Deep 颜色使用 `--deep-mode flatten`，详见[Deep EXR](public-deep.md)。
 
+使用 `--visualize auto` 在一次转换中按现有规则选颜色图。没有颜色候选时，程序可以预览一个可确定的 Cryptomatte 家族。跨 part 的编号层会一起读取。多个家族或不完整的布局会给出错误。指定 part、通道或 Deep 展平时，自动模式遵循显式选择。色彩管理选项只用于颜色预览。
+
 ## 执行预算与时限
 
 单文件转换可以限制线程、内存预算与处理时间：

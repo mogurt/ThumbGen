@@ -14,12 +14,13 @@ DataMapping data_mapping(const std::string& mode,const std::vector<double>& rang
     else if(mode=="id")result.mode=DataMode::id;
     else if(mode=="id_rgb")result.mode=DataMode::id_rgb;
     else if(mode=="cryptomatte")result.mode=DataMode::cryptomatte;
+    else if(mode=="auto")result.mode=DataMode::automatic;
     else throw std::invalid_argument("unknown visualization mode");
     if(invalid=="black")result.invalid=InvalidData::black;
     else if(invalid=="magenta")result.invalid=InvalidData::magenta;
     else if(invalid=="error")result.invalid=InvalidData::error;
     else throw std::invalid_argument("invalid data value policy");
-    if(result.mode==DataMode::colour || result.mode==DataMode::id || result.mode==DataMode::cryptomatte) {
+    if(result.mode==DataMode::colour || result.mode==DataMode::id || result.mode==DataMode::cryptomatte || result.mode==DataMode::automatic) {
         if(!range.empty())throw std::invalid_argument("data range is only valid for depth, normal, vector or id_rgb");
         if(result.mode==DataMode::colour && invalid!="magenta")throw std::invalid_argument("invalid value policy requires a data visualization mode");
         return result;

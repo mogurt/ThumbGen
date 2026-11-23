@@ -44,11 +44,13 @@ static void metadata(OIIO::ImageSpec& spec,const std::string& prefix="cryptomatt
 }
 static Json fixtures(const fs::path& root) {
     require(fs::create_directory(root),"fixture directory already exists");Json result;
-    for(const std::string kind:{"valid","bad","half_coverage","half_id","odd","gap","no_metadata","bad_hash","sidecar","legacy","many","window","oriented","missing_last","identity","strip_float","strip_half","strip_bad","strip_window","strip_tiled","strip_interleaved","strip_zips"}) {
+    for(const std::string kind:{"valid","with_beauty","multiple_families","bad","half_coverage","half_id","odd","gap","no_metadata","bad_hash","sidecar","legacy","many","window","oriented","missing_last","identity","strip_float","strip_half","strip_bad","strip_window","strip_tiled","strip_interleaved","strip_zips"}) {
         int width=kind.rfind("strip_",0)==0?128:kind=="many"?128:kind=="identity"?1280:kind=="window"?2:kind=="oriented"?2:8;
         int height=kind.rfind("strip_",0)==0?257:kind=="many"?128:kind=="window"?2:kind=="oriented" || kind=="identity"?3:1;
         int layers=kind=="many"?10:3;
-        std::vector<std::string> names{"Object.R","Object.G","Object.B"};std::vector<int> roles(3,-1);
+        std::vector<std::string> names=kind=="with_beauty"?std::vector<std::string>{"R","G","B"}:
+            std::vector<std::string>{"Object.R","Object.G","Object.B"};
+        std::vector<int> roles(3,-1);
         for(int layer=0;layer<layers;++layer) {
             auto name="Object"+(layer==1 && kind=="gap"?std::string("03"):layer<10?"0"+std::to_string(layer):std::to_string(layer));
             for(int c=0;c<((kind=="odd" || kind=="missing_last") && layer==layers-1?kind=="odd"?2:3:4);++c) {
@@ -58,10 +60,17 @@ static Json fixtures(const fs::path& root) {
         if(kind=="strip_interleaved") {
             names.insert(names.begin()+7,"Object00.unrelated");roles.insert(roles.begin()+7,-1);
         }
+        if(kind=="multiple_families")for(int c=0;c<4;++c) {
+            names.push_back(std::string("Asset00.")+"RGBA"[c]);roles.push_back(c);
+        }
         OIIO::ImageSpec spec(width,height,int(names.size()),OIIO::TypeDesc::FLOAT);spec.channelnames=names;
         if(kind=="strip_tiled"){spec.tile_width=32;spec.tile_height=32;}
         spec.attribute("compression",kind=="strip_zips"?"zips":"zip");
         metadata(spec,kind=="legacy"?"exr/cryptomatte/test123":"cryptomatte/test123");
+        if(kind=="multiple_families") {
+            metadata(spec,"cryptomatte/test456");
+            spec.attribute("cryptomatte/test456/name","Asset");
+        }
         if(kind=="no_metadata")for(const char* field:{"name","hash","conversion"})spec.erase_attribute(std::string("cryptomatte/test123/")+field);
         if(kind=="bad_hash")spec.attribute("cryptomatte/test123/hash","wrong_hash");
         if(kind=="sidecar")spec.attribute("cryptomatte/test123/manif_file","missing.json");
@@ -92,7 +101,12 @@ static Json fixtures(const fs::path& root) {
                 int role=roles[c];std::uint32_t bits=0;float weight=0;
                 if(role>=0 && role/2<6){bits=ids[role/2];weight=weights[role/2];}
                 if(spec.channelformat(int(c))==OIIO::TypeDesc::HALF){half h=role%2==1?half(weight):half(0);std::memcpy(target,&h,2);target+=2;}
-                else {if(role>=0 && role%2==1)std::memcpy(target,&weight,4);else std::memcpy(target,&bits,4);target+=4;}
+                else {
+                    if(role<0 && kind=="with_beauty")weight=0.125f+0.125f*float(c);
+                    if((role>=0 && role%2==1) || (role<0 && kind=="with_beauty"))std::memcpy(target,&weight,4);
+                    else std::memcpy(target,&bits,4);
+                    target+=4;
+                }
             }
         }
         auto path=root/(kind+".exr");auto output=OIIO::ImageOutput::create(path.u8string());require(bool(output),OIIO::geterror());
@@ -100,7 +114,8 @@ static Json fixtures(const fs::path& root) {
         result[kind]=path.u8string();
     }
     auto path=root/"split.exr";OIIO::ImageSpec parts[2]={OIIO::ImageSpec(2,2,4,OIIO::TypeDesc::FLOAT),OIIO::ImageSpec(2,2,4,OIIO::TypeDesc::FLOAT)};
-    for(int i=0;i<2;++i){metadata(parts[i]);parts[i].attribute("oiio:subimagename",i?"right":"left");for(int c=0;c<4;++c)parts[i].channelnames[c]="Object0"+std::to_string(i)+"."+"RGBA"[c];}
+    metadata(parts[0]);
+    for(int i=0;i<2;++i){parts[i].attribute("oiio:subimagename",i?"right":"left");for(int c=0;c<4;++c)parts[i].channelnames[c]="Object0"+std::to_string(i)+"."+"RGBA"[c];}
     auto output=OIIO::ImageOutput::create(path.u8string());require(bool(output) && output->open(path.u8string(),2,parts),"open split fixture");float pixels[16]={};
     std::memcpy(pixels,&bunny,sizeof(bunny));pixels[1]=0.25f;
     require(output->write_image(OIIO::TypeDesc::FLOAT,pixels),output->geterror());require(output->open(path.u8string(),parts[1],OIIO::ImageOutput::AppendSubimage),output->geterror());

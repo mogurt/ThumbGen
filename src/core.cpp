@@ -175,14 +175,21 @@ void Engine::restore_sequence_lock(const std::string& id,const Json& lock) {
     const bool deep=key.is_object() && key.contains("deep");
     valid(key.is_object() && key.size()==(named?4u:5u)+(deep?1u:0u));
     for(const char* field:{"part_name","group","kind"})valid(key.contains(field) && key[field].is_string());
-    const bool data=request.is_object() && request.contains("data");
+    const bool auto_request=request.is_object() && request.contains("auto_preview");
+    const bool explicit_data=request.is_object() && request.contains("data");
+    const bool data=explicit_data || (auto_request && key["kind"]=="data");
     valid(!key["group"].get<std::string>().empty() && (data?key["kind"]=="data":(key["kind"]=="colour" || key["kind"]=="grey")));
     valid(named?!key["part_name"].get<std::string>().empty():key["part_name"]=="");
     if(named)valid(!key.contains("part"));else valid(key.contains("part") && key["part"].is_number_integer() && key["part"]==0);
     valid(key.contains("channels") && key["channels"].is_array() && (data?key["channels"].size()>=1:(key["channels"].size()==3 || key["channels"].size()==4)));
     for(const auto& channel:key["channels"])valid(channel.is_string() && !channel.get<std::string>().empty());
     const bool deep_request=request.is_object() && request.contains("deep_mode");
-    valid(request.is_object() && request.size()==4u+(data?1u:0u)+(deep_request?1u:0u));
+    valid(request.is_object() && request.size()==4u+(explicit_data?1u:0u)+(auto_request?1u:0u)+(deep_request?1u:0u));
+    if(auto_request) {
+        const auto& invalid=request["auto_preview"];
+        valid(!explicit_data && (invalid=="black" || invalid=="magenta" || invalid=="error"));
+        if(data)valid(key["channels"].size()>=2 && key["channels"].size()%2==0);
+    }
     if(deep_request)valid(!data && request["deep_mode"]=="flatten");
     if(deep) {
         valid(deep_request && !data && key["channels"].size()==3);
@@ -208,13 +215,13 @@ void Engine::restore_sequence_lock(const std::string& id,const Json& lock) {
         valid(mapping.contains("shared_alpha") && mapping["shared_alpha"].is_boolean() &&
             mapping["shared_alpha"]==(mapping["alpha"][0]==mapping["alpha"][1] && mapping["alpha"][0]==mapping["alpha"][2]));
     }
-    if(data) {
+    if(explicit_data) {
         const auto& options=request["data"];
         valid(options.is_object() && options.size()==4 && options.contains("mode") && options["mode"].is_string() && options.contains("range") && options["range"].is_array() &&
             options.contains("invalid_values") && options["invalid_values"].is_string() && options.contains("policy") && options["policy"]=="v1");
         for(const auto& number:options["range"])valid(number.is_number());
         auto mapping=detail::data_mapping(options["mode"].get<std::string>(),options["range"].get<std::vector<double>>(),options["invalid_values"].get<std::string>());
-        valid(mapping.mode!=detail::DataMode::colour);
+        valid(mapping.mode!=detail::DataMode::colour && mapping.mode!=detail::DataMode::automatic);
         auto count=key["channels"].size();valid(mapping.mode==detail::DataMode::cryptomatte?(count>=2 && count%2==0):mapping.mode==detail::DataMode::normal || mapping.mode==detail::DataMode::id_rgb?count==3:mapping.mode==detail::DataMode::vector?(count==2 || count==3):count==1);
     }
     for(const char* field:{"part_name","channels","strategy"})valid(request.contains(field) && request[field].is_string());
@@ -224,7 +231,8 @@ void Engine::restore_sequence_lock(const std::string& id,const Json& lock) {
     valid(part<0 || request["part_name"]=="");
     valid(request["part_name"]=="" || request["part_name"]==key["part_name"]);
     valid(request["channels"]=="" || request["channels"]==key["group"]);
-    if(data)valid(request["channels"]!="");
+    if(explicit_data)valid(request["channels"]!="");
+    if(auto_request && data)valid(part==-1 && request["part_name"]=="" && request["channels"]=="");
     valid(named || part<=0);
     auto previous=sequence_lock(id);
     if(!previous.is_null()) {valid(previous==lock);return;}
@@ -250,7 +258,7 @@ Json Engine::capabilities() {
         {"colour_processing",{"reference","srgb8-linear-v1","integer-linear-v1"}},
 #endif
         {"icc_engines",{"LittleCMS2 2.20","skcms"}},
-        {"visualization_modes",{"colour","depth","normal","vector","id","id_rgb","cryptomatte"}},
+        {"visualization_modes",{"auto","colour","depth","normal","vector","id","id_rgb","cryptomatte"}},
         {"deep_modes",{"reject","flatten"}},
         {"deep_compressions",detail::bounded_deep_zstd_available()?Json::array({"none","rle","zips","zstd"}):Json::array({"none","rle","zips"})},
         {"libraries",OIIO::get_string_attribute("library_list")},
@@ -297,9 +305,11 @@ Json Engine::convert(const Job& job) {
         detail::DataMapping mapping;
         try {mapping=detail::data_mapping(job.options.visualization,job.options.data_range,job.options.invalid_values);}
         catch(const std::invalid_argument& error){throw Failure("visualization_options_invalid",error.what());}
-        const bool data=mapping.mode!=detail::DataMode::colour;
+        const bool automatic=mapping.mode==detail::DataMode::automatic;
+        bool data=mapping.mode!=detail::DataMode::colour && !automatic;
         const bool categorical=mapping.mode==detail::DataMode::id || mapping.mode==detail::DataMode::id_rgb;
-        const bool crypto=mapping.mode==detail::DataMode::cryptomatte;
+        bool crypto=mapping.mode==detail::DataMode::cryptomatte;
+        std::string crypto_family=job.options.channels;
         if((job.options.deep_mode!="reject" && job.options.deep_mode!="flatten") || job.options.deep_samples_per_pixel<1 || job.options.deep_samples_per_pixel>1048576 || (data && job.options.deep_mode!="reject"))
             throw Failure("deep_options_invalid","invalid Deep options or non-colour visualization");
         if(data && (job.options.channels.empty() || job.options.input_space!="auto" || !job.options.ocio_config.empty() || !job.options.display.empty() || !job.options.view.empty()))
@@ -334,6 +344,7 @@ Json Engine::convert(const Job& job) {
         catch(const detail::CmsFailure& error){throw Failure("colour_input_unsupported",error.what());}
         auto in=OIIO::ImageInput::open(job.input,&read_config);
         if(!in){auto error=OIIO::geterror();verify_source();throw Failure("open_failed",error);}
+        const bool can_auto_crypto=detail::auto_cryptomatte_allowed(job.options) && std::string(in->format_name())=="openexr";
 #if defined(THUMBGEN_EXR_PROFILE) && THUMBGEN_EXR_PROFILE
         profile.enable(std::string(in->format_name())=="openexr");
 #endif
@@ -354,10 +365,23 @@ Json Engine::convert(const Job& job) {
         const bool explicit_part=job.options.part>=0 || !job.options.part_name.empty();
         bool part_exists=false,has_deep=false,has_data=false,matched_group=false;
         std::vector<OIIO::ImageSpec> crypto_parts;
+        std::vector<std::string> crypto_families;
         std::optional<detail::CryptoLayout> crypto_layout;
+        if(can_auto_crypto) {
+            // Family metadata can live on a different part from its numbered channels.
+            for(int p=0;;++p) {
+                OIIO::ImageSpec candidate;
+                if(!in->seek_subimage(p,0,candidate))break;
+                for(const auto& family:detail::crypto_names(candidate))crypto_families.push_back(family);
+                crypto_parts.push_back(std::move(candidate));
+            }
+            std::sort(crypto_families.begin(),crypto_families.end());
+            crypto_families.erase(std::unique(crypto_families.begin(),crypto_families.end()),crypto_families.end());
+        }
         for(int p=0;;++p) {
-            OIIO::ImageSpec candidate;
-            if(!in->seek_subimage(p,0,candidate))break;
+            OIIO::ImageSpec scanned;
+            if(can_auto_crypto?std::size_t(p)>=crypto_parts.size():!in->seek_subimage(p,0,scanned))break;
+            const auto& candidate=can_auto_crypto?crypto_parts[p]:scanned;
             if(!data && job.options.input_space=="auto" && p>0 && (container_icc || candidate.find_attribute("ICCProfile")))
                 throw Failure("colour_input_unsupported","automatic ICC supports a single flat image, not multipart/multiframe input");
             const bool supported_cmyk=job.options.input_space=="auto" && candidate.find_attribute("ICCProfile") &&
@@ -366,7 +390,8 @@ Json Engine::convert(const Job& job) {
             if(!data && detail::separated_colour(candidate) && !supported_cmyk)
                 throw Failure("colour_input_unsupported","CMYK/separated input requires an external profile-aware conversion to RGB; input_space cannot undo decoder conversion");
             ++part_count;
-            auto groups=candidate.deep && job.options.deep_mode=="flatten"?detail::deep_colour_candidates(candidate):detail::classify(candidate);
+            auto groups=candidate.deep && job.options.deep_mode=="flatten"?detail::deep_colour_candidates(candidate):
+                can_auto_crypto?detail::classify(candidate,crypto_families):detail::classify(candidate);
             for(const auto& group:groups)r["selection"]["candidates"].push_back(detail::candidate_json(candidate,group,p));
             const bool matches_part=(job.options.part<0 || p==job.options.part) &&
                 (job.options.part_name.empty() || candidate.get_string_attribute("oiio:subimagename")==job.options.part_name);
@@ -376,7 +401,7 @@ Json Engine::convert(const Job& job) {
                     if(crypto_part>=0)throw Failure("ambiguous_parts","multiple parts match the requested part name");
                     crypto_part=p;
                 }
-                crypto_parts.push_back(std::move(candidate));continue;
+                crypto_parts.push_back(std::move(scanned));continue;
             }
             if(!matches_part)continue;
             std::vector<detail::Candidate> eligible;
@@ -403,14 +428,21 @@ Json Engine::convert(const Job& job) {
             }
             for(const auto& group:eligible)choices.push_back({p,candidate,group});
         }
+        if(can_auto_crypto && choices.empty() && !has_deep && !crypto_families.empty()) {
+            if(crypto_families.size()!=1)
+                throw Failure("ambiguous_channels","multiple Cryptomatte families; specify visualization and channels");
+            crypto_family=crypto_families.front();crypto=true;data=true;
+        }
+        if(automatic)mapping.mode=crypto?detail::DataMode::cryptomatte:detail::DataMode::colour;
         if(crypto && part_exists) {
-            crypto_layout=detail::crypto_layout(std::move(crypto_parts),job.options.channels,crypto_part);
+            crypto_layout=detail::crypto_layout(std::move(crypto_parts),crypto_family,crypto_part);
             const auto& first=crypto_layout->layers.front();
             const auto& first_spec=crypto_layout->parts.at(first.part);
-            detail::Candidate group{job.options.channels,"data","explicit Cryptomatte coverage overview",first.channels};
+            detail::Candidate group{crypto_family,"data",automatic?"automatic Cryptomatte coverage overview":"explicit Cryptomatte coverage overview",first.channels};
             all_choices.push_back({first.part,first_spec,group});
             choices.push_back({first.part,first_spec,std::move(group)});
         }
+        crypto_parts.clear();
         if(job.options.channels.empty() && job.options.selection_policy=="primary" &&
            std::any_of(choices.begin(),choices.end(),[](const auto& c){return detail::is_primary(c.spec,c.candidate);}))
             choices.erase(std::remove_if(choices.begin(),choices.end(),[](const auto& c){return !detail::is_primary(c.spec,c.candidate);}),choices.end());
@@ -702,9 +734,10 @@ Json Engine::convert(const Job& job) {
                 {"bridge","srgb_rec709_scene"},{"profile_limit_bytes",detail::icc_profile_limit},{"cms_limit_bytes",detail::cms_memory_limit},
                 {"reservation_bytes",detail::cms_reservation},{"peak_bytes",0}};
         } else {
-            r["colour"]={{"input_space","data"},{"input_requested",job.options.visualization},{"basis","data_visualization"},
+            const auto mode=crypto?"cryptomatte":job.options.visualization;
+            r["colour"]={{"input_space","data"},{"input_requested",mode},{"basis","data_visualization"},
                 {"working_space","display-referred"},{"output_space","sRGB"},{"ocio_config",""},{"config_basis","none"},{"display",""},{"view",""}};
-            r["visualization"]={{"mode",job.options.visualization},{"policy","v1"},{"range",mapping.mode==detail::DataMode::id || crypto?Json::array():Json::array({mapping.minimum,mapping.maximum})},
+            r["visualization"]={{"mode",mode},{"policy","v1"},{"range",mapping.mode==detail::DataMode::id || crypto?Json::array():Json::array({mapping.minimum,mapping.maximum})},
                 {"invalid_values",job.options.invalid_values},{"invalid_pixels",0},{"clipped_components",0}};
         }
         TG_EXR_TOCK(config_setup_tick,"exr_ocio_setup_ms");

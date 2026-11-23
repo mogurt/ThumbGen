@@ -28,6 +28,9 @@ static bool data_name(const std::string& name) {
     return false;
 }
 std::vector<Candidate> classify(const OIIO::ImageSpec& spec) {
+    return classify(spec,crypto_names(spec));
+}
+std::vector<Candidate> classify(const OIIO::ImageSpec& spec,const std::vector<std::string>& crypto) {
     std::map<std::string,std::vector<int>> groups;
     for(int i=0;i<spec.nchannels;++i) {
         const auto& name=spec.channelnames[i];auto dot=name.rfind('.');
@@ -39,7 +42,6 @@ std::vector<Candidate> classify(const OIIO::ImageSpec& spec) {
         for(int c:indices)if(component(c)==name){if(found!=-1)return -1;found=c;}
         return found;
     };
-    const auto crypto=crypto_names(spec);
     const auto part_name=std::string(spec.get_string_attribute("oiio:subimagename"));
     const bool data_part=data_name(part_name) || crypto_group(crypto,part_name);
     std::vector<Candidate> result;
@@ -94,7 +96,8 @@ Json selection_request(const Job& job) {
     const auto& o=job.options;
     Json request{{"part",o.part},{"part_name",o.part_name},{"channels",o.channels},{"strategy",o.selection_policy}};
     if(o.deep_mode!="reject")request["deep_mode"]=o.deep_mode;
-    if(o.visualization!="colour") {
+    if(o.visualization=="auto")request["auto_preview"]=o.invalid_values;
+    else if(o.visualization!="colour") {
         auto mapping=data_mapping(o.visualization,o.data_range,o.invalid_values);
         request["data"]={{"mode",o.visualization},{"range",mapping.mode==DataMode::id || mapping.mode==DataMode::cryptomatte?Json::array():Json::array({mapping.minimum,mapping.maximum})},
             {"invalid_values",o.invalid_values},{"policy","v1"}};

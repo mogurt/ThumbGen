@@ -27,6 +27,8 @@ thumbgen batch --manifest jobs.json --json
 
 `defaults` provides shared conversion options; each job's `options` can override them. Outputs can set their own size, format, quality and existing-file behavior. Use a unique `id` to match results. Optional `sequence_id` keeps [sequence selection](selection.md) consistent.
 
+For a batch of color and Cryptomatte inputs, set `"defaults": {"visualization": "auto"}` to select a preview for each file in one batch. When the AOV is known, set its mode and channels directly in the job's `options`. Integrations can check for `auto` in the `visualization_modes` returned by `capabilities --json`.
+
 ## Read results
 
 `--json` streams UTF-8 JSON lines to stdout and diagnostics to stderr. Each job produces one `type: result`; the final record is `type: summary`. Concurrent results arrive in completion order, so match by `id`, not line number.
