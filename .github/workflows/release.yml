@@ -1,0 +1,145 @@
+name: Build and publish release
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/release.yml
+      - scripts/release/**
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: Full SHA of the source commit on main
+        required: true
+        type: string
+      publish:
+        description: Publish the validated packages as a GitHub Release
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.commit || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    outputs:
+      commit: ${{ steps.source.outputs.commit }}
+      version: ${{ steps.source.outputs.version }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: source
+        env:
+          COMMIT: ${{ inputs.commit || github.event.pull_request.base.sha }}
+        run: |
+          [[ "$COMMIT" =~ ^[a-f0-9]{40}$ ]]
+          git merge-base --is-ancestor "$COMMIT" origin/main
+          version=$(git show "$COMMIT:CMakeLists.txt" | sed -nE 's/^project\(ThumbGen VERSION ([0-9]+\.[0-9]+\.[0-9]+) LANGUAGES CXX\)$/\1/p')
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          echo "commit=$COMMIT" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  windows:
+    needs: prepare
+    runs-on: windows-2022
+    timeout-minutes: 90
+    env:
+      COMMIT: ${{ needs.prepare.outputs.commit }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          path: automation
+          persist-credentials: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          path: source
+          ref: ${{ needs.prepare.outputs.commit }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Build and smoke-test Windows package
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ./automation/scripts/release/build-windows.ps1 -Source source -Output dist -Version $env:VERSION -Commit $env:COMMIT
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-windows-x64
+          path: dist/*.zip
+          if-no-files-found: error
+
+  linux:
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      COMMIT: ${{ needs.prepare.outputs.commit }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          path: automation
+          persist-credentials: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          path: source
+          ref: ${{ needs.prepare.outputs.commit }}
+          persist-credentials: false
+      - name: Build and smoke-test glibc 2.17 Linux package
+        run: |
+          docker run --rm --platform linux/amd64 --volume "$GITHUB_WORKSPACE:/workspace" \
+            centos@sha256:dead07b4d8ed7e29e98de0f4504d87e8880d4347859d839686a31da35a3b532f \
+            bash /workspace/automation/scripts/release/build-linux.sh /workspace/source /workspace/dist "$VERSION" "$COMMIT"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-linux-x64
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  publish:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.publish
+    needs: [prepare, windows, linux]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      checks: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      COMMIT: ${{ needs.prepare.outputs.commit }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: release-*-x64
+          path: dist
+          merge-multiple: true
+      - name: Upload and publish release
+        working-directory: dist
+        run: |
+          checks=$(gh api "repos/$GITHUB_REPOSITORY/commits/$COMMIT/check-runs" \
+            --jq '.check_runs[] | select(.conclusion == "success") | .name')
+          grep -Fx linux <<< "$checks"
+          grep -Fx windows <<< "$checks"
+          tag="v$VERSION"
+          windows="thumbgen-$VERSION-windows-x64.zip"
+          linux="thumbgen-$VERSION-linux-x86_64-glibc217.tar.gz"
+          sha256sum "$linux" "$windows" > SHA256SUMS
+          gh release create "$tag" "$windows" "$linux" SHA256SUMS --repo "$GITHUB_REPOSITORY" \
+            --target "$COMMIT" --title "ThumbGen $VERSION" --generate-notes --draft
+          gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[] | [.name, .digest] | @tsv' > uploaded
+          for file in "$windows" "$linux" SHA256SUMS; do
+            hash=$(sha256sum "$file" | cut -d ' ' -f1)
+            grep -Fx "$file"$'\t'"sha256:$hash" uploaded
+          done
+          gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+          test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" --jq .object.sha)" = "$COMMIT"
