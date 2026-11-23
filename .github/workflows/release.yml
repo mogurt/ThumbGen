@@ -16,6 +16,10 @@ on:
         description: Publish the validated packages as a GitHub Release
         type: boolean
         default: false
+      build_run:
+        description: Optional successful run of this workflow to reuse
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -27,6 +31,9 @@ concurrency:
 jobs:
   prepare:
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
     outputs:
       commit: ${{ steps.source.outputs.commit }}
       version: ${{ steps.source.outputs.version }}
@@ -38,15 +45,27 @@ jobs:
       - id: source
         env:
           COMMIT: ${{ inputs.commit || github.event.pull_request.base.sha }}
+          BUILD_RUN: ${{ inputs.build_run }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           [[ "$COMMIT" =~ ^[a-f0-9]{40}$ ]]
           git merge-base --is-ancestor "$COMMIT" origin/main
+          if [[ -n "$BUILD_RUN" ]]; then
+            [[ "$BUILD_RUN" =~ ^[0-9]+$ ]]
+            run=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$BUILD_RUN")
+            jq -e --arg repo "$GITHUB_REPOSITORY" '
+              .conclusion == "success" and .head_repository.full_name == $repo
+              and (.path | split("@")[0]) == ".github/workflows/release.yml"
+            ' <<< "$run"
+            git merge-base --is-ancestor "$(jq -r .head_sha <<< "$run")" origin/main
+          fi
           version=$(git show "$COMMIT:CMakeLists.txt" | sed -nE 's/^project\(ThumbGen VERSION ([0-9]+\.[0-9]+\.[0-9]+) LANGUAGES CXX\)$/\1/p')
           [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
           echo "commit=$COMMIT" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
   windows:
+    if: inputs.build_run == null || inputs.build_run == ''
     needs: prepare
     runs-on: windows-2022
     timeout-minutes: 90
@@ -79,6 +98,7 @@ jobs:
           if-no-files-found: error
 
   linux:
+    if: inputs.build_run == null || inputs.build_run == ''
     needs: prepare
     runs-on: ubuntu-24.04
     timeout-minutes: 120
@@ -107,19 +127,32 @@ jobs:
           if-no-files-found: error
 
   publish:
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.publish
+    if: >-
+      always() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+      && inputs.publish && needs.prepare.result == 'success'
+      && (inputs.build_run != '' || (needs.windows.result == 'success' && needs.linux.result == 'success'))
     needs: [prepare, windows, linux]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
       checks: read
+      actions: read
     env:
       GH_TOKEN: ${{ github.token }}
       COMMIT: ${{ needs.prepare.outputs.commit }}
       VERSION: ${{ needs.prepare.outputs.version }}
     steps:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        if: inputs.build_run == ''
         with:
+          pattern: release-*-x64
+          path: dist
+          merge-multiple: true
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        if: inputs.build_run != ''
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.build_run }}
           pattern: release-*-x64
           path: dist
           merge-multiple: true
@@ -133,6 +166,8 @@ jobs:
           tag="v$VERSION"
           windows="thumbgen-$VERSION-windows-x64.zip"
           linux="thumbgen-$VERSION-linux-x86_64-glibc217.tar.gz"
+          unzip -p "$windows" ThumbGen/DEPENDENCIES.json | jq -e --arg commit "$COMMIT" --arg version "$VERSION" '.commit == $commit and .version == $version'
+          tar -xOzf "$linux" ThumbGen/DEPENDENCIES.json | jq -e --arg commit "$COMMIT" --arg version "$VERSION" '.commit == $commit and .version == $version'
           sha256sum "$linux" "$windows" > SHA256SUMS
           gh release create "$tag" "$windows" "$linux" SHA256SUMS --repo "$GITHUB_REPOSITORY" \
             --target "$COMMIT" --title "ThumbGen $VERSION" --generate-notes --draft

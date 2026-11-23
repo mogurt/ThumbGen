@@ -24,6 +24,17 @@ def write(stage, name, data):
     path.write_bytes(data)
 
 
+def public_metadata(value):
+    if isinstance(value, dict):
+        private = {"source", "source_path", "source_root", "build", "path", "prefix", "notice_source"}
+        return {key: public_metadata(item) for key, item in value.items() if key not in private}
+    if isinstance(value, list):
+        return [public_metadata(item) for item in value]
+    if isinstance(value, str) and value.startswith(("/home/", "/mnt/", "/tmp/", "D:/", "C:/")):
+        return "local build input"
+    return value
+
+
 def linux_payload(args, stage):
     with tarfile.open(args.candidate) as candidate:
         roots = {member.name.split("/", 1)[0] for member in candidate.getmembers()}
@@ -45,8 +56,7 @@ def linux_payload(args, stage):
                 (stage / path).parent.mkdir(parents=True, exist_ok=True)
                 (stage / path).symlink_to(member.linkname)
 
-    components = [{k: v for k, v in component.items() if k not in ("source", "source_path")}
-                  for component in provenance["dependency_components"]]
+    components = public_metadata(provenance["dependency_components"])
     return {"components": components, "runtime": {
         path.relative_to(stage).as_posix(): digest(path)
         for folder in ("bin", "lib") for path in sorted((stage / folder).iterdir())
@@ -85,11 +95,12 @@ def archive(stage, output, platform):
             for path in paths:
                 package.write(path, "ThumbGen/" + path.relative_to(stage).as_posix())
     else:
-        with output.open("xb") as stream, gzip.GzipFile(fileobj=stream, filename="", mtime=0) as compressed:
+        with output.open("xb") as stream, gzip.GzipFile(fileobj=stream, mode="wb", filename="", mtime=0) as compressed:
             with tarfile.open(fileobj=compressed, mode="w") as package:
                 for path in paths:
                     info = package.gettarinfo(str(path), "ThumbGen/" + path.relative_to(stage).as_posix())
-                    info.uid = info.gid = info.mtime = 0
+                    info.uid = info.gid = 0
+                    info.mtime = 315532800  # Fixed timestamp accepted by older tar implementations.
                     info.uname = info.gname = ""
                     if path.is_symlink():
                         package.addfile(info)
