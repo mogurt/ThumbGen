@@ -17,6 +17,16 @@ source "$work/tools/environment.sh"
 set -u
 test "$(getconf GNU_LIBC_VERSION)" = 'glibc 2.17'
 
+# CentOS 7's OpenSSL is too old for the bootstrapped Python HTTPS module.
+# Keep the existing digest and RPM signature checks after the curl download.
+export THUMBGEN_NOTICE_ROOT="$work/notices"
+rpm_dir="$repo/.deps/linux/license-rpms"
+mkdir -p "$rpm_dir"
+curl -fL --retry 2 https://vault.centos.org/7.9.2009/os/x86_64/Packages/libgcc-4.8.5-44.el7.x86_64.rpm \
+    -o "$rpm_dir/libgcc-4.8.5-44.el7.x86_64.rpm"
+python3 "$repo/scripts/linux/fetch-runtime-notices.py"
+bash "$repo/scripts/linux/extract-runtime-notices.sh"
+
 # Bootstrap a NASM that supports the pinned SDK's JPEG SIMD sources.
 nasm_archive="$work/nasm.tar.xz"
 curl -fL --retry 2 https://www.nasm.us/pub/nasm/releasebuilds/2.16.03/nasm-2.16.03.tar.xz -o "$nasm_archive"
@@ -31,9 +41,6 @@ bash "$repo/scripts/ci/linux-sdk.sh"
 sdk="$repo/.deps/ci-linux-sdk"
 deps="$work/product-deps"
 python3 "$repo/scripts/ci/product-deps.py" --sdk "$sdk" --output "$deps"
-export THUMBGEN_NOTICE_ROOT="$work/notices"
-python3 "$repo/scripts/linux/fetch-runtime-notices.py"
-bash "$repo/scripts/linux/extract-runtime-notices.sh"
 
 git -C "$repo" archive --format=tar --output="$work/source.tar" "$commit"
 mkdir "$work/source"
