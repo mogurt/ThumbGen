@@ -57,7 +57,7 @@ def verify(package, version, commit):
         env = dict(os.environ)
         for key in ("LD_LIBRARY_PATH", "OCIO"):
             env.pop(key, None)
-        env["PATH"] = str(Path(env["SystemRoot"]) / "System32") if os.name == "nt" else "/usr/bin:/bin"
+        env["PATH"] = str(Path(os.environ["SystemRoot"]) / "System32") if os.name == "nt" else "/usr/bin:/bin"
         exe = root / "bin" / ("thumbgen.exe" if os.name == "nt" else "thumbgen")
 
         def probe(*args):
