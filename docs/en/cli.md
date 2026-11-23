@@ -42,6 +42,8 @@ thumbgen convert frame.exr --output preview.jpg --ocio-config config.ocio --inpu
 
 Data previews use `--visualize`, `--channels`, `--data-range MIN,MAX` and `--invalid-values black|magenta|error`. See [data previews](data-preview.md). For Deep color, use `--deep-mode flatten`; see [Deep EXR](public-deep.md).
 
+Use `--visualize auto` to apply the standard color selection rules in one conversion. When there are no color candidates, it can preview an unambiguous Cryptomatte family, reading its numbered layers across parts. Multiple families or an incomplete layout produce an error. Part, channel and Deep flattening options take precedence. Color management options apply only to color previews.
+
 ## Resource budgets and timeouts
 
 For one conversion:

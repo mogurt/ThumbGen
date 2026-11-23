@@ -62,7 +62,7 @@
         "selection_policy": {"enum": ["primary", "root_rgb"]},
         "deep_mode": {"enum": ["reject", "flatten"]},
         "deep_samples_per_pixel": {"type": "integer", "minimum": 1, "maximum": 1048576},
-        "visualization": {"enum": ["colour", "depth", "normal", "vector", "id", "id_rgb", "cryptomatte"]},
+        "visualization": {"enum": ["auto", "colour", "depth", "normal", "vector", "id", "id_rgb", "cryptomatte"]},
         "data_range": {"type": "array", "items": {"type": "number"}, "maxItems": 2, "anyOf": [{"maxItems": 0}, {"minItems": 2}]},
         "invalid_values": {"enum": ["black", "magenta", "error"]},
         "part": {"type": "integer", "minimum": -1, "maximum": 2147483647},

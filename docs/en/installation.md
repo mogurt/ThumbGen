@@ -4,7 +4,7 @@
 
 Use the complete ThumbGen folder for your platform. Keep the supplied DLLs on Windows; preserve the bin/lib layout and executable permissions on Linux. Do not copy only the executable.
 
-Download the matching `thumbgen-0.1.1-*.zip` or `.tar.gz` and check the accompanying `SHA256SUMS`. Both archives contain one fixed `ThumbGen/` directory, with `bin/`, `share/`, `licenses/` and, on Linux, `lib/` immediately underneath. The directory name has no version or platform suffix; no renaming or moving is needed.
+Download the matching `thumbgen-0.1.2-*.zip` or `.tar.gz` and check the accompanying `SHA256SUMS`. Both archives contain one fixed `ThumbGen/` directory, with `bin/`, `share/`, `licenses/` and, on Linux, `lib/` immediately underneath. The directory name has no version or platform suffix; no renaming or moving is needed.
 
 On Windows, extract into `%LOCALAPPDATA%/Programs/` to get `%LOCALAPPDATA%/Programs/ThumbGen/bin/thumbgen.exe`. In PowerShell:
 
@@ -16,7 +16,7 @@ On Linux, extract into `$HOME/.local/opt/` to get `$HOME/.local/opt/ThumbGen/bin
 
 ```sh
 mkdir -p "$HOME/.local/opt"
-tar -xzf thumbgen-0.1.1-linux-x86_64-glibc217.tar.gz -C "$HOME/.local/opt"
+tar -xzf thumbgen-0.1.2-linux-x86_64-glibc217.tar.gz -C "$HOME/.local/opt"
 "$HOME/.local/opt/ThumbGen/bin/thumbgen" --version --json
 ```
 

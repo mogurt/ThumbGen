@@ -104,6 +104,10 @@ Json task_base(const Job& job) {
     if(!job.sequence_id.empty())value["sequence_id"]=job.sequence_id;
     return value;
 }
+std::string effective_visualization(const Json& value,const Job& job) {
+    if(job.options.visualization=="auto")return value.contains("cryptomatte")?"cryptomatte":"colour";
+    return job.options.visualization;
+}
 void base_check(const Json& value,const Job& job) {
     allowed(value,{"schema_version","type","id","input","ok","status","outputs","warnings","error","selection","source","selected_channels","colour","decoded_mib","preset","filter","timings_ms","sequence_id","source_check","visualization","cryptomatte","source_read","deep"});
     check(value.is_object() && value.value("type",std::string{})=="result" && value.value("id",std::string{})==job.id &&
@@ -112,11 +116,18 @@ void base_check(const Json& value,const Job& job) {
     check(value.contains("warnings") && value["warnings"].is_array() && value.contains("timings_ms") && value["timings_ms"].is_object(),"invalid worker result metadata");
     for(const auto& warning:value["warnings"])check(warning.is_string(),"invalid worker warning");
     if(value.contains("error"))error_check(value["error"]);
+    const auto mode=effective_visualization(value,job);
+    const bool automatic=job.options.visualization=="auto";
+    if(automatic && value.contains("source")) {
+        const auto& chosen=value.at("selection").at("chosen");
+        check(chosen["kind"]=="colour" || chosen["kind"]=="grey" || chosen["kind"]=="data","invalid worker automatic selection");
+        check((chosen["kind"]=="data")==value.contains("cryptomatte"),"worker automatic selection does not match its preview mode");
+    }
     if(value.contains("source") && value["source"].value("deep",false) && job.options.deep_mode=="flatten")
         check(value.contains("deep"),"missing worker Deep diagnostics");
     if(value.contains("deep")) {
         const auto& deep=value["deep"];fields(deep,{"mode","policy","mapping","sample_limit","buffer_limit_bytes","samples","chunks","peak_buffer_bytes"});
-        check(job.options.deep_mode=="flatten" && job.options.visualization=="colour" && deep["mode"]=="flatten" && deep["policy"]=="deep-colour-sweep-v1" &&
+        check(job.options.deep_mode=="flatten" && mode=="colour" && deep["mode"]=="flatten" && deep["policy"]=="deep-colour-sweep-v1" &&
             deep["sample_limit"]==job.options.deep_samples_per_pixel && deep["buffer_limit_bytes"]==job.options.max_decode_mib*1024ULL*1024ULL &&
             value.contains("source") && value["source"].value("deep",false),"worker Deep settings mismatch");
         number(deep["samples"],64ULL*1024*1024);number(deep["chunks"],std::numeric_limits<std::uint64_t>::max());
@@ -145,7 +156,14 @@ void base_check(const Json& value,const Job& job) {
     }
     if(value.contains("cryptomatte")) {
         const auto& crypto=value["cryptomatte"];fields(crypto,{"name","metadata_key","hash","conversion","layers","ranks","manifest"});
-        check(job.options.visualization=="cryptomatte" && crypto["name"]==job.options.channels && crypto["hash"]=="MurmurHash3_32" &&
+        if(automatic) {
+            const auto& chosen=value.at("selection").at("chosen");
+            check(auto_cryptomatte_allowed(job.options) && value.contains("source") && !value["source"].value("deep",true) &&
+                chosen["kind"]=="data" && chosen["group"]==crypto["name"] && chosen["channels"]==value.at("selected_channels"),
+                "worker automatic Cryptomatte selection mismatch");
+        }
+        check(mode=="cryptomatte" && (automatic || crypto["name"]==job.options.channels) && crypto["name"].is_string() &&
+            !crypto["name"].get_ref<const std::string&>().empty() && crypto["hash"]=="MurmurHash3_32" &&
             crypto["conversion"]=="uint32_to_float32" && crypto["metadata_key"].is_string() && !crypto["metadata_key"].get<std::string>().empty(),"worker Cryptomatte metadata mismatch");
         check(crypto["layers"].is_array() && !crypto["layers"].empty(),"missing Cryptomatte layers");
         for(const auto& layer:crypto["layers"])check(layer.is_string() && !layer.get<std::string>().empty(),"invalid Cryptomatte layer");
@@ -155,15 +173,15 @@ void base_check(const Json& value,const Job& job) {
         const auto& manifest=crypto["manifest"];fields(manifest,{"embedded_attribute","sidecar_attribute","used"});
         check(manifest["embedded_attribute"].is_boolean() && manifest["sidecar_attribute"].is_boolean() && manifest["used"]==false,"invalid Cryptomatte manifest diagnostics");
     }
-    if(job.options.visualization=="cryptomatte" && (value.value("status",std::string{})=="success" || value.value("status",std::string{})=="partial" || value.value("status",std::string{})=="skipped"))
+    if(mode=="cryptomatte" && (value.value("status",std::string{})=="success" || value.value("status",std::string{})=="partial" || value.value("status",std::string{})=="skipped"))
         check(value.contains("cryptomatte"),"missing worker Cryptomatte metadata");
     if(value.contains("visualization")) {
         const auto& data=value["visualization"];fields(data,{"mode","policy","range","invalid_values","invalid_pixels","clipped_components"});
-        check(job.options.visualization!="colour" && data["mode"]==job.options.visualization && data["policy"]=="v1" && data["invalid_values"]==job.options.invalid_values &&
-            data["range"]==selection_request(job)["data"]["range"],"worker visualization settings mismatch");
+        check(mode!="colour" && data["mode"]==mode && data["policy"]=="v1" && data["invalid_values"]==job.options.invalid_values &&
+            data["range"]==(automatic?Json::array():selection_request(job)["data"]["range"]),"worker visualization settings mismatch");
         number(data["invalid_pixels"],std::numeric_limits<std::uint64_t>::max());number(data["clipped_components"],std::numeric_limits<std::uint64_t>::max());
     }
-    if(job.options.visualization!="colour" && (value.value("status",std::string{})=="success" || value.value("status",std::string{})=="partial"))
+    if(mode!="colour" && (value.value("status",std::string{})=="success" || value.value("status",std::string{})=="partial"))
         check(value.contains("visualization"),"missing worker visualization result");
 }
 void output_check(const Json& value,const Output& output) {
@@ -342,7 +360,10 @@ bool run_isolated(const std::vector<Job>& jobs,const std::string& executable,con
             auto& deadline=task.deadline;auto& estimate_mib=task.estimate_mib;auto& worker_id=task.worker_id;auto started=task.started;
             auto accept_pin=[&](const Json& pin) {
                 if(job.sequence_id.empty()){check(pin.is_null(),"unexpected sequence pin");return;}
-                if(!pin.is_null())pins.restore_sequence_lock(job.sequence_id,pin);
+                if(!pin.is_null()) {
+                    check(pin.at("request")==selection_request(job),"worker sequence request mismatch");
+                    pins.restore_sequence_lock(job.sequence_id,pin);
+                }
                 else check(pins.sequence_lock(job.sequence_id).is_null(),"worker lost sequence pin");
             };
             auto cleanup=[&](size_t index) {
@@ -385,6 +406,7 @@ bool run_isolated(const std::vector<Job>& jobs,const std::string& executable,con
                         try {source=source_stamp(fs::u8path(job.input));}
                         catch(const FileFailure&){throw FileFailure("source_changed","source could not be verified after metadata preparation",true);}
                         if(stamp_json(*source)!=payload["source_stamp"])throw FileFailure("source_changed","source changed during metadata preparation",true);
+                        const auto mode=effective_visualization(base,job);
                         const auto& f=payload["footprint"];fields(f,{"data_width","data_height","display_width","display_height","channel_span","selected_channels","output_width","output_height","threads","source_sample_bytes","source_pixel_bytes","source_buffer_bytes","native_categorical","deep_buffer_bytes","cms_buffer_bytes","srgb8","integer_linear","c2_stream"});
                         const bool categorical=job.options.visualization=="id" || job.options.visualization=="id_rgb";
                         check(f["native_categorical"].is_boolean() && f["native_categorical"]==categorical,"worker categorical footprint mismatch");
@@ -405,19 +427,19 @@ bool run_isolated(const std::vector<Job>& jobs,const std::string& executable,con
                         task.c2_stream=shape.c2_stream;
                         check(!shape.c2_stream || (integer_linear && job.outputs.size()==1 && (shape.source_sample_bytes==1 || shape.source_sample_bytes==2) &&
                             shape.channel_span==shape.selected_channels && shape.data_width==shape.display_width && shape.data_height==shape.display_height),"invalid C2 processing footprint");
-                        check(!integer_linear || (!srgb8 && job.options.visualization=="colour" && job.options.preset=="balanced" &&
+                        check(!integer_linear || (!srgb8 && mode=="colour" && job.options.preset=="balanced" &&
                             job.options.display.empty() && !base.contains("deep") && base.contains("source") &&
                             ((shape.source_sample_bytes==1 && base["source"]["sample_type"]=="uint8") ||
                              (shape.source_sample_bytes==2 && base["source"]["sample_type"]=="uint16"))),"invalid integer colour processing plan");
-                        check(!srgb8 || (job.options.visualization=="colour" && job.options.preset=="balanced" &&
+                        check(!srgb8 || (mode=="colour" && job.options.preset=="balanced" &&
                             !base.contains("deep") && base.contains("source") && base["source"]["sample_type"]=="uint8"),"invalid sRGB8 processing plan");
-                        check(!shape.cms_buffer_bytes || (job.options.visualization=="colour" && job.options.input_space=="auto" && !base.contains("deep")),"invalid worker CMS footprint");
+                        check(!shape.cms_buffer_bytes || (mode=="colour" && job.options.input_space=="auto" && !base.contains("deep")),"invalid worker CMS footprint");
                         check(base.contains("deep")?(shape.deep_buffer_bytes==job.options.max_decode_mib*1024ULL*1024ULL && shape.selected_channels==4 && !categorical && !shape.source_buffer_bytes):shape.deep_buffer_bytes==0,"worker Deep budget mismatch");
                         check(shape.source_buffer_bytes?(job.options.visualization=="id" && base.contains("source_read") && base["source_read"]["buffer_bytes"]==shape.source_buffer_bytes):!base.contains("source_read"),"sampled source footprint mismatch");
                         check(shape.data_width && shape.data_height && shape.display_width && shape.display_height && shape.channel_span &&
                             (shape.selected_channels==3 || shape.selected_channels==4) && shape.output_width && shape.output_height && shape.source_sample_bytes &&
-                            shape.source_pixel_bytes>=shape.source_sample_bytes && shape.source_pixel_bytes<=shape.source_sample_bytes*std::min<std::uint64_t>(shape.channel_span,job.options.visualization=="colour" || job.options.visualization=="cryptomatte"?4:3) &&
-                            (job.options.visualization!="colour" || (srgb8?shape.source_sample_bytes==1:integer_linear?(shape.source_sample_bytes==1 || shape.source_sample_bytes==2):
+                            shape.source_pixel_bytes>=shape.source_sample_bytes && shape.source_pixel_bytes<=shape.source_sample_bytes*std::min<std::uint64_t>(shape.channel_span,mode=="colour" || mode=="cryptomatte"?4:3) &&
+                            (mode!="colour" || (srgb8?shape.source_sample_bytes==1:integer_linear?(shape.source_sample_bytes==1 || shape.source_sample_bytes==2):
                              (shape.source_sample_bytes==4 && shape.source_pixel_bytes%4==0))),"invalid worker footprint");
                         std::uint64_t cost=1;
                         try {auto estimate=estimate_memory(shape);estimate_mib=double(estimate.total)/1048576;task.admission_mib=double(estimate.incremental)/1048576;if(options.memory_mib)cost=estimate.incremental;}
@@ -460,6 +482,8 @@ bool run_isolated(const std::vector<Job>& jobs,const std::string& executable,con
                 } else if(message.type=="result") {
                     check(!queued,"worker returned a result while awaiting admission");
                     fields(payload,{"record","pin"});result=payload["record"];base_check(result,job);accept_pin(payload["pin"]);
+                    if(planned && job.options.visualization=="auto")
+                        check(result.value("cryptomatte",Json{})==base.value("cryptomatte",Json{}),"worker automatic preview changed after admission");
                     if(result.contains("colour") && result["colour"].contains("processing"))
                         check((result["colour"]["processing"]=="integer-linear-stream-v1")==task.c2_stream,"worker result processing changed after admission");
                     check(result.contains("outputs") && result["outputs"].is_array(),"invalid worker outputs");

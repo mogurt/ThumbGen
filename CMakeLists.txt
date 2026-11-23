@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(ThumbGen VERSION 0.1.1 LANGUAGES CXX)
+project(ThumbGen VERSION 0.1.2 LANGUAGES CXX)
 
 find_package(OpenImageIO 3.2 CONFIG REQUIRED)
 find_package(Imath CONFIG REQUIRED)
@@ -68,6 +68,7 @@ install(FILES dependencies/notices/LittleCMS2-2.20.txt DESTINATION share/ThumbGe
 install(FILES dependencies/notices/stb-image-resize-2.50.txt DESTINATION share/ThumbGen/notices)
 install(FILES dependencies/notices/libjpeg-turbo-3.1.2-LICENSE.md dependencies/notices/libjpeg-turbo-3.1.2-README.ijg DESTINATION share/ThumbGen/notices)
 add_executable(thumbgen src/main.cpp)
+target_include_directories(thumbgen PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
 if(WIN32)
     enable_language(RC)
     configure_file(resources/windows/thumbgen.rc.in generated/thumbgen.rc @ONLY)

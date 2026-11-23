@@ -1439,6 +1439,7 @@
           "type": "array",
           "items": {
             "enum": [
+              "auto",
               "colour",
               "depth",
               "normal",

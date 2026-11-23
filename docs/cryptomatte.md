@@ -13,7 +13,9 @@ thumbgen convert crypto.exr --output crypto.png --visualize cryptomatte --channe
 
 ## 支持范围
 
-需要有效的 Cryptomatte 元数据和同一个 flat part 中完整、连续的编号层。ID 必须为 FLOAT32；coverage 可以是 FLOAT32 或 HALF。缺层、跨 part 分散或 ID 类型不符时会提示错误。
+需要有效的 Cryptomatte 元数据，以及从 00 开始完整、连续的编号层。编号层可以分布在多个 flat part，参与的 part 必须有相同的数据窗口、显示窗口和方向。跨 part 的家族只需指定家族名。若指定 `--part` 或 `--part-name`，该 part 必须包含整个家族。ID 必须为 FLOAT32，coverage 可以是 FLOAT32 或 HALF。
+
+同一批任务可混合普通预览和 Cryptomatte 预览。为 Cryptomatte 文件单独设置任务的 `options.visualization` 为 `cryptomatte`，并将 `options.channels` 设为 inspect 返回的家族名。
 
 使用稳定的 ID 配色，连续帧不会按图像内容重新随机配色。无效值可用 `--invalid-values black|magenta|error` 处理，默认品红色。
 
