@@ -1,4 +1,5 @@
 #include <thumbgen/core.h>
+#include "build_info.h"
 #include "files.h"
 #include "isolated.h"
 #include "data_preview.h"
@@ -65,7 +66,7 @@ public:
 }
 
 static void usage() {
-    std::cout << "ThumbGen 0.1.1\n"
+    std::cout << "ThumbGen " THUMBGEN_BUILD_VERSION "\n"
         "  thumbgen convert INPUT --output-dir DIR [--size 1024] [--json]\n"
         "  thumbgen convert INPUT --output FILE [--json]\n"
         "  thumbgen batch --manifest FILE [--json]\n"

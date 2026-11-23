@@ -235,7 +235,7 @@ Json Engine::capabilities() {
     Json output_formats=Json::array();
     for(const char* format:{"jpeg","png","webp"})
         if(OIIO::ImageOutput::create(std::string("capability.")+format))output_formats.push_back(format);
-    return {{"schema_version",1},{"type","capabilities"},{"version","0.1.1"},
+    return {{"schema_version",1},{"type","capabilities"},{"version",THUMBGEN_BUILD_VERSION},
         {"oiio_version",OIIO_VERSION_STRING},{"input_plugins",OIIO::get_string_attribute("input_format_list")},
         {"output_plugins",OIIO::get_string_attribute("output_format_list")},
         {"build",{{"revision",THUMBGEN_SOURCE_REVISION},{"dirty",THUMBGEN_SOURCE_DIRTY},
