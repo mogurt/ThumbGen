@@ -8,6 +8,7 @@ namespace thumbgen::detail {
 ColourPlan colour_plan(const OIIO::ImageSpec& s,const std::string& format,
     bool eligible,bool layout,bool embedded,bool use_icc,const std::string& input) {
     ColourPlan p;
+    p.bounded_options=eligible;
     auto fallback=[&](const char* reason){p.route=ColourPlan::Route::reference;p.sample_bytes=4;p.fallback=reason;return p;};
     if(!eligible)return fallback("Reference processing required by options or colour configuration");
     if(!layout || !s.channelformats.empty() || (s.format!=OIIO::TypeDesc::UINT8 && s.format!=OIIO::TypeDesc::UINT16) ||

@@ -17,17 +17,7 @@ Bytes multiply(Bytes a,Bytes b) {
     if(a && b>std::numeric_limits<Bytes>::max()/a)throw std::overflow_error("memory estimate multiplication overflow");
     return a*b;
 }
-}
-MemoryEstimate estimate_memory(const ImageFootprint& s) {
-    if(!s.data_width || !s.data_height || !s.display_width || !s.display_height || !s.channel_span ||
-       (s.selected_channels!=3 && s.selected_channels!=4) || !s.output_width || !s.output_height ||
-       !s.threads || s.threads>256 || !s.source_sample_bytes || s.source_sample_bytes>8 ||
-       (s.native_categorical && s.selected_channels!=4) || s.source_pixel_bytes>32 ||
-       (s.source_pixel_bytes && s.source_pixel_bytes<s.source_sample_bytes))throw std::invalid_argument("invalid memory estimate shape");
-    const Bytes data=multiply(s.data_width,s.data_height);
-    const Bytes canvas=multiply(s.display_width,s.display_height);
-    const Bytes preview=multiply(s.output_width,s.output_height);
-    if(preview>canvas)throw std::invalid_argument("preview footprint exceeds display canvas");
+MemoryEstimate buffered_memory(const ImageFootprint& s,Bytes data,Bytes canvas,Bytes preview) {
     MemoryEstimate e;
     e.source=multiply(data,s.source_pixel_bytes?s.source_pixel_bytes:multiply(s.channel_span,s.source_sample_bytes));
     if(s.source_buffer_bytes) {
@@ -85,6 +75,28 @@ MemoryEstimate estimate_memory(const ImageFootprint& s) {
             throw std::invalid_argument("invalid C2 source footprint");
         const auto bounded=c2_memory(s.data_width,s.data_height,s.selected_channels,s.output_width,s.output_height,s.cms_buffer_bytes);
         e.source=bounded.source;e.working=bounded.working;e.output=bounded.output;e.codec=bounded.codec;
+    }
+    e.codec=add(e.codec,s.source_codec_bytes);
+    return e;
+}
+}
+MemoryEstimate estimate_memory(const ImageFootprint& s) {
+    if(!s.data_width || !s.data_height || !s.display_width || !s.display_height || !s.channel_span ||
+       (s.selected_channels!=3 && s.selected_channels!=4) || !s.output_width || !s.output_height ||
+       !s.threads || s.threads>256 || !s.source_sample_bytes || s.source_sample_bytes>8 ||
+       (s.native_categorical && s.selected_channels!=4) || s.source_pixel_bytes>32 ||
+       (s.source_pixel_bytes && s.source_pixel_bytes<s.source_sample_bytes))throw std::invalid_argument("invalid memory estimate shape");
+    const Bytes data=multiply(s.data_width,s.data_height);
+    const Bytes canvas=multiply(s.display_width,s.display_height);
+    const Bytes preview=multiply(s.output_width,s.output_height);
+    if(preview>canvas)throw std::invalid_argument("preview footprint exceeds display canvas");
+    MemoryEstimate e;
+    if(s.bounded.source) {
+        if(s.c2_stream || s.native_categorical || s.deep_buffer_bytes || s.source_buffer_bytes)
+            throw std::invalid_argument("invalid bounded source footprint");
+        e.source=s.bounded.source;e.working=s.bounded.working;e.output=s.bounded.output;e.codec=s.bounded.codec;
+    } else {
+        e=buffered_memory(s,data,canvas,preview);
     }
     // Provisional measured-headroom model, to calibrate across codecs and platforms.
     e.worker=add(128*mib,multiply(s.threads,8*mib));

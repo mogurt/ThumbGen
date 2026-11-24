@@ -68,6 +68,10 @@ struct Slice {
 };
 }
 namespace thumbgen::detail {
+void c2_srgb8_to_linear(const void* input,float* output,std::size_t samples){
+    const auto* bytes=static_cast<const unsigned char*>(input);
+    for(std::size_t i=0;i<samples;++i)output[i]=stbir__srgb_uchar_to_linear_float[bytes[i]];
+}
 struct C2Resize::Impl {
     AllocationContext allocation;
     int width,height,channels,current=-1;
@@ -88,10 +92,10 @@ struct C2Resize::Impl {
         stbir_set_edgemodes(&r,STBIR_EDGE_CLAMP,STBIR_EDGE_CLAMP);
         stbir_set_pixel_callbacks(&r,callback,nullptr);stbir_set_user_data(&r,context);
     }
-    static bool plan(int w,int h,int c,const std::vector<std::pair<int,int>>& outputs,size_t& total){
+    static bool plan(int w,int h,int c,const std::vector<std::pair<int,int>>& outputs,size_t& total,size_t limit){
         total=0;
         if(w<=0 || h<=0 || w>65536 || h>65536 || (c!=3 && c!=4) || outputs.empty() || outputs.size()>2)return false;
-        auto account=[&](size_t n){if(n>c2_workspace_limit-total)return false;total+=n;return true;};
+        auto account=[&](size_t n){if(n>limit-total)return false;total+=n;return true;};
         if(!account(sizeof(Impl)+size_t(w)*c*sizeof(float)+4*size_t(w)*sizeof(void*)+4096))return false;
         for(auto [dw,dh]:outputs){
             if(dw<=0 || dh<=0 || dw>w || dh>h)return false;
@@ -102,14 +106,14 @@ struct C2Resize::Impl {
             if(!account(sizeof(Owner)) || !account(query.total))return false;
             const size_t state=sizeof(Slice)+sizeof(Task)+frame_limit;
             const size_t slab=query.mutable_end-query.mutable_begin+15;
-            if(size_t(query.columns)>(c2_workspace_limit-total)/state || !account(size_t(query.columns)*state))return false;
-            if(size_t(query.columns-1)>(c2_workspace_limit-total)/slab || !account(size_t(query.columns-1)*slab))return false;
+            if(size_t(query.columns)>(limit-total)/state || !account(size_t(query.columns)*state))return false;
+            if(size_t(query.columns-1)>(limit-total)/slab || !account(size_t(query.columns-1)*slab))return false;
         }
         return true;
     }
-    Impl(int w,int h,int c,const std::vector<std::pair<int,int>>& outputs):width(w),height(h),channels(c){
+    Impl(int w,int h,int c,const std::vector<std::pair<int,int>>& outputs,size_t limit):width(w),height(h),channels(c){
         require(w>0 && h>0 && (c==3 || c==4) && !outputs.empty() && outputs.size()<=2);
-        size_t planned=0;if(!plan(w,h,c,outputs,planned))throw C2PlanLimit();
+        size_t planned=0;if(!plan(w,h,c,outputs,planned,limit))throw C2PlanLimit();
         allocation.owner=this;
         auto account=[&](size_t n){if(n>planned-bytes)throw C2ContractError("C2 allocation exceeds admitted workspace");bytes+=n;};
         // Pointer-vector capacity and allocator overhead are reserved up front;
@@ -152,8 +156,11 @@ struct C2Resize::Impl {
         require(bytes==planned);
     }
 };
-bool C2Resize::workspace_plan(int w,int h,int c,const std::vector<std::pair<int,int>>& outputs,size_t& bytes){return Impl::plan(w,h,c,outputs,bytes);}
-C2Resize::C2Resize(int w,int h,int c,const std::vector<std::pair<int,int>>& outputs):impl_(std::make_unique<Impl>(w,h,c,outputs)){}
+bool C2Resize::workspace_plan(int w,int h,int c,const std::vector<std::pair<int,int>>& outputs,size_t& bytes,size_t limit){
+    return Impl::plan(w,h,c,outputs,bytes,limit);
+}
+C2Resize::C2Resize(int w,int h,int c,const std::vector<std::pair<int,int>>& outputs,size_t limit):
+    impl_(std::make_unique<Impl>(w,h,c,outputs,limit)){}
 C2Resize::~C2Resize()=default;
 size_t C2Resize::workspace_bytes()const{return impl_->bytes;}
 std::vector<double> C2Resize::execute(const std::function<void(int,float*)>& read,const std::vector<float*>& outputs){

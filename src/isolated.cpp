@@ -1,5 +1,6 @@
 #include "isolated.h"
 #include "budget.h"
+#include "c2_resize.h"
 #include "child_process.h"
 #include "files.h"
 #include "worker_protocol.h"
@@ -407,7 +408,7 @@ bool run_isolated(const std::vector<Job>& jobs,const std::string& executable,con
                         catch(const FileFailure&){throw FileFailure("source_changed","source could not be verified after metadata preparation",true);}
                         if(stamp_json(*source)!=payload["source_stamp"])throw FileFailure("source_changed","source changed during metadata preparation",true);
                         const auto mode=effective_visualization(base,job);
-                        const auto& f=payload["footprint"];fields(f,{"data_width","data_height","display_width","display_height","channel_span","selected_channels","output_width","output_height","threads","source_sample_bytes","source_pixel_bytes","source_buffer_bytes","native_categorical","deep_buffer_bytes","cms_buffer_bytes","srgb8","integer_linear","c2_stream"});
+                        const auto& f=payload["footprint"];fields(f,{"data_width","data_height","display_width","display_height","channel_span","selected_channels","output_width","output_height","threads","source_sample_bytes","source_pixel_bytes","source_buffer_bytes","native_categorical","deep_buffer_bytes","cms_buffer_bytes","srgb8","integer_linear","c2_stream","source_codec_bytes","bounded_read"});
                         const bool categorical=job.options.visualization=="id" || job.options.visualization=="id_rgb";
                         check(f["native_categorical"].is_boolean() && f["native_categorical"]==categorical,"worker categorical footprint mismatch");
                         check(number(f["threads"],256)==unsigned(job.options.threads),"plan thread quota mismatch");
@@ -434,6 +435,32 @@ bool run_isolated(const std::vector<Job>& jobs,const std::string& executable,con
                         check(!srgb8 || (mode=="colour" && job.options.preset=="balanced" &&
                             !base.contains("deep") && base.contains("source") && base["source"]["sample_type"]=="uint8"),"invalid sRGB8 processing plan");
                         check(!shape.cms_buffer_bytes || (mode=="colour" && job.options.input_space=="auto" && !base.contains("deep")),"invalid worker CMS footprint");
+                        const auto decode_budget=job.options.max_decode_mib*bounded_mib;
+                        shape.source_codec_bytes=number(f["source_codec_bytes"],decode_budget);
+                        const auto& bounded=f["bounded_read"];
+                        if(!bounded.is_null()){
+                            fields(bounded,{"pixel_bytes","retained_bytes","transpose"});
+                            check(mode=="colour" && job.options.preset=="balanced" && job.outputs.size()>=1 && job.outputs.size()<=2 &&
+                                !shape.c2_stream && !shape.native_categorical && !shape.deep_buffer_bytes && !shape.source_buffer_bytes &&
+                                shape.data_width && shape.data_height && shape.data_width<=65536 && shape.data_height<=65536 &&
+                                bounded["transpose"].is_boolean(),"invalid bounded reader footprint");
+                            const bool transpose=bounded["transpose"].get<bool>();
+                            check(shape.display_width==(transpose?shape.data_height:shape.data_width) &&
+                                shape.display_height==(transpose?shape.data_width:shape.data_height),"bounded display footprint mismatch");
+                            std::vector<std::pair<int,int>> sizes;
+                            for(const auto& output:job.outputs)
+                                sizes.push_back(fit_preview(int(shape.data_width),int(shape.data_height),
+                                    transpose?output.height:output.width,transpose?output.width:output.height));
+                            std::size_t workspace=0;
+                            check(C2Resize::workspace_plan(int(shape.data_width),int(shape.data_height),int(shape.selected_channels),
+                                sizes,workspace,bounded_sampler_limit),
+                                "invalid bounded sampler footprint");
+                            const auto bytes=number(bounded["pixel_bytes"],32);
+                            check(bytes>0,"invalid bounded native pixel size");
+                            shape.bounded=bounded_read_memory(shape.data_width,shape.data_height,unsigned(shape.selected_channels),unsigned(bytes),
+                                number(bounded["retained_bytes"],decode_budget),shape.source_codec_bytes,shape.cms_buffer_bytes,workspace,sizes);
+                            check(bounded_total(shape.bounded)<=decode_budget,"bounded decode footprint exceeds limit");
+                        }
                         check(base.contains("deep")?(shape.deep_buffer_bytes==job.options.max_decode_mib*1024ULL*1024ULL && shape.selected_channels==4 && !categorical && !shape.source_buffer_bytes):shape.deep_buffer_bytes==0,"worker Deep budget mismatch");
                         check(shape.source_buffer_bytes?(job.options.visualization=="id" && base.contains("source_read") && base["source_read"]["buffer_bytes"]==shape.source_buffer_bytes):!base.contains("source_read"),"sampled source footprint mismatch");
                         check(shape.data_width && shape.data_height && shape.display_width && shape.display_height && shape.channel_span &&

@@ -1,4 +1,5 @@
 #pragma once
+#include "bounded_read.h"
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -21,6 +22,8 @@ struct ImageFootprint {
     bool integer_linear=false; // Native integer source plus full linear float image and orientation.
     bool srgb8=false; // Native UINT8 source and bounded linear-preview resize workspace.
     bool c2_stream=false; // Opt-in bounded integer PNG plan; never a full-source fallback.
+    std::uint64_t source_codec_bytes=0; // Decoder allocations before or alongside source reads.
+    BoundedReadMemory bounded; // Populated by the controller for a bounded native read.
 };
 struct MemoryEstimate {
     // incremental is charged per active task; worker is already reserved by the pool.

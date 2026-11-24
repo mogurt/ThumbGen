@@ -1,4 +1,5 @@
 #pragma once
+#include "c2_memory.h"
 #include <cstddef>
 #include <functional>
 #include <memory>
@@ -6,6 +7,7 @@
 #include <utility>
 #include <vector>
 namespace thumbgen::detail {
+void c2_srgb8_to_linear(const void* input,float* output,std::size_t samples);
 struct C2PlanLimit:std::runtime_error {C2PlanLimit():std::runtime_error("C2 workspace limit"){} };
 struct C2ContractError:std::runtime_error {using std::runtime_error::runtime_error;};
 // Internal opt-in adapter. Construction fixes all geometry and allocates the
@@ -14,8 +16,9 @@ class C2Resize {
 public:
     // Geometry-only counting pass: no pixel access or dynamic allocations.
     // False means structural fallback; call before admission, construct after it.
-    static bool workspace_plan(int width,int height,int channels,const std::vector<std::pair<int,int>>& outputs,std::size_t& bytes);
-    C2Resize(int width,int height,int channels,const std::vector<std::pair<int,int>>& outputs);
+    static bool workspace_plan(int width,int height,int channels,const std::vector<std::pair<int,int>>& outputs,
+        std::size_t& bytes,std::size_t limit=c2_workspace_limit);
+    C2Resize(int width,int height,int channels,const std::vector<std::pair<int,int>>& outputs,std::size_t limit=c2_workspace_limit);
     ~C2Resize();
     C2Resize(const C2Resize&)=delete;
     C2Resize& operator=(const C2Resize&)=delete;

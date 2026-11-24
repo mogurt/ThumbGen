@@ -1,5 +1,6 @@
 #pragma once
 #include "colour_plan.h"
+#include "bounded_read.h"
 #include <algorithm>
 #include <cstring>
 #include <functional>
@@ -10,16 +11,16 @@ namespace thumbgen::detail {
 // Reader owns OIIO and translates read errors; this adapter never retries.
 class C2PngRows {
     int width_,height_,channels_,decoded_=0;
-    const ColourPlan& plan_;
+    unsigned pixel_bytes_;
     std::function<void(int,int,void*)> read_;
     std::function<void(const void*,float*,std::size_t)> transform_;
     std::size_t total_,base_=0,count_=0,next_=0,row_used_=0,row_pixels_=0;
     std::vector<unsigned char> native_,row_;
     std::vector<float> linear_;
     void block(){
-        base_=next_;count_=std::min(total_-next_,std::size_t(1048576));
+        base_=next_;count_=std::min(total_-next_,native_colour_block_pixels);
         if(!count_)throw std::runtime_error("C2 source exhausted");
-        const auto pixel_bytes=channels_*plan_.sample_bytes;
+        const auto pixel_bytes=pixel_bytes_;
         std::size_t used=0;
         while(used<count_){
             if(row_used_<row_pixels_){
@@ -35,8 +36,12 @@ class C2PngRows {
     }
 public:
     C2PngRows(int w,int h,int c,const ColourPlan& plan,std::function<void(int,int,void*)> read,
-        std::function<void(const void*,float*,std::size_t)> transform):width_(w),height_(h),channels_(c),plan_(plan),read_(std::move(read)),transform_(std::move(transform)),total_(std::size_t(w)*h),
-        native_(std::min(total_,std::size_t(1048576))*c*plan.sample_bytes),row_(std::size_t(w)*c*plan.sample_bytes),linear_(std::min(total_,std::size_t(1048576))*c){}
+        std::function<void(const void*,float*,std::size_t)> transform):
+        C2PngRows(w,h,c,c*plan.sample_bytes,std::move(read),std::move(transform)){}
+    C2PngRows(int w,int h,int c,unsigned pixel_bytes,std::function<void(int,int,void*)> read,
+        std::function<void(const void*,float*,std::size_t)> transform):width_(w),height_(h),channels_(c),pixel_bytes_(pixel_bytes),
+        read_(std::move(read)),transform_(std::move(transform)),total_(std::size_t(w)*h),
+        native_(std::min(total_,native_colour_block_pixels)*pixel_bytes),row_(std::size_t(w)*pixel_bytes),linear_(std::min(total_,native_colour_block_pixels)*c){}
     void get(int y,float* output){
         std::size_t pixel=std::size_t(y)*width_,remaining=width_;
         while(remaining){

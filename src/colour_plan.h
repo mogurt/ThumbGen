@@ -10,6 +10,9 @@ namespace thumbgen::detail {
 struct ColourPlan {
     enum class Route {reference,srgb8,integer_linear};
     Route route=Route::reference;
+    // Options and effective configuration may permit bounded reference
+    // processing even when the fast native transform cannot represent a profile.
+    bool bounded_options=false;
     unsigned sample_bytes=4;
     // Stable ownership across returned/copyable plans; skcms curves point here.
     // Included in the pre-existing four-profile CMS metadata reservation.

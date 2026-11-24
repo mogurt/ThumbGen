@@ -1,5 +1,6 @@
 #pragma once
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -32,7 +33,12 @@ struct BoundedReadMemory {
     std::uint64_t source=0,working=0,output=0,codec=0;
 };
 inline constexpr std::uint64_t bounded_mib=1024*1024;
+inline constexpr std::size_t bounded_sampler_limit=128*bounded_mib;
 inline constexpr std::size_t native_colour_block_pixels=1024*1024;
+inline std::pair<int,int> fit_preview(int width,int height,int limit_width,int limit_height) {
+    const double scale=std::min({double(limit_width)/width,double(limit_height)/height,1.0});
+    return {std::max(1,int(std::lround(width*scale))),std::max(1,int(std::lround(height*scale)))};
+}
 inline std::uint64_t checked_bytes_add(std::uint64_t a,std::uint64_t b) {
     if(b>std::numeric_limits<std::uint64_t>::max()-a)throw std::overflow_error("buffer size addition overflow");
     return a+b;

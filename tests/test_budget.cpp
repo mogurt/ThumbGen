@@ -37,6 +37,14 @@ int main() {
         rejects<std::invalid_argument>([&]{auto invalid=incremental;invalid.channel_span=4;estimate_memory(invalid);});
         auto bounded8=incremental;bounded8.source_sample_bytes=1;bounded8.source_pixel_bytes=bounded8.selected_channels;
         require(estimate_memory(bounded8).total==bounded.total,"UINT8 C2 must retain the declared UINT16 worst-case reserve");
+        auto native=fast;
+        const auto single=bounded_read_memory(5184,3456,3,3,4*bounded_mib,12*bounded_mib,0,64*1024,{{960,640}});
+        native.bounded=bounded_read_memory(5184,3456,3,3,4*bounded_mib,12*bounded_mib,0,64*1024,{{960,640},{320,200}});
+        require(native.bounded.output-single.output==320ULL*200*3*sizeof(float),"simultaneously retained second output omitted");
+        const auto native_estimate=estimate_memory(native);
+        require(native_estimate.incremental==bounded_total(native.bounded)+native_estimate.margin &&
+            native_estimate.total==native_estimate.incremental+native_estimate.worker,"native read admission charged an inconsistent footprint");
+        rejects<std::overflow_error>([]{bounded_read_memory(100,100,3,3,std::numeric_limits<std::uint64_t>::max(),0,0,1024,{{10,10}});});
         rejects<std::invalid_argument>([&]{auto invalid=incremental;invalid.data_width=invalid.display_width=1;estimate_memory(invalid);});
         rejects<std::invalid_argument>([&]{auto invalid=incremental;invalid.output_width=2000;estimate_memory(invalid);});
         rejects<std::invalid_argument>([]{c2_memory(65537,2000,4,425,212);});
