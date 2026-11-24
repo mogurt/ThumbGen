@@ -11,8 +11,8 @@ The balanced preset can decode eligible sources once for up to two preview sizes
 | Input | Layouts eligible for bounded colour previews |
 | --- | --- |
 | JPEG | 8-bit grayscale, RGB and YCbCr. Multiscan and progressive images also reserve their complete coefficient tables. Adobe CMYK/YCCK uses the profile-aware full-image route. |
-| PNG | 8- or 16-bit RGB/RGBA with matching native channels, including RGB with transparency expanded to alpha. Adam7 retains a complete native frame and needs a larger budget. |
-| TIFF | Interleaved unsigned 8- or 16-bit RGB/RGBA, stripped or tiled, using uncompressed, Deflate, LZW or PackBits storage. The selected page pays for compressed scratch and the decoded strip or tile row. |
+| PNG | 8- or 16-bit grayscale or RGB, with optional alpha and matching native channels. This includes transparency expanded to alpha. Adam7 retains a complete native frame and needs a larger budget. |
+| TIFF | Interleaved unsigned 8- or 16-bit grayscale or RGB, with optional alpha, stored in strips or tiles using no compression, Deflate, LZW or PackBits. White-is-zero grayscale is eligible without alpha. The selected page pays for compressed scratch and the decoded strip or tile row. |
 | Flat OpenEXR | Scanline or single-level tiled files with uniformly HALF or FLOAT selected RGB/RGBA channels, unit sampling, and NONE, RLE, ZIPS, ZIP or PIZ compression. Supports part selection and data and display windows, including negative origins. |
 | Radiance HDR | RGBE rows decoded to float. |
 | DPX | Uncompressed, single-element unsigned RGB at 8, 10, 12 or 16 bits with supported packing and row alignment. |

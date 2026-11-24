@@ -44,6 +44,7 @@
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <limits>
 #include <map>
@@ -60,6 +61,24 @@ namespace fs = std::filesystem;
 namespace iba = OIIO::ImageBufAlgo;
 using Clock = std::chrono::steady_clock;
 using Failure=detail::FileFailure;
+template<class Sample>
+static void gray_rows_to_rgb(const void* source,float* out,std::size_t count,int components) {
+    const auto* bytes=static_cast<const unsigned char*>(source);
+    const auto read=[&](std::size_t index) {
+        Sample value;
+        std::memcpy(&value,bytes+index*sizeof(Sample),sizeof(Sample));
+        return float(value)*(1.0f/std::numeric_limits<Sample>::max());
+    };
+    // Native blocks carry one luminance sample and, optionally, one alpha.
+    // Expand only into the float block used for colour processing and resize.
+    const bool alpha=components==4;
+    for(std::size_t i=0;i<count;++i) {
+        const auto native=i*(alpha?2:1);
+        auto* pixel=out+i*components;
+        std::fill_n(pixel,3,read(native));
+        if(alpha)pixel[3]=read(native+1);
+    }
+}
 // OIIO's IOFile does not propagate fflush/fclose errors. Keep ownership of
 // the stream, and latch short writes even when a codec ignores their result.
 static void write_preview(const OIIO::ImageBuf& source,const fs::path& path,int threads,bool canonical_rgba TG_EXR_PROFILE_PARAM) {
@@ -715,7 +734,9 @@ Json Engine::convert(const Job& job) {
         const auto png=input_format=="png"?detail::plan_png_rows(source_path,*in,spec,decode_budget):detail::PngRowPlan{};
         const auto tiff=input_format=="tiff"?detail::plan_tiff_rows(source_path,spec,part,decode_budget):detail::TiffRowPlan{};
         std::optional<detail::ExrRowProbe> exr;
-        const bool jpeg_gray=jpeg && spec.nchannels==1 && channels==std::vector<int>({0,0,0});
+        const bool native_gray=chosen.candidate.kind=="grey" &&
+            ((spec.nchannels==1 && spec.alpha_channel==-1 && channels==std::vector<int>({0,0,0})) ||
+             (spec.nchannels==2 && spec.alpha_channel==1 && channels==std::vector<int>({0,0,0,1})));
         auto source_codec_bytes=jpeg?jpeg->codec_bytes:other?other->fallback_codec_bytes:
             png.fallback_codec_bytes+tiff.fallback_codec_bytes;
 #ifdef THUMBGEN_C2_PNG_STREAM
@@ -752,11 +773,12 @@ Json Engine::convert(const Job& job) {
             if(input_format=="openexr" && (large || shifted_window)) {
                 exr=detail::probe_exr_rows(job.input,spec,part,channels);
                 if(exr)candidate=&exr->read;
-            } else if(!shifted_window && large && (plain_rgb || plain_rgba || jpeg_gray)) {
-                if(jpeg && colour_plan.bounded_options)candidate=&jpeg->read;
-                else if(png.read.open)candidate=&png.read;
-                else if(tiff.read.open)candidate=&tiff.read;
-                else if(deferred_other)candidate=&other->read;
+            } else if(!shifted_window && large) {
+                const bool rgb=plain_rgb || plain_rgba;
+                if(jpeg && (rgb || native_gray) && colour_plan.bounded_options)candidate=&jpeg->read;
+                else if(png.read.open && (rgb || native_gray))candidate=&png.read;
+                else if(tiff.read.open && (rgb || native_gray))candidate=&tiff.read;
+                else if(deferred_other && rgb)candidate=&other->read;
             }
             c2_sizes.clear();
             if(candidate && candidate->open) {
@@ -776,6 +798,7 @@ Json Engine::convert(const Job& job) {
             if(!bounded_source){exr.reset();c2_sizes.clear();}
         }
         const bool streaming=c2_active || bounded_source;
+        const bool bounded_gray=bounded_source && native_gray;
         // Noninterlaced PNG still checks its row scratch and decoded raster
         // individually. The scheduler charges both, including for small images.
         if(!streaming && source_codec_bytes && (input_format!="png" || png.retains_frame)) {
@@ -805,7 +828,8 @@ Json Engine::convert(const Job& job) {
                 {"footprint",{{"data_width",spec.width},{"data_height",spec.height},
                     {"display_width",display_width},{"display_height",display_height},
                     {"channel_span",cmyk?4:*span.second-*span.first+1},{"selected_channels",data || deep?4:channels.size()},
-                    {"source_sample_bytes",colour_plan.linear()?colour_plan.sample_bytes:input_plan.sample_bytes},{"source_pixel_bytes",colour_plan.linear()?channels.size()*colour_plan.sample_bytes:input_plan.pixel_bytes},
+                    {"source_sample_bytes",bounded_gray?spec.format.size():colour_plan.linear()?colour_plan.sample_bytes:input_plan.sample_bytes},
+                    {"source_pixel_bytes",bounded_gray?bounded_source->pixel_bytes:colour_plan.linear()?channels.size()*colour_plan.sample_bytes:input_plan.pixel_bytes},
                     {"source_buffer_bytes",sampled?sampled->peak_bytes:0},
                     {"deep_buffer_bytes",deep?job.options.max_decode_mib*1024ULL*1024ULL:0},
                     {"cms_buffer_bytes",cms_bytes},
@@ -954,7 +978,7 @@ Json Engine::convert(const Job& job) {
                     const auto* profile=spec.find_attribute("ICCProfile");
                     if(!profile)throw detail::CmsFailure("missing or invalid embedded ICC profile");
                     cms=std::make_unique<detail::CmsInput>(profile->data(),std::size_t(profile->datasize()),
-                        jpeg_gray?detail::CmsModel::grey:detail::CmsModel::rgb,stats);
+                        bounded_gray?detail::CmsModel::grey:detail::CmsModel::rgb,stats);
                 }
                 OIIO::ColorProcessorHandle processor;
                 if(!colour_plan.linear() && input_space!=working_space) {
@@ -992,10 +1016,9 @@ Json Engine::convert(const Job& job) {
                             }
                         }
                         else {
-                            if(jpeg_gray) {
-                                const auto* bytes=static_cast<const unsigned char*>(source);
-                                for(std::size_t i=0;i<count;++i)
-                                    std::fill_n(out+i*3,3,float(bytes[i])*(1.0f/255));
+                            if(bounded_gray) {
+                                if(spec.format==OIIO::TypeDesc::UINT16)gray_rows_to_rgb<std::uint16_t>(source,out,count,components);
+                                else gray_rows_to_rgb<std::uint8_t>(source,out,count,components);
                             } else if(!OIIO::convert_pixel_values(spec.format,source,OIIO::TypeDesc::FLOAT,out,int(count*components)))
                                 throw Failure("decode_failed","cannot convert native colour block to float");
                             if(cms)cms->apply(out,count,components,components==4 && !straight_alpha);

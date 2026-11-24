@@ -438,6 +438,7 @@ bool run_isolated(const std::vector<Job>& jobs,const std::string& executable,con
                         const auto decode_budget=job.options.max_decode_mib*bounded_mib;
                         shape.source_codec_bytes=number(f["source_codec_bytes"],decode_budget);
                         const auto& bounded=f["bounded_read"];
+                        const bool bounded_gray=!bounded.is_null() && base.at("selection").at("chosen").at("kind")=="grey";
                         if(!bounded.is_null()){
                             fields(bounded,{"pixel_bytes","retained_bytes","transpose"});
                             check(mode=="colour" && job.options.preset=="balanced" && job.outputs.size()>=1 && job.outputs.size()<=2 &&
@@ -463,6 +464,14 @@ bool run_isolated(const std::vector<Job>& jobs,const std::string& executable,con
                                 "invalid bounded sampler footprint");
                             const auto bytes=number(bounded["pixel_bytes"],32);
                             check(bytes>0,"invalid bounded native pixel size");
+                            if(bounded_gray) {
+                                const auto& sample_type=source_info.at("sample_type");
+                                check(((shape.source_sample_bytes==1 && sample_type=="uint8") ||
+                                    (shape.source_sample_bytes==2 && sample_type=="uint16")) &&
+                                    shape.channel_span+2==shape.selected_channels &&
+                                    bytes==shape.source_sample_bytes*shape.channel_span && bytes==shape.source_pixel_bytes,
+                                    "invalid bounded grayscale footprint");
+                            }
                             shape.bounded=bounded_read_memory(row_width,row_height,unsigned(shape.selected_channels),unsigned(bytes),
                                 number(bounded["retained_bytes"],decode_budget),shape.source_codec_bytes,shape.cms_buffer_bytes,workspace,sizes);
                             check(bounded_total(shape.bounded)<=decode_budget,"bounded decode footprint exceeds limit");
@@ -472,7 +481,7 @@ bool run_isolated(const std::vector<Job>& jobs,const std::string& executable,con
                         check(shape.data_width && shape.data_height && shape.display_width && shape.display_height && shape.channel_span &&
                             (shape.selected_channels==3 || shape.selected_channels==4) && shape.output_width && shape.output_height && shape.source_sample_bytes &&
                             shape.source_pixel_bytes>=shape.source_sample_bytes && shape.source_pixel_bytes<=shape.source_sample_bytes*std::min<std::uint64_t>(shape.channel_span,mode=="colour" || mode=="cryptomatte"?4:3) &&
-                            (mode!="colour" || (srgb8?shape.source_sample_bytes==1:integer_linear?(shape.source_sample_bytes==1 || shape.source_sample_bytes==2):
+                            (mode!="colour" || bounded_gray || (srgb8?shape.source_sample_bytes==1:integer_linear?(shape.source_sample_bytes==1 || shape.source_sample_bytes==2):
                              (shape.source_sample_bytes==4 && shape.source_pixel_bytes%4==0))),"invalid worker footprint");
                         std::uint64_t cost=1;
                         try {auto estimate=estimate_memory(shape);estimate_mib=double(estimate.total)/1048576;task.admission_mib=double(estimate.incremental)/1048576;if(options.memory_mib)cost=estimate.incremental;}

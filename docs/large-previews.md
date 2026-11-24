@@ -11,8 +11,8 @@ thumbgen convert renders/frame.exr --output-dir previews --size 960x960 --size 4
 | 输入格式 | 支持有界颜色预览的布局 |
 | --- | --- |
 | JPEG | 8 位灰度、RGB 和 YCbCr。多扫描和渐进式图像还需为完整系数表预留内存。Adobe CMYK/YCCK 使用支持 ICC 的整图路径。 |
-| PNG | 原生通道匹配的 8 位、16 位 RGB/RGBA，包括转为 Alpha 的 RGB 透明度。Adam7 需保留完整原生帧。 |
-| TIFF | 无压缩、Deflate、LZW 或 PackBits 的 8 位、16 位无符号交错 RGB/RGBA，支持条带和瓦片。所选页需为压缩数据及解码后的条带或一行瓦片预留内存。 |
+| PNG | 原生通道匹配的 8 位、16 位灰度和 RGB，可带 Alpha，也支持将透明度展开为 Alpha。Adam7 需保留完整原生帧。 |
+| TIFF | 无压缩、Deflate、LZW 或 PackBits 的 8 位、16 位无符号交错灰度和 RGB，可带 Alpha，支持条带和瓦片。白色为零的灰度布局仅在无 Alpha 时适用。所选页需为压缩数据及解码后的条带或一行瓦片预留内存。 |
 | 平面 OpenEXR | 扫描线或单层瓦片，所选 RGB/RGBA 通道均为 HALF 或均为 FLOAT，通道采样率为 1。支持 NONE、RLE、ZIPS、ZIP、PIZ 压缩、part 选择及带负坐标的数据窗口和显示窗口。 |
 | Radiance HDR | RGBE 行解码为浮点。 |
 | DPX | 无压缩的单元素无符号 RGB，支持符合打包与行对齐要求的 8、10、12、16 位布局。 |
