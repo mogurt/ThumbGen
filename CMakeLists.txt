@@ -237,7 +237,7 @@ if(BUILD_TESTING)
     set_tests_properties(core_fast_colour PROPERTIES ENVIRONMENT_MODIFICATION
         "PATH=path_list_prepend:$<TARGET_FILE_DIR:OpenImageIO::OpenImageIO>;LD_LIBRARY_PATH=path_list_prepend:$<TARGET_FILE_DIR:OpenImageIO::OpenImageIO>")
     add_executable(thumbgen_jpeg_rows_tests tests/test_jpeg_rows.cpp)
-    target_link_libraries(thumbgen_jpeg_rows_tests PRIVATE thumbgen_core OpenImageIO::OpenImageIO)
+    target_link_libraries(thumbgen_jpeg_rows_tests PRIVATE thumbgen_core OpenImageIO::OpenImageIO LittleCMS2::LittleCMS2)
     add_test(NAME core_jpeg_rows COMMAND thumbgen_jpeg_rows_tests)
     set_tests_properties(core_jpeg_rows PROPERTIES TIMEOUT 120 ENVIRONMENT_MODIFICATION
         "PATH=path_list_prepend:$<TARGET_FILE_DIR:OpenImageIO::OpenImageIO>;LD_LIBRARY_PATH=path_list_prepend:$<TARGET_FILE_DIR:OpenImageIO::OpenImageIO>")
@@ -505,6 +505,7 @@ if(BUILD_TESTING)
         if(THUMBGEN_TEST_PROTOCOL)
             add_test(NAME public_bounded_jpeg COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_bounded_jpeg_cli.py --exe $<TARGET_FILE:thumbgen>
+                --fixture-exe $<TARGET_FILE:thumbgen_jpeg_rows_tests>
                 --schema-dir ${CMAKE_CURRENT_SOURCE_DIR}/schemas --runtime-dir $<TARGET_FILE_DIR:OpenImageIO::OpenImageIO>)
             set_tests_properties(public_bounded_jpeg PROPERTIES TIMEOUT 240 LABELS "protocol;colour;scheduler")
             add_test(NAME public_integer_colour COMMAND ${Python3_EXECUTABLE}

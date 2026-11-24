@@ -1,11 +1,13 @@
 #include <thumbgen/core.h>
 #include <OpenImageIO/imagebuf.h>
 #include <OpenImageIO/imageio.h>
+#include <lcms2.h>
 #include <algorithm>
 #include <array>
 #include <chrono>
 #include <filesystem>
 #include <iostream>
+#include <memory>
 #include <stdexcept>
 
 namespace fs=std::filesystem;
@@ -16,9 +18,8 @@ struct Temp {
     Temp(){fs::create_directory(path);}
     ~Temp(){std::error_code error;fs::remove_all(path,error);}
 };
-void write_jpeg(const fs::path& path,int channels,int orientation){
-    OIIO::ImageSpec spec(4097,2001,channels,OIIO::TypeDesc::UINT8);
-    spec.attribute("Orientation",orientation);
+void write_jpeg(const fs::path& path,const OIIO::ImageSpec& spec){
+    const int channels=spec.nchannels;
     auto out=OIIO::ImageOutput::create(path.u8string());
     require(out && out->open(path.u8string(),spec),OIIO::geterror());
     std::vector<unsigned char> row(std::size_t(spec.width)*channels);
@@ -29,6 +30,27 @@ void write_jpeg(const fs::path& path,int channels,int orientation){
         require(out->write_scanline(y,0,spec.format,row.data()),out->geterror());
     }
     require(out->close(),out->geterror());
+}
+void write_batch_fixtures(const fs::path& root){
+    OIIO::ImageSpec spec(16384,8192,3,OIIO::TypeDesc::UINT8);
+    spec.attribute("CompressionQuality",87);
+    spec.attribute("jpeg:subsampling","4:2:0");
+    write_jpeg(root/"baseline.jpg",spec);
+    spec.width=spec.full_width=12288;
+    write_jpeg(root/"baseline12.jpg",spec);
+    spec.width=spec.full_width=41;spec.height=spec.full_height=37;
+    write_jpeg(root/"small-baseline.jpg",spec);
+    spec.attribute("jpeg:progressive",1);
+    write_jpeg(root/"small-progressive.jpg",spec);
+
+    auto profile=std::unique_ptr<void,decltype(&cmsCloseProfile)>(cmsCreate_sRGBProfile(),cmsCloseProfile);
+    cmsUInt32Number size=0;
+    require(profile && cmsSaveProfileToMem(profile.get(),nullptr,&size) && size>0,"could not size synthetic ICC");
+    std::vector<unsigned char> bytes(size);
+    require(cmsSaveProfileToMem(profile.get(),bytes.data(),&size),"could not serialize synthetic ICC");
+    spec.attribute("ICCProfile",OIIO::TypeDesc(OIIO::TypeDesc::UINT8,int(size)),bytes.data());
+    spec.width=spec.full_width=12000;spec.height=spec.full_height=6000;
+    write_jpeg(root/"progressive.jpg",spec);
 }
 void compare(const thumbgen::Json& a,const thumbgen::Json& b) {
     OIIO::ImageBuf x(a.at("path").get<std::string>()),y(b.at("path").get<std::string>());
@@ -47,11 +69,18 @@ void compare(const thumbgen::Json& a,const thumbgen::Json& b) {
         "bounded preview error exceeds threshold: max "+std::to_string(max_error)+", mean "+std::to_string(abs_error/x.spec().image_bytes()));
 }
 }
-int main(){try{
+int main(int argc,char** argv){try{
+    if(argc==3 && std::string(argv[1])=="--fixtures"){
+        write_batch_fixtures(fs::u8path(argv[2]));
+        return 0;
+    }
+    require(argc==1,"expected --fixtures followed by an existing directory");
     Temp root;
     for(auto [components,orientation]:std::array<std::pair<int,int>,3>{{{3,1},{3,6},{1,8}}}){
         const auto source=root.path/"source.jpg";
-        write_jpeg(source,components,orientation);
+        OIIO::ImageSpec spec(4097,2001,components,OIIO::TypeDesc::UINT8);
+        spec.attribute("Orientation",orientation);
+        write_jpeg(source,spec);
         thumbgen::Job job;
         job.input=source.u8string();job.options.threads=1;job.options.input_space="sRGB";
         job.outputs={{(root.path/"bounded-large.png").u8string(),"png",641,479,90,"replace"},
