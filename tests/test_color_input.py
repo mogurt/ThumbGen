@@ -25,7 +25,8 @@ parser=argparse.ArgumentParser()
 for name in ('exe','probe-exe','runtime-dir','schema-dir'):
     parser.add_argument('--'+name,type=Path,required=True)
 args,remaining=parser.parse_known_args()
-env=dict(os.environ,OCIO='')
+env=dict(os.environ)
+env.pop('OCIO',None)
 key='PATH' if os.name=='nt' else 'LD_LIBRARY_PATH'
 env[key]=str(args.runtime_dir.resolve())+os.pathsep+env.get(key,'')
 validator=Draft202012Validator(json.loads((args.schema_dir/'protocol-v1.schema.json').read_text(encoding='utf-8')))
@@ -175,12 +176,13 @@ class ColourInput(unittest.TestCase):
     def tearDown(self):self.temp.cleanup()
     def fixture(self,name,data):
         path=self.root/name;path.write_bytes(data);return path
-    def run_json(self,exe,command,exit=0):
+    def run_json(self,exe,command,exit=0,*,ocio=None):
         command=[str(exe),*map(str,command)]
+        child_env=env if ocio is None else dict(env,OCIO=str(ocio))
         started=time.monotonic()
         print(f'child start: {command!r}',file=sys.stderr,flush=True)
         try:
-            run=subprocess.run(command,env=env,capture_output=True,text=True,encoding='utf-8',timeout=45)
+            run=subprocess.run(command,env=child_env,capture_output=True,text=True,encoding='utf-8',timeout=45)
         except BaseException as error:
             print(f'child exception: {error!r}',file=sys.stderr,flush=True)
             raise
@@ -192,6 +194,29 @@ class ColourInput(unittest.TestCase):
         except json.JSONDecodeError as error:self.fail(f'invalid JSON: {error}\n{diagnostic}')
         self.assertTrue(rows,f'no JSON records\n{diagnostic}')
         return rows
+    def project_config(self):
+        return self.fixture('project.ocio',b"""ocio_profile_version: 2
+roles:
+  scene_linear: working
+file_rules:
+  - !<Rule> {name: Default, colorspace: working}
+displays:
+  Preview:
+    - !<View> {name: Standard, colorspace: Project Output}
+colorspaces:
+  - !<ColorSpace> {name: working, aliases: [linear, lin_rec709_scene], bitdepth: 32f, isdata: false}
+  - !<ColorSpace>
+    name: Project Output
+    aliases: [sRGB]
+    bitdepth: 32f
+    isdata: false
+    from_scene_reference: !<ExponentTransform> {value: [0.5, 0.5, 0.5, 1]}
+""")
+    def convert_config(self,path,*options,ocio=None,exit=0):
+        result=self.run_json(args.exe,['convert',path,'--output',self.target,'--size','8','--threads',1,'--json',*options],
+                             exit,ocio=ocio)[0]
+        validator.validate(result)
+        return result
     def convert(self,path,space=None,exit=0):
         before=hashlib.sha256(path.read_bytes()).digest()
         command=['convert',path,'--output',self.target,'--format','png','--size','8x8',
@@ -347,26 +372,69 @@ class ColourInput(unittest.TestCase):
         def riff_chunk(tag,payload):return tag+struct.pack('<I',len(payload))+payload+b'\0'*(len(payload)&1)
         payload=riff_chunk(b'VP8X',bytes((0x30,0,0,0,7,0,0,7,0,0)))+riff_chunk(b'ICCP',profile())+b''.join(chunks)
         path.write_bytes(b'RIFF'+struct.pack('<I',len(payload)+4)+b'WEBP'+payload)
-        result=self.convert_transparent(path);self.assertEqual(result['colour']['basis'],'embedded_icc')
+        result=self.convert_config(path,'--background','transparent',ocio=self.project_config())
+        self.assertEqual(result['colour']['basis'],'embedded_icc')
+        self.assertEqual(result['colour']['config_basis'],'builtin')
         expected=(137,188,225,128)
         for pixel in read_png(self.target)[2]:
             for actual,wanted in zip(pixel,expected):self.assertLessEqual(abs(actual-wanted),1)
+    def test_default_icc_ignores_inherited_config(self):
+        config=self.project_config()
+        samples=[('rgb.png',png(profile()),(137,188,225)),
+                 ('gray.png',png(profile(True),grey=True),(188,188,188)),
+                 ('rgb.jpg',jpeg(icc=profile()),(188,188,188)),
+                 ('rgb.tif',tiff(icc=profile()),(137,188,225))]
+        for name,data,expected in samples:
+            for inherited in (None,config):
+                with self.subTest(name=name,inherited=inherited is not None):
+                    result=self.convert_config(self.fixture(name,data),ocio=inherited)
+                    self.assertEqual(result['colour']['basis'],'embedded_icc')
+                    self.assertEqual(result['colour']['config_basis'],'builtin')
+                    self.assertEqual(result['colour']['ocio_config'],'ocio://default')
+                    if name=='rgb.png':self.assertEqual(result['colour']['processing'],'integer-linear-v1')
+                    for pixel in read_png(self.target)[2]:
+                        for actual,wanted in zip(pixel,expected):self.assertLessEqual(abs(actual-wanted),1)
+                    self.target.unlink()
+        bad=self.convert_config(self.fixture('bad.png',png(b'bad')),ocio=config,exit=4)
+        self.assertEqual(bad['error']['code'],'colour_input_unsupported')
+        self.assertFalse(self.target.exists())
+    def test_inherited_config_applies_to_exr_and_explicit_input(self):
+        config=self.project_config()
+        exr=self.root/'frame.exr'
+        self.run_json(args.probe_exe,['--write-exr',exr])
+        override=self.fixture('override.png',png(profile(gamma=2)))
+        for path,options,expected in [(exr,[],(128,128,128)),(override,['--input-space','linear'],(128,181,221))]:
+            with self.subTest(path=path.name):
+                result=self.convert_config(path,*options,ocio=config)
+                self.assertEqual(result['colour']['config_basis'],'environment')
+                self.assertEqual(result['colour']['ocio_config'],str(config))
+                self.assertEqual(result['colour']['working_space'],'working')
+                self.assertEqual(result['colour']['output_space'],'Project Output')
+                self.assertNotIn('icc',result['colour'])
+                for pixel in read_png(self.target)[2]:
+                    for actual,wanted in zip(pixel,expected):self.assertLessEqual(abs(actual-wanted),1)
+                self.target.unlink()
     def test_custom_config_requires_standard_bridge(self):
-        config=self.root/'missing-bridge.ocio'
-        config.write_text("""ocio_profile_version: 2
-roles:
-  scene_linear: working
-file_rules:
-  - !<Rule> {name: Default, colorspace: working}
-displays:
-  test:
-    - !<View> {name: test, colorspace: working}
-colorspaces:
-  - !<ColorSpace> {name: working, family: test, bitdepth: 32f, isdata: false}
-""",encoding='utf-8')
+        config=self.project_config()
         path=self.fixture('custom.png',png(profile()))
-        result=self.run_json(args.exe,['convert',path,'--output',self.target,'--ocio-config',config,'--json'],4)[0]
-        validator.validate(result);self.assertEqual(result['error']['code'],'colour_input_unsupported');self.assertIn('bridge',result['error']['message'])
+        for options in [('--ocio-config',config),('--display','Preview','--view','Standard')]:
+            with self.subTest(options=options):
+                result=self.convert_config(path,*options,ocio=config,exit=4)
+                self.assertEqual(result['error']['code'],'colour_input_unsupported')
+                self.assertIn('bridge',result['error']['message'])
+        separated=self.fixture('separated.tif',tiff(cmyk=True,icc=cmyk_profile()))
+        result=self.convert_config(separated,ocio=config,exit=4)
+        self.assertEqual(result['colour']['config_basis'],'environment')
+        self.assertEqual(result['error']['code'],'colour_input_unsupported')
+        self.assertIn('bridge',result['error']['message'])
+        # OIIO infers interop IDs from aliases even when OCIO declares none.
+        config.write_text(config.read_text().replace('aliases: [sRGB]','aliases: [sRGB, srgb_rec709_scene]'),encoding='utf-8')
+        result=self.convert_config(path,'--ocio-config',config,exit=4)
+        self.assertEqual(result['error']['code'],'colour_input_unsupported')
+        self.assertIn('bridge',result['error']['message'])
+        result=self.convert_config(path,'--ocio-config',self.root/'missing.ocio',exit=4)
+        self.assertEqual(result['error']['code'],'colour_config_failed')
+        self.assertFalse(self.target.exists())
     def test_declared_bridge_to_distinct_project_linear(self):
         config=self.root/'bridge.ocio'
         config.write_text("""ocio_profile_version: 2
@@ -391,10 +459,33 @@ colorspaces:
     to_scene_reference: !<ExponentWithLinearTransform> {gamma: [2.4, 2.4, 2.4, 1], offset: [0.055, 0.055, 0.055, 0]}
 """,encoding='utf-8')
         path=self.fixture('bridge.png',png(profile()))
-        result=self.run_json(args.exe,['convert',path,'--output',self.target,'--ocio-config',config,'--json'])[0]
-        validator.validate(result);self.assertEqual(result['colour']['working_space'],'project')
-        for pixel in read_png(self.target)[2]:
-            for actual,wanted in zip(pixel,(137,188,225)):self.assertLessEqual(abs(actual-wanted),1)
+        legacy=config.read_text(encoding='utf-8')
+        standard=legacy.replace('colorspace: srgb_rec709_scene','colorspace: Scene Texture').replace(
+            'name: srgb_rec709_scene\n    aliases: [sRGB]',
+            'name: Scene Texture\n    aliases: [srgb_rec709_scene]\n    interop_id: srgb_rec709_scene')
+        project_output=standard+"""  - !<ColorSpace>
+    name: Project Output
+    aliases: [sRGB]
+    bitdepth: 32f
+    isdata: false
+    from_scene_reference: !<ExponentTransform> {value: [0.5, 0.5, 0.5, 1]}
+"""
+        cases=[(legacy,'srgb_rec709_scene','srgb_rec709_scene',[],(137,188,225)),
+               (standard,'Scene Texture','Scene Texture',[],(137,188,225)),
+               (project_output,'Scene Texture','Project Output',[],(128,181,221)),
+               (project_output,'Scene Texture','',['--display','test','--view','test'],(137,188,225))]
+        for content,bridge,output,options,expected in cases:
+            with self.subTest(bridge=bridge,output=output):
+                config.write_text(content,encoding='utf-8')
+                result=self.convert_config(path,'--ocio-config',config,*options,ocio=self.project_config())
+                self.assertEqual(result['colour']['config_basis'],'explicit')
+                self.assertEqual(result['colour']['ocio_config'],str(config))
+                self.assertEqual(result['colour']['input_space'],bridge)
+                self.assertEqual(result['colour']['working_space'],'project')
+                self.assertEqual(result['colour']['output_space'],output)
+                for pixel in read_png(self.target)[2]:
+                    for actual,wanted in zip(pixel,expected):self.assertLessEqual(abs(actual-wanted),1)
+                self.target.unlink()
     def test_associated_tiff_alpha_and_orientation(self):
         path=self.fixture('associated.tif',tiff(icc=profile(),associated=True,orientation=6))
         result=self.convert_transparent(path);self.assertTrue(result['ok'],result)

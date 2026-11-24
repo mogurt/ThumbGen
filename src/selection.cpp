@@ -92,6 +92,20 @@ bool is_primary(const OIIO::ImageSpec& spec,const Candidate& candidate) {
     };
     return main_name(candidate.group) || (candidate.group=="RGB" && main_name(std::string(spec.get_string_attribute("oiio:subimagename"))));
 }
+static bool unprefixed(const OIIO::ImageSpec& spec,const Candidate& candidate) {
+    return std::all_of(candidate.channels.begin(),candidate.channels.end(),[&](int c){
+        return spec.channelnames[c].find('.')==std::string::npos;
+    });
+}
+bool is_root_rgb(const OIIO::ImageSpec& spec,const Candidate& candidate) {
+    return candidate.kind=="colour" && candidate.group=="RGB" && unprefixed(spec,candidate);
+}
+bool is_auxiliary_aov(const OIIO::ImageSpec& spec,const Candidate& candidate) {
+    static const std::set<std::string> names{"shadow","shadows","ao","ambientocclusion","ambient_occlusion","ambient occlusion","fresnel"};
+    auto name=unprefixed(spec,candidate)?std::string(spec.get_string_attribute("oiio:subimagename")):candidate.group;
+    auto dot=name.rfind('.');if(dot!=std::string::npos)name=name.substr(dot+1);
+    return names.count(lower(name))!=0;
+}
 Json selection_request(const Job& job) {
     const auto& o=job.options;
     Json request{{"part",o.part},{"part_name",o.part_name},{"channels",o.channels},{"strategy",o.selection_policy}};

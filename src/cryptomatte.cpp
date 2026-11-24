@@ -34,6 +34,10 @@ std::vector<std::string> crypto_names(const OIIO::ImageSpec& spec) {
     }
     return {names.begin(),names.end()};
 }
+bool is_object_crypto_family(const std::string& name) {
+    const auto normalized=lower(name);
+    return normalized=="crypto_object" || normalized=="cryptoobject";
+}
 bool crypto_group(const std::vector<std::string>& names,const std::string& group) {
     return std::any_of(names.begin(),names.end(),[&](const auto& name){return group==name || (group.rfind(name,0)==0 && digits(group.substr(name.size())));});
 }

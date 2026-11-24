@@ -167,6 +167,43 @@ class Cryptomatte(unittest.TestCase):
                 result=self.invoke('convert',self.inputs[source],'--visualize','auto','--output',self.output,exit=4)[0]
                 self.assertEqual(result['error']['code'],code)
                 self.assertFalse(self.output.exists())
+    def test_auto_prefers_semantic_object_family_and_combines_parts(self):
+        for source,family in [('object_underscore','CRYPTO_OBJECT'),('object_camel','CryptoObject')]:
+            with self.subTest(source=source):
+                self.output=self.directory/(source+'.png')
+                result=self.invoke('convert',self.inputs[source],'--visualize','auto','--output',self.output)[0]
+                self.assertEqual(result['cryptomatte']['layers'],[family+'00',family+'01'])
+                chosen=result['selection']['chosen']
+                self.assertEqual(chosen['group'],family)
+                self.assertIn('object family',chosen['reason'])
+                self.assertEqual(png(self.output),(2,2,[EXPECTED[0]]*4))
+    def test_auto_rejects_ambiguous_or_malformed_object_families(self):
+        cases=[('mislabeled_object','ambiguous_channels'),('two_objects','ambiguous_channels'),
+               ('object_bad_metadata','cryptomatte_metadata_invalid'),('object_bad_layout','cryptomatte_layout_unsupported')]
+        for source,code in cases:
+            with self.subTest(source=source):
+                result=self.invoke('convert',self.inputs[source],'--visualize','auto','--output',self.output,exit=4)[0]
+                self.assertEqual(result['error']['code'],code)
+                self.assertFalse(self.output.exists())
+    def test_explicit_material_overrides_preferred_or_malformed_object(self):
+        for source in ['object_camel','object_bad_metadata','object_bad_layout']:
+            with self.subTest(source=source):
+                self.output=self.directory/(source+'.png')
+                result=self.invoke('convert',self.inputs[source],'--visualize','cryptomatte','--channels','CryptoMaterial',
+                                   '--output',self.output)[0]
+                self.assertEqual(result['selection']['chosen']['group'],'CryptoMaterial')
+                self.assertEqual(result['cryptomatte']['layers'],['CryptoMaterial00'])
+                self.assertEqual(png(self.output),(2,2,[EXPECTED[7]]*4))
+    def test_auto_keeps_colour_over_semantic_object_family(self):
+        result=self.invoke('convert',self.inputs['beauty_and_families'],'--visualize','auto','--ocio-config','ocio://default',
+                           '--output',self.output)[0]
+        self.assertEqual(result['selection']['chosen']['group'],'RGB')
+        self.assertNotIn('cryptomatte',result)
+    def test_root_rgb_policy_keeps_multiple_families_ambiguous(self):
+        result=self.invoke('convert',self.inputs['object_camel'],'--visualize','auto','--selection-policy','root_rgb',
+                           '--output',self.output,exit=4)[0]
+        self.assertEqual(result['error']['code'],'ambiguous_channels')
+        self.assertFalse(self.output.exists())
     def test_auto_sequence_preserves_first_preview_kind(self):
         jobs=[self.job(name,source,visualization='auto',channels='') for name,source in
               [('first','split'),('changed','with_beauty'),('recovered','split')]]

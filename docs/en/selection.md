@@ -20,6 +20,8 @@ thumbgen convert multipart.exr --output preview.jpg --part-name beauty
 
 `--part N` selects a zero-based index and cannot be combined with `--part-name`. Use [data previews](data-preview.md) for depth, normals and IDs.
 
+With `--visualize auto` and the default selection policy, a unique unprefixed RGB(A) group can resolve ambiguity between parts when all remaining candidates are recognized auxiliary AOVs such as shadows or ambient occlusion. Without a color candidate, the same mode can preview a Cryptomatte family across parts. A unique object family named `crypto_object` or `CryptoObject` takes precedence over other families, regardless of case. Other ambiguities require an explicit part, channel group or Cryptomatte family.
+
 ## Keep sequences consistent
 
 Give related batch jobs the same `sequence_id` to keep their selected layers and channels consistent. A later frame with missing or changed channels reports an error instead of silently selecting another image.

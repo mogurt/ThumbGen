@@ -68,6 +68,10 @@ struct Slice {
 };
 }
 namespace thumbgen::detail {
+void c2_srgb8_to_linear(const void* input,float* output,std::size_t samples){
+    const auto* bytes=static_cast<const unsigned char*>(input);
+    for(std::size_t i=0;i<samples;++i)output[i]=stbir__srgb_uchar_to_linear_float[bytes[i]];
+}
 struct C2Resize::Impl {
     AllocationContext allocation;
     int width,height,channels,current=-1;
@@ -88,10 +92,10 @@ struct C2Resize::Impl {
         stbir_set_edgemodes(&r,STBIR_EDGE_CLAMP,STBIR_EDGE_CLAMP);
         stbir_set_pixel_callbacks(&r,callback,nullptr);stbir_set_user_data(&r,context);
     }
-    static bool plan(int w,int h,int c,const std::vector<std::pair<int,int>>& outputs,size_t& total){
+    static bool plan(int w,int h,int c,const std::vector<std::pair<int,int>>& outputs,size_t& total,size_t limit){
         total=0;
         if(w<=0 || h<=0 || w>65536 || h>65536 || (c!=3 && c!=4) || outputs.empty() || outputs.size()>2)return false;
-        auto account=[&](size_t n){if(n>c2_workspace_limit-total)return false;total+=n;return true;};
+        auto account=[&](size_t n){if(n>limit-total)return false;total+=n;return true;};
         if(!account(sizeof(Impl)+size_t(w)*c*sizeof(float)+4*size_t(w)*sizeof(void*)+4096))return false;
         for(auto [dw,dh]:outputs){
             if(dw<=0 || dh<=0 || dw>w || dh>h)return false;
@@ -102,63 +106,84 @@ struct C2Resize::Impl {
             if(!account(sizeof(Owner)) || !account(query.total))return false;
             const size_t state=sizeof(Slice)+sizeof(Task)+frame_limit;
             const size_t slab=query.mutable_end-query.mutable_begin+15;
-            if(size_t(query.columns)>(c2_workspace_limit-total)/state || !account(size_t(query.columns)*state))return false;
-            if(size_t(query.columns-1)>(c2_workspace_limit-total)/slab || !account(size_t(query.columns-1)*slab))return false;
+            if(size_t(query.columns)>(limit-total)/state || !account(size_t(query.columns)*state))return false;
+            if(size_t(query.columns-1)>(limit-total)/slab || !account(size_t(query.columns-1)*slab))return false;
         }
         return true;
     }
-    Impl(int w,int h,int c,const std::vector<std::pair<int,int>>& outputs):width(w),height(h),channels(c){
+    Impl(int w,int h,int c,const std::vector<std::pair<int,int>>& outputs,size_t limit,
+        std::vector<std::exception_ptr>* output_errors):width(w),height(h),channels(c){
         require(w>0 && h>0 && (c==3 || c==4) && !outputs.empty() && outputs.size()<=2);
-        size_t planned=0;if(!plan(w,h,c,outputs,planned))throw C2PlanLimit();
+        require(!output_errors || output_errors->size()==outputs.size());
+        size_t planned=0;if(!plan(w,h,c,outputs,planned,limit))throw C2PlanLimit();
         allocation.owner=this;
         auto account=[&](size_t n){if(n>planned-bytes)throw C2ContractError("C2 allocation exceeds admitted workspace");bytes+=n;};
         // Pointer-vector capacity and allocator overhead are reserved up front;
         // pinned geometry has at most one slice per input column, two outputs.
         account(sizeof(Impl)+size_t(w)*c*sizeof(float)+4*size_t(w)*sizeof(void*)+4096);
         row.resize(size_t(w)*c);
+        owners.resize(outputs.size());
         for(size_t k=0;k<outputs.size();++k){
-            auto [dw,dh]=outputs[k];require(dw>0 && dh>0 && dw<=w && dh<=h);
-            account(sizeof(Owner));auto owner=std::make_unique<Owner>();auto& r=owner->resize;
-            setup(r,w,h,c,dw,dh,row.data(),&allocation);
-            allocation.available=planned-bytes;
-            if(!stbir_build_samplers(&r)){if(allocation.limited)throw C2PlanLimit();throw std::bad_alloc();}
-            require(r.splits==1 && r.samplers->num_column_slices<=w);
-            auto* info=r.samplers;
-            // Input callbacks supply the row; zero stride avoids forming a
-            // fictitious full-image pointer from the one-row allocation.
-            info->input_stride_bytes=0;
-            account(info->alloced_total);
-            const auto initial=*info->split_info;
-            auto* begin=static_cast<unsigned char*>(initial.decode_buffer_alloc);
-            auto* end=reinterpret_cast<unsigned char*>(info->horizontal.contributors);
-            require(end>begin);
-            for(int b=0;b<info->num_column_slices;++b){
-                account(sizeof(Slice)+sizeof(Task)+frame_limit+(b?size_t(end-begin)+15:0));
-                auto slice=std::make_unique<Slice>();slice->info=info;slice->column=b;slice->output=k;slice->state=initial;
-                if(b){
-                    slice->workspace.resize(size_t(end-begin)+15);
-                    auto* base=reinterpret_cast<unsigned char*>((reinterpret_cast<uintptr_t>(slice->workspace.data())+15)&~uintptr_t(15));
-                    auto rebase=[&](void* p)->void*{auto* q=static_cast<unsigned char*>(p);require(q>=begin && q<end);return base+(q-begin);};
-                    slice->state.decode_buffer_alloc=rebase(initial.decode_buffer_alloc);
-                    slice->state.ring_buffer_alloc=rebase(initial.ring_buffer_alloc);
-                    slice->state.vertical_buffer_alloc=rebase(initial.vertical_buffer_alloc);
+            if(output_errors && (*output_errors)[k])continue;
+            const auto used=bytes,slice_count=slices.size();
+            try {
+#ifdef THUMBGEN_OUTPUT_FAULT_TESTS
+                output_fault_index(k);
+#endif
+                auto [dw,dh]=outputs[k];require(dw>0 && dh>0 && dw<=w && dh<=h);
+                account(sizeof(Owner));auto owner=std::make_unique<Owner>();auto& r=owner->resize;
+                setup(r,w,h,c,dw,dh,row.data(),&allocation);
+                allocation.available=planned-bytes;
+                if(!stbir_build_samplers(&r)){if(allocation.limited)throw C2PlanLimit();throw std::bad_alloc();}
+                require(r.splits==1 && r.samplers->num_column_slices<=w);
+                auto* info=r.samplers;
+                // Callbacks supply a single row without advancing an input pointer.
+                info->input_stride_bytes=0;
+                account(info->alloced_total);
+                const auto initial=*info->split_info;
+                auto* begin=static_cast<unsigned char*>(initial.decode_buffer_alloc);
+                auto* end=reinterpret_cast<unsigned char*>(info->horizontal.contributors);
+                require(end>begin);
+                for(int b=0;b<info->num_column_slices;++b){
+                    account(sizeof(Slice)+sizeof(Task)+frame_limit+(b?size_t(end-begin)+15:0));
+                    auto slice=std::make_unique<Slice>();slice->info=info;slice->column=b;slice->output=k;slice->state=initial;
+                    if(b){
+                        slice->workspace.resize(size_t(end-begin)+15);
+                        auto* base=reinterpret_cast<unsigned char*>((reinterpret_cast<uintptr_t>(slice->workspace.data())+15)&~uintptr_t(15));
+                        auto rebase=[&](void* p)->void*{auto* q=static_cast<unsigned char*>(p);require(q>=begin && q<end);return base+(q-begin);};
+                        slice->state.decode_buffer_alloc=rebase(initial.decode_buffer_alloc);
+                        slice->state.ring_buffer_alloc=rebase(initial.ring_buffer_alloc);
+                        slice->state.vertical_buffer_alloc=rebase(initial.vertical_buffer_alloc);
+                    }
+                    stbir__4K_alias_skew_buffers(info,&slice->state);
+                    slices.push_back(std::move(slice));
                 }
-                stbir__4K_alias_skew_buffers(info,&slice->state);
-                slices.push_back(std::move(slice));
+                owners[k]=std::move(owner);
+            } catch(const std::bad_alloc&) {
+                if(!output_errors)throw;
+                slices.resize(slice_count);
+                bytes=used;
+                (*output_errors)[k]=std::current_exception();
             }
-            owners.push_back(std::move(owner));
         }
         require(owners.capacity()*sizeof(owners[0])+slices.capacity()*sizeof(slices[0])<=4*size_t(w)*sizeof(void*)+4096);
-        require(bytes==planned);
+        require(bytes==planned || std::any_of(owners.begin(),owners.end(),[](const auto& owner){return !owner;}));
     }
 };
-bool C2Resize::workspace_plan(int w,int h,int c,const std::vector<std::pair<int,int>>& outputs,size_t& bytes){return Impl::plan(w,h,c,outputs,bytes);}
-C2Resize::C2Resize(int w,int h,int c,const std::vector<std::pair<int,int>>& outputs):impl_(std::make_unique<Impl>(w,h,c,outputs)){}
+bool C2Resize::workspace_plan(int w,int h,int c,const std::vector<std::pair<int,int>>& outputs,size_t& bytes,size_t limit){
+    return Impl::plan(w,h,c,outputs,bytes,limit);
+}
+C2Resize::C2Resize(int w,int h,int c,const std::vector<std::pair<int,int>>& outputs,size_t limit,
+    std::vector<std::exception_ptr>* output_errors):
+    impl_(std::make_unique<Impl>(w,h,c,outputs,limit,output_errors)){}
 C2Resize::~C2Resize()=default;
 size_t C2Resize::workspace_bytes()const{return impl_->bytes;}
 std::vector<double> C2Resize::execute(const std::function<void(int,float*)>& read,const std::vector<float*>& outputs){
     auto& p=*impl_;require(!p.used && outputs.size()==p.owners.size());p.used=true;
-    for(size_t k=0;k<outputs.size();++k){require(outputs[k]!=nullptr);p.owners[k]->resize.samplers->output_data=outputs[k];}
+    for(size_t k=0;k<outputs.size();++k)if(p.owners[k]){
+        require(outputs[k]!=nullptr);
+        p.owners[k]->resize.samplers->output_data=outputs[k];
+    }
     std::vector<double> times(outputs.size(),0);
     for(auto& s:p.slices){
         auto* part=s->info->column_slices+s->column;

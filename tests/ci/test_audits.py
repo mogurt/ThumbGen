@@ -97,7 +97,7 @@ class Audits(unittest.TestCase):
             reply.mkdir(parents=True)
             expected = {'thumbgen': 'EXECUTABLE', 'thumbgen_core': 'STATIC_LIBRARY',
                         'thumbgen_runtime': 'STATIC_LIBRARY', 'thumbgen_schedule': 'STATIC_LIBRARY',
-                        'thumbgen_skcms': 'STATIC_LIBRARY'}
+                        'thumbgen_skcms': 'STATIC_LIBRARY', 'thumbgen_c2': 'STATIC_LIBRARY'}
             targets = []
             for name, kind in expected.items():
                 (reply / (name + '.json')).write_text(json.dumps(dict(name=name, type=kind)))
@@ -111,11 +111,12 @@ class Audits(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, 'scope'):
                     ci.audit_release(directory)
             (reply / 'model.json').write_text(json.dumps(dict(configurations=[dict(targets=targets)])))
-            (reply / 'thumbgen_skcms.json').write_text(json.dumps(dict(name='thumbgen_skcms', type='SHARED_LIBRARY')))
+            c2_target = reply / 'thumbgen_c2.json'
+            c2_target.write_text(json.dumps(dict(name='thumbgen_c2', type='SHARED_LIBRARY')))
             with self.assertRaisesRegex(RuntimeError, 'scope'):
                 ci.audit_release(directory)
-            (reply / 'thumbgen_skcms.json').write_text(json.dumps(dict(name='thumbgen_skcms', type='STATIC_LIBRARY')))
-            (reply / 'model.json').write_text(json.dumps(dict(configurations=[dict(targets=targets + targets[:1])])))
+            c2_target.write_text(json.dumps(dict(name='thumbgen_c2', type='STATIC_LIBRARY')))
+            (reply / 'model.json').write_text(json.dumps(dict(configurations=[dict(targets=targets + targets[-1:])])))
             with self.assertRaisesRegex(RuntimeError, 'scope'):
                 ci.audit_release(directory)
             (reply / 'model.json').write_text(json.dumps(dict(configurations=[dict(targets=targets)])))

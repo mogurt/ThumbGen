@@ -123,6 +123,59 @@ class Aov(unittest.TestCase):
     def test_crypto_metadata_refused(self):
         self.assertEqual(self.convert('crypto.exr','id','Object00.R',exit=4)[0]['error']['code'],'cryptomatte_requires_visualization')
         self.assertFalse(self.output.exists())
+    def test_auto_selects_unprefixed_rgb_among_named_aovs_in_either_part_order(self):
+        for source,part in [('main-first.exr',0),('main-last.exr',2)]:
+            with self.subTest(source=source):
+                self.output=self.directory/(source+'.png')
+                result=self.invoke('convert',self.inputs[source],'--visualize','auto','--ocio-config','ocio://default',
+                                   '--output',self.output)[0]
+                chosen=result['selection']['chosen']
+                self.assertEqual((chosen['part'],chosen['part_name'],chosen['group']),(part,'main','RGB'))
+                self.assertEqual(chosen['channels'],['R','G','B','A'])
+                self.assertIn('unprefixed RGB',chosen['reason'])
+                self.assertNotIn('visualization',result)
+        self.assertEqual((self.directory/'main-first.exr.png').read_bytes(),self.output.read_bytes())
+    def test_auto_keeps_single_part_root_rgb_with_named_light_groups(self):
+        result=self.invoke('convert',self.inputs['root-with-light-groups.exr'],'--visualize','auto','--ocio-config','ocio://default',
+                           '--output',self.output)[0]
+        selection=result['selection']
+        self.assertEqual({c['group'] for c in selection['candidates']},{'RGB','diffuse_direct'})
+        self.assertEqual(selection['chosen']['group'],'RGB')
+        self.assertEqual(selection['chosen']['channels'],['R','G','B'])
+    def test_auto_rejects_other_colour_views_and_prefixed_rgb(self):
+        for source,code in [('two-views.exr','ambiguous_channels'),('other-view.exr','ambiguous_parts'),
+                            ('two-roots.exr','ambiguous_parts'),('prefixed-rgb.exr','ambiguous_parts')]:
+            with self.subTest(source=source):
+                result=self.invoke('convert',self.inputs[source],'--visualize','auto','--output',self.output,exit=4)[0]
+                self.assertEqual(result['error']['code'],code)
+                self.assertFalse(self.output.exists())
+    def test_auto_keeps_primary_and_explicit_selection_priorities(self):
+        colour=self.invoke('convert',self.inputs['main-first.exr'],'--output',self.output,exit=4)[0]
+        self.assertEqual(colour['error']['code'],'ambiguous_parts')
+        for source,options,part,group in [
+            ('root-with-light-groups.exr',['--selection-policy','root_rgb'],'main','RGB'),
+            ('root-with-light-groups.exr',['--part','0'],'main','RGB'),
+            ('main-first.exr',['--part-name','sHaDoW'],'sHaDoW','RGB'),
+            ('main-first.exr',['--channels','Fresnel'],'passes','Fresnel'),
+            ('root-with-primary.exr',[],'main','Beauty'),
+            ('named-primary.exr',[],'Beauty','RGB'),
+        ]:
+            with self.subTest(source=source,options=options):
+                result=self.invoke('convert',self.inputs[source],'--visualize','auto','--ocio-config','ocio://default',
+                                   '--output',self.output,*options)[0]
+                chosen=result['selection']['chosen']
+                self.assertEqual((chosen['part_name'],chosen['group']),(part,group))
+                self.assertEqual(chosen['primary'],part=='Beauty' or group=='Beauty')
+                self.output.unlink()
+    def test_auto_sequence_reuses_a_named_part_across_reordering_and_new_primary(self):
+        jobs=[self.job(name,name+'.exr',{'visualization':'auto','ocio_config':'ocio://default'},'main')
+              for name in ['main-first','main-last','named-primary']]
+        results={r['id']:r['selection'] for r in self.batch(jobs) if r['type']=='result'}
+        self.assertEqual(results['main-first']['lock_status'],'created')
+        for name,part in [('main-last',2),('named-primary',0)]:
+            chosen=results[name]['chosen']
+            self.assertEqual((chosen['part'],chosen['part_name']),(part,'main'))
+            self.assertEqual(results[name]['lock_status'],'reused')
     def test_required_and_incompatible_options(self):
         cases=[('depth','Z',[]),('vector','motion',[]),('id_rgb','matID',[]),('id','object_id',['--data-range','0,1']),
                ('normal','N',['--data-range','1,1']),('normal','N',['--data-range','0,nan']),

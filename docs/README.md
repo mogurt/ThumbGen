@@ -7,6 +7,7 @@
 | [快速上手](getting-started.md) | 第一次运行与常用操作 |
 | [安装](installation.md) | 程序目录与运行环境 |
 | [命令参考](cli.md) | 尺寸、格式、背景与资源设置 |
+| [大图预览](large-previews.md) | 有界解码布局、内存预算与回退 |
 | [图层与序列](selection.md) | 选择主画面并保持连续帧一致 |
 | [色彩管理](color-cms.md) | OCIO、ICC 与透明度 |
 | [数据预览](data-preview.md) | 深度、法线、矢量与 ID |

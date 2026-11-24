@@ -135,14 +135,19 @@ int main(int argc,char** argv){
             if(c.name=="single-ok" || c.name=="dual-ok")need(result["ok"]==true,result.dump());
             std::size_t last_row=0;bool saw_row=false;for(const auto& e:trace)if(e["phase"]=="read"){auto y=e["index"].get<std::size_t>();need(!saw_row || y>last_row,"source repeated or rewound");last_row=y;saw_row=true;}
             const bool stream=result.value("colour",Json::object()).value("processing",std::string{})=="integer-linear-stream-v1";
-            if(c.count==2)need(!stream && c2_allocations==0 && !plan["footprint"].value("c2_stream",false),"dual must fall back before allocation");
+            const bool bounded=plan.is_object() && !plan["footprint"]["bounded_read"].is_null();
+            if(c.name=="single-skip-exists")need(!stream && !bounded && c2_allocations==0,"existing output decoded");
+            else need(c2_allocations==1 && (stream!=bounded),"expected one admitted row allocation");
+            if(c.count==2)need(bounded && !stream,"dual must use the bounded reader");
 #ifdef THUMBGEN_EXPECT_C2
             if(c.count==1 && c.name!="single-skip-exists")need(stream && c2_allocations==1,"single did not exercise C2");
 #else
-            need(!stream && c2_allocations==0,"reference unexpectedly streamed");
+            need(!stream,"opt-in stream processing enabled");
 #endif
-            if(c.name=="dual-first-oom" || c.name=="dual-first-null")need(result["status"]=="partial" && result["outputs"][1]["status"]=="success",result.dump());
-            if(c.name=="dual-second-oom" || c.name=="dual-second-null")need(result["status"]=="partial" && result["outputs"][0]["status"]=="success",result.dump());
+            if(c.name=="dual-first-oom" || c.name=="dual-first-null" || c.name=="dual-first-sampler-null" || c.name=="dual-first-resize")
+                need(result["status"]=="partial" && result["outputs"][1]["status"]=="success",result.dump());
+            if(c.name=="dual-second-oom" || c.name=="dual-second-null" || c.name=="dual-second-sampler-null" || c.name=="dual-second-resize")
+                need(result["status"]=="partial" && result["outputs"][0]["status"]=="success",result.dump());
             if(c.late_read)need(result["error"]["code"]=="decode_failed" && result["error"]["stage"]=="decode" && result["outputs"].empty(),result.dump());
             if(c.phase=="invariant")need(result["error"]["code"]=="conversion_failed" && result["error"]["stage"]=="decode" && result["outputs"].empty(),"invariant error masked by output policy: "+result.dump());
             Json files=Json::array();for(const auto& o:job.outputs)files.push_back(fs::exists(fs::u8path(o.path))?Json(o.path):Json(nullptr));

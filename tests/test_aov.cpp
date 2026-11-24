@@ -17,6 +17,41 @@ template<class T> static void write(const fs::path& path,OIIO::ImageSpec spec,OI
     require(output->open(path.u8string(),spec),output->geterror());
     require(output->write_image(type,pixels.data()),output->geterror());require(output->close(),output->geterror());
 }
+static OIIO::ImageSpec colour_part(const char* name,std::vector<std::string> channels) {
+    OIIO::ImageSpec spec(4,2,int(channels.size()),OIIO::TypeDesc::FLOAT);
+    spec.channelnames=std::move(channels);
+    spec.attribute("oiio:subimagename",name);
+    return spec;
+}
+static void selection_fixtures(const fs::path& root,Json& files) {
+    const auto rgb=colour_part("main",{"R","G","B","A","Z","AO.R","AO.G","AO.B",
+        "diffuse_indirect.R","diffuse_indirect.G","diffuse_indirect.B"});
+    const auto shadow=colour_part("sHaDoW",{"R","G","B"});
+    const auto passes=colour_part("passes",{"Fresnel.R","Fresnel.G","Fresnel.B","Normal.R","Normal.G","Normal.B"});
+    const auto alternate=colour_part("alternate",{"R","G","B"});
+    const auto beauty=colour_part("Beauty",{"R","G","B"});
+    auto save=[&](const char* name,std::vector<OIIO::ImageSpec> parts) {
+        auto path=(root/name).u8string();
+        auto output=OIIO::ImageOutput::create(path);require(bool(output),OIIO::geterror());
+        require(output->open(path,int(parts.size()),parts.data()),output->geterror());
+        for(std::size_t part=0;part<parts.size();++part) {
+            if(part)require(output->open(path,parts[part],OIIO::ImageOutput::AppendSubimage),output->geterror());
+            std::vector<float> pixels(8*parts[part].nchannels,.5f);
+            require(output->write_image(OIIO::TypeDesc::FLOAT,pixels.data()),output->geterror());
+        }
+        require(output->close(),output->geterror());
+        files[name]=path;
+    };
+    save("main-first.exr",{rgb,shadow,passes});
+    save("main-last.exr",{passes,shadow,rgb});
+    save("named-primary.exr",{rgb,shadow,beauty});
+    save("two-roots.exr",{rgb,alternate,shadow});
+    save("root-with-light-groups.exr",{colour_part("main",{"R","G","B","diffuse_direct.R","diffuse_direct.G","diffuse_direct.B"})});
+    save("root-with-primary.exr",{colour_part("main",{"R","G","B","Beauty.R","Beauty.G","Beauty.B"})});
+    save("other-view.exr",{rgb,colour_part("views",{"ShadowCamera.R","ShadowCamera.G","ShadowCamera.B"})});
+    save("two-views.exr",{colour_part("views",{"left.R","left.G","left.B","right.R","right.G","right.B"})});
+    save("prefixed-rgb.exr",{colour_part("main",{"RGB.R","RGB.G","RGB.B"}),shadow});
+}
 static Json fixtures(const fs::path& root) {
     require(fs::create_directory(root),"fixture directory exists");
     OIIO::ImageSpec depth(4,2,1,OIIO::TypeDesc::FLOAT);depth.channelnames={"Z"};
@@ -55,7 +90,9 @@ static Json fixtures(const fs::path& root) {
     write(root/"labels.exr",labels,OIIO::TypeDesc::FLOAT,std::vector<float>{1,0,0,0,1,0,0,0,1,.5f,.25f,.75f,1,0,0,0,1,0,0,0,1,.5f,.25f,.75f});
     labels.set_format(OIIO::TypeDesc::UINT8);labels.channelnames={"R","G","B"};
     write(root/"labels.png",labels,OIIO::TypeDesc::UINT8,std::vector<std::uint8_t>{255,0,0,0,255,0,0,0,255,128,64,191,255,0,0,0,255,0,0,0,255,128,64,191});
-    Json result;for(const char* name:{"depth.exr","depthgood.exr","depth16.tif","normal.exr","vector.exr","ids.exr","idsdouble.tif","idsfloat.exr","crypto.exr","window.exr","idwindow.exr","oriented.tif","labels.exr","labels.png"})result[name]=(root/name).u8string();return result;
+    Json result;for(const char* name:{"depth.exr","depthgood.exr","depth16.tif","normal.exr","vector.exr","ids.exr","idsdouble.tif","idsfloat.exr","crypto.exr","window.exr","idwindow.exr","oriented.tif","labels.exr","labels.png"})result[name]=(root/name).u8string();
+    selection_fixtures(root,result);
+    return result;
 }
 static std::vector<unsigned char> read(const fs::path& path,int width,int height) {
     auto input=OIIO::ImageInput::open(path.u8string());require(bool(input),OIIO::geterror());
