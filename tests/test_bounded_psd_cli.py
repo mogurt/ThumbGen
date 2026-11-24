@@ -214,10 +214,12 @@ class CLI(unittest.TestCase):
         width, height, depth = 4096, 2048, 16
         source = self.root / "bounded.psd"
         write_stress_psd(source, width, height, depth, PREDICTED_ZIP, True)
-        job = self.job("bounded", source, [(173, 131), (64, 64)], max_decode_mib=24)
-        result = self.batch([job], budget=288)[0]
+        # The two samplers and native/float blocks fit this limit while a
+        # full RGBA float raster and its packed copy need 256 MiB.
+        job = self.job("bounded", source, [(173, 131), (64, 64)], max_decode_mib=72)
+        result = self.batch([job], budget=336)[0]
         images = self.output_pixels(result, job, (width, height))
-        self.assertLessEqual(result["execution"]["admission_mib"], 24, result)
+        self.assertLessEqual(result["execution"]["admission_mib"], 72, result)
         self.assertEqual(result["decoded_mib"], width * height * 8 / (1024 * 1024), result)
         for image, request in zip(images, job["outputs"]):
             ow, oh = fitted(width, height, request["size"])

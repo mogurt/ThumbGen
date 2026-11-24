@@ -8,7 +8,7 @@ ThumbGen makes thumbnails from standard images and complex EXRs, fast. Decode on
 
 Fast, EXR-aware previews for production pipelines.
 
-`0.1.3` · [Apache-2.0](LICENSE)
+`0.1.4` · [Apache-2.0](LICENSE)
 
 ## Where it fits
 
@@ -66,7 +66,7 @@ These are actual ThumbGen outputs from publicly redistributable EXR samples. [Im
 
 Available for Windows x64 and Linux x64, including CentOS 7.9 and Rocky Linux 9 environments.
 
-Read OpenEXR, PNG, JPEG, TIFF, WebP, TGA, BMP, Radiance HDR and DPX. Write JPEG, PNG and lossy WebP. See the [large-preview guide](docs/en/large-previews.md) for bounded layouts and budget settings. Run `thumbgen capabilities --json` to see the formats available in your copy.
+Read OpenEXR, PNG, JPEG, TIFF, WebP, TGA, BMP, Radiance HDR, DPX and supported PSD composites. Write JPEG, PNG and lossy WebP. See the [large-preview guide](docs/en/large-previews.md) for bounded layouts and budget settings. Run `thumbgen capabilities --json` to see the formats available in your copy.
 
 ## Quick start
 

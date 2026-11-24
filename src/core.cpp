@@ -12,6 +12,7 @@
 #include "png_rows.h"
 #include "tiff_rows.h"
 #include "other_rows.h"
+#include "psd_rows.h"
 #ifdef THUMBGEN_C2_PNG_STREAM
 #include "c2_memory.h"
 #include "c2_png_metadata.h"
@@ -152,6 +153,10 @@ static Json spec_json(const OIIO::ImageSpec& s, int part) {
         {"data_window",{s.x,s.y,s.width,s.height}},
         {"display_window",{s.full_x,s.full_y,s.full_width,s.full_height}},
         {"colour_space",s.get_string_attribute("oiio:ColorSpace")}};
+}
+static const char* psd_compression_name(unsigned compression) {
+    static constexpr const char* names[]={"raw","rle","zip","zip_prediction"};
+    return names[compression];
 }
 static Json candidates_json(const OIIO::ImageSpec& spec,int part) {
     Json result=Json::array();
@@ -332,11 +337,19 @@ Json Engine::inspect(const std::string& input) {
         const auto jpeg=detail::probe_jpeg(input,unlimited);
         std::error_code ec;
         const auto bytes=jpeg?0:fs::file_size(fs::u8path(input),ec);
-        if(!jpeg && !ec)
-            other=detail::probe_other_rows(input,bytes,unlimited,OIIO::ImageSpec{},std::numeric_limits<std::size_t>::max());
-        const auto* spec=jpeg?&jpeg->spec:other && other->spec?&*other->spec:nullptr;
+        std::optional<detail::PsdProbe> psd;
+        if(!jpeg && !ec) {
+            psd=detail::probe_psd_rows(input,bytes,unlimited,std::numeric_limits<std::size_t>::max(),false);
+            if(!psd)
+                other=detail::probe_other_rows(input,bytes,unlimited,OIIO::ImageSpec{},std::numeric_limits<std::size_t>::max());
+        }
+        // Raw and RLE still expose their layers through the plugin. ZIP
+        // composite metadata is available without opening an OIIO decoder.
+        const auto* spec=jpeg?&jpeg->spec:psd && psd->compression>=2?&psd->spec:
+            other && other->spec?&*other->spec:nullptr;
         if(spec) {
             auto part=spec_json(*spec,0);
+            if(psd)part["compression"]=psd_compression_name(psd->compression);
             part["candidates"]=candidates_json(*spec,0);
             result["parts"]=Json::array({std::move(part)});result["ok"]=true;
             return result;
@@ -422,21 +435,26 @@ Json Engine::convert(const Job& job) {
         bool container_icc=false;
         std::optional<detail::JpegProbe> jpeg;
         std::optional<detail::OtherRowsProbe> other;
+        std::optional<detail::PsdProbe> psd;
         std::string probed_format;
         try {
+            const bool auto_input=!data && job.options.input_space=="auto";
+            const auto limit=auto_input?detail::icc_profile_limit:std::numeric_limits<std::size_t>::max();
+            const bool psd_composite=!data && job.options.part_name.empty() &&
+                (job.options.part==0 || (job.options.part<0 && job.options.channels.empty()));
             // OIIO opens progressive JPEGs by starting the decompressor.
             // Keep that allocation out of metadata preparation.
-            const auto limit=!data && job.options.input_space=="auto"?detail::icc_profile_limit:std::numeric_limits<std::size_t>::max();
             jpeg=detail::probe_jpeg(job.input,decode_budget,limit);
             if(jpeg)probed_format="jpeg";
-            else {
-                if(detail::preflight_png_header(source_path,decode_budget))probed_format="png";
-                else if(detail::preflight_tiff_header(source_path,decode_budget))probed_format="tiff";
-                else if(detail::preflight_exr_header(job.input))probed_format="openexr";
-                else if((other=detail::probe_other_rows(job.input,stamp.size,decode_budget,read_config,limit)))
-                    probed_format=other->format;
-            }
-            container_icc=!data && (jpeg?jpeg->has_icc:detail::container_has_icc(job.input,limit));
+            else if(detail::preflight_png_header(source_path,decode_budget))probed_format="png";
+            else if(detail::preflight_tiff_header(source_path,decode_budget))probed_format="tiff";
+            else if(detail::preflight_exr_header(job.input))probed_format="openexr";
+            else if(psd_composite &&
+                    (psd=detail::probe_psd_rows(job.input,stamp.size,decode_budget,limit,auto_input)))
+                probed_format="psd";
+            else if((other=detail::probe_other_rows(job.input,stamp.size,decode_budget,read_config,limit)))
+                probed_format=other->format;
+            container_icc=!data && (psd?psd->has_icc:jpeg?jpeg->has_icc:detail::container_has_icc(job.input,limit));
         }
         catch(const detail::CmsFailure& error){throw Failure("colour_input_unsupported",error.what());}
         OIIO::ImageInput::unique_ptr in;
@@ -453,14 +471,26 @@ Json Engine::convert(const Job& job) {
             if(!in){auto error=OIIO::geterror();verify_source();throw Failure("open_failed",error);}
         };
         const bool deferred_other=other && other->spec.has_value();
-        if(!jpeg && !deferred_other)open_input();
-        const std::string input_format=jpeg?"jpeg":deferred_other?other->format:in->format_name();
+        std::optional<OIIO::ParamValue> psd_profile;
+        if(psd) {
+            // Selection snapshots copy their ImageSpecs. Keep the PSD
+            // profile out of those snapshots and transfer it after selection.
+            auto& attributes=psd->spec.extra_attribs;
+            auto profile=attributes.find(OIIO::string_view("ICCProfile"));
+            if(profile!=attributes.end()) {
+                psd_profile.emplace(std::move(*profile));
+                attributes.erase(profile);
+            }
+        }
+        const auto* deferred_spec=psd?&psd->spec:jpeg?&jpeg->spec:deferred_other?&*other->spec:nullptr;
+        if(!deferred_spec)open_input();
+        const std::string input_format=deferred_spec?probed_format:in->format_name();
         const bool can_auto_crypto=detail::auto_cryptomatte_allowed(job.options) && input_format=="openexr";
         const bool use_auto_exr_preferences=can_auto_crypto && job.options.selection_policy=="primary";
 #if defined(THUMBGEN_EXR_PROFILE) && THUMBGEN_EXR_PROFILE
         profile.enable(input_format=="openexr");
 #endif
-        if(!data && detail::container_separated_colour(job.input))
+        if(!data && !psd && detail::container_separated_colour(job.input))
             throw Failure("colour_input_unsupported","CMYK/separated input requires an external profile-aware conversion to RGB");
         stage="selection";
         OIIO::ImageSpec spec;
@@ -492,9 +522,9 @@ Json Engine::convert(const Job& job) {
         }
         for(int p=0;;++p) {
             OIIO::ImageSpec scanned;
-            if(jpeg || deferred_other) {
+            if(deferred_spec) {
                 if(p!=0)break;
-                scanned=jpeg?jpeg->spec:*other->spec;
+                scanned=*deferred_spec;
             } else if(can_auto_crypto?std::size_t(p)>=crypto_parts.size():!in->seek_subimage(p,0,scanned))break;
             const auto& candidate=can_auto_crypto?crypto_parts[p]:scanned;
             if(!data && job.options.input_space=="auto" && p>0 && (container_icc || candidate.find_attribute("ICCProfile")))
@@ -632,6 +662,7 @@ Json Engine::convert(const Job& job) {
             r["selection"]["lock_status"]="created";r["selection"]["locked"]=chosen_key;
         }
         r["source"]=spec_json(spec,part);
+        if(psd)r["source"]["compression"]=psd_compression_name(psd->compression);
         if(deep)r["deep"]={{"mode","flatten"},{"policy","deep-colour-sweep-v1"},{"mapping",deep->identity()},
             {"sample_limit",job.options.deep_samples_per_pixel},{"buffer_limit_bytes",job.options.max_decode_mib*1024ULL*1024ULL},
             {"samples",0},{"chunks",0},{"peak_buffer_bytes",0}};
@@ -641,6 +672,7 @@ Json Engine::convert(const Job& job) {
         // unselected candidates before admission and never propagate a source
         // profile onto the CMS/OCIO-converted RGB pixels.
         all_choices.clear();choices.clear();
+        if(psd_profile)spec.extra_attribs.push_back(std::move(*psd_profile));
         bool all_skip=!job.outputs.empty();
         for(const auto& output:job.outputs) {
             if(output.existing!="skip"){all_skip=false;break;}
@@ -662,7 +694,7 @@ Json Engine::convert(const Job& job) {
             raw_cmyk.erase_attribute("ICCProfile");
             input_plan=detail::channel_plan(raw_cmyk,{0,1,2,3},false);
         }
-        const bool icc_format=input_format=="png" || input_format=="jpeg" || input_format=="tiff" || input_format=="webp";
+        const bool icc_format=psd || input_format=="png" || input_format=="jpeg" || input_format=="tiff" || input_format=="webp";
         const bool embedded_icc=container_icc || spec.find_attribute("ICCProfile");
         const bool use_icc=!data && !deep && icc_format && job.options.input_space=="auto" && embedded_icc;
         if(crypto)input_plan.pixel_bytes=detail::crypto_source_pixel_bytes(*crypto_layout);
@@ -739,6 +771,11 @@ Json Engine::convert(const Job& job) {
              (spec.nchannels==2 && spec.alpha_channel==1 && channels==std::vector<int>({0,0,0,1})));
         auto source_codec_bytes=jpeg?jpeg->codec_bytes:other?other->fallback_codec_bytes:
             png.fallback_codec_bytes+tiff.fallback_codec_bytes;
+        if(psd) {
+            source_codec_bytes=detail::checked_bytes_add(psd->read.retained_bytes,psd->read.codec_bytes);
+            source_codec_bytes=detail::checked_bytes_add(source_codec_bytes,
+                detail::checked_bytes_mul(spec.width,psd->read.pixel_bytes));
+        }
 #ifdef THUMBGEN_C2_PNG_STREAM
         // A second output must allocate only after the first finishes/commits.
         // Its streaming consumer would need retired source rows: fall back
@@ -779,6 +816,7 @@ Json Engine::convert(const Job& job) {
                 else if(png.read.open && (rgb || native_gray))candidate=&png.read;
                 else if(tiff.read.open && (rgb || native_gray))candidate=&tiff.read;
                 else if(deferred_other && rgb)candidate=&other->read;
+                else if(psd && rgb && colour_plan.bounded_options)candidate=&psd->read;
             }
             c2_sizes.clear();
             if(candidate && candidate->open) {
@@ -805,8 +843,11 @@ Json Engine::convert(const Job& job) {
             // The complete-image plugin retains late APP entries during
             // multiscan decode. Reserve a node for every possible segment.
             if(jpeg && jpeg->multiscan)source_codec_bytes=detail::checked_bytes_add(source_codec_bytes,detail::checked_bytes_mul(stamp.size,32));
-            const auto pixel_bytes=integer_linear?channels.size()*(colour_plan.sample_bytes+2*sizeof(float)):
+            auto pixel_bytes=integer_linear?channels.size()*(colour_plan.sample_bytes+2*sizeof(float)):
                 fast_srgb?channels.size():input_plan.pixel_bytes;
+            // PSD's reference route holds the float raster and its packed
+            // colour copy. Reorientation may briefly retain a third raster.
+            if(psd)pixel_bytes*=orientation==1?2:3;
             const auto full_source=sampled?sampled->peak_bytes:
                 detail::checked_bytes_mul(std::uint64_t(spec.width)*spec.height,pixel_bytes);
             if(detail::checked_bytes_add(detail::checked_bytes_add(full_source,source_codec_bytes),cms_bytes)>decode_budget)
@@ -1232,11 +1273,26 @@ Json Engine::convert(const Job& job) {
                 in->close();
                 try{detail::read_cmyk_jpeg(job.input,spec.width,spec.height,colour_pixels);read_ok=true;}
                 catch(const detail::CmsFailure& error){throw Failure("colour_input_unsupported",error.what());}
+            } else if(psd) {
+                try {
+                    const auto native=psd->read.open();
+                    const auto row_samples=spec.width*spec.nchannels;
+                    std::vector<unsigned char> row(std::size_t(spec.width)*psd->read.pixel_bytes);
+                    for(int y=0;y<spec.height;++y) {
+                        detail::output_fault("read",std::size_t(y));
+                        native->read(y,y+1,row.data());
+                        if(!OIIO::convert_pixel_values(spec.format,row.data(),OIIO::TypeDesc::FLOAT,
+                                colour_pixels+std::size_t(y)*row_samples,row_samples))
+                            throw Failure("decode_failed","cannot convert native PSD row to float");
+                    }
+                    native->finish();
+                    read_ok=true;
+                } catch(...) {verify_source();throw;}
             } else read_ok=detail::read_selected(*in,cmyk?raw_cmyk:spec,part,input_plan,false,colour_pixels);
             TG_EXR_TOCK(read_tick,"exr_read_selected_ms");
             const std::string read_error=read_ok?std::string{}:in->geterror();
             TG_EXR_TICK(close_tick);
-            in->close();
+            if(in)in->close();
             TG_EXR_TOCK(close_tick,"exr_input_close_ms");
             if(impl_->observer)impl_->observer("decoded",job);
             verify_source();

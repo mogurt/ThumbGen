@@ -8,7 +8,7 @@ ThumbGen 为普通图片和复杂 EXR 快速生成缩略图。一次解码输出
 
 为制作管线提供快速、懂 EXR 的预览能力。
 
-`0.1.3` · [Apache-2.0](LICENSE)
+`0.1.4` · [Apache-2.0](LICENSE)
 
 ## 适用场景
 
@@ -66,7 +66,7 @@ PNG、JPEG、TIFF 等常见图片也能处理；支持 Alpha、方向、多 part
 
 支持 Windows x64 和 Linux x64，已在 CentOS 7.9、Rocky Linux 9 等环境使用。
 
-可读取 OpenEXR、PNG、JPEG、TIFF、WebP、TGA、BMP、Radiance HDR 和 DPX，输出 JPEG、PNG 和有损 WebP。支持有界解码的布局与预算设置见[大图预览](docs/large-previews.md)。可用 `thumbgen capabilities --json` 查看当前程序的格式支持。
+可读取 OpenEXR、PNG、JPEG、TIFF、WebP、TGA、BMP、Radiance HDR、DPX 和受支持的 PSD 合成图，输出 JPEG、PNG 和有损 WebP。支持有界解码的布局与预算设置见[大图预览](docs/large-previews.md)。可用 `thumbgen capabilities --json` 查看当前程序的格式支持。
 
 ## 快速开始
 

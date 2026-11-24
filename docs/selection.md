@@ -22,6 +22,8 @@ thumbgen convert multipart.exr --output preview.jpg --part-name beauty
 
 `--visualize auto` 使用默认选择策略时，如果其他 part 的候选都是阴影或环境光遮蔽等已识别的辅助 AOV，可选用唯一一组无前缀 RGB(A)。没有颜色候选时，此模式可跨 part 预览 Cryptomatte 家族。多个家族中唯一的 `crypto_object` 或 `CryptoObject` 优先，名称不区分大小写。其他歧义需显式指定 part、通道组或 Cryptomatte 家族。
 
+受支持的 PSD v1 文件在未指定 part 或通道组、自动选择颜色图像时使用存储的合成图。也可使用 `--part 0` 直接选择合成图，按需附加通道组。Raw 和 RLE 文件的 `inspect` 仍会列出可用图层，可按索引或名称显式选择。ZIP 和带预测的 ZIP 文件的 `inspect` 仅显示受支持的合成图。
+
 ## 连续帧保持一致
 
 在批处理任务中使用相同的 `sequence_id`，即可固定同一组图层与通道。后续帧缺失或改变通道时报告错误，而不会悄悄选择另一张图。

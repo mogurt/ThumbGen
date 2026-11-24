@@ -56,6 +56,8 @@ if any(test['name'] == 'public_cryptomatte' for test in suite['tests']):
     python_tests.append('test_cryptomatte_cli.py')
 if any(test['name'] == 'public_sampled_id' for test in suite['tests']):
     python_tests.append('test_sampled_id_cli.py')
+if any(test['name'] == 'public_bounded_psd' for test in suite['tests']):
+    python_tests.extend(('psd_fixtures.py', 'test_bounded_psd_cli.py'))
 for name in (*python_tests, 'requirements.txt'):
     shutil.copy2(repo / 'tests' / name, stage / 'tests' / name)
 for path in (repo / 'schemas').glob('*.json'):
@@ -69,6 +71,7 @@ replacements.update({str(repo / 'tests/test_cli.py'): '@TESTS@/test_cli.py',
                      str(repo / 'tests/test_aov_cli.py'): '@TESTS@/test_aov_cli.py',
                      str(repo / 'tests/test_cryptomatte_cli.py'): '@TESTS@/test_cryptomatte_cli.py',
                      str(repo / 'tests/test_sampled_id_cli.py'): '@TESTS@/test_sampled_id_cli.py',
+                     str(repo / 'tests/test_bounded_psd_cli.py'): '@TESTS@/test_bounded_psd_cli.py',
                      str(repo / 'schemas'): '@SCHEMAS@',
                      str(cache / 'sdk/lib'): '@LIB@',
                      str(tools_cache / 'tools/python-3.11.11/bin/python3'): '@PYTHON@'})
