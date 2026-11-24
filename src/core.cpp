@@ -25,6 +25,7 @@
 #include "sampled_id.h"
 #include "deep_selection.h"
 #include "deep_flatten.h"
+#include <OpenColorIO/OpenColorIO.h>
 #include <OpenImageIO/color.h>
 #include <OpenImageIO/imagebuf.h>
 #include <OpenImageIO/imagebufalgo.h>
@@ -135,21 +136,49 @@ static Json candidates_json(const OIIO::ImageSpec& spec,int part) {
     return result;
 }
 
+static std::string resolve_icc_bridge(const OIIO::ColorConfig& config,const std::string& config_name) {
+    constexpr const char* standard="srgb_rec709_scene";
+    const std::string name(config.resolve(standard));
+    bool declared=config_name=="ocio://default";
+    if(!declared) {
+        // OIIO may infer an interop ID from aliases. Inspect the actual OCIO
+        // declaration for noncanonical names and retain the legacy canonical name.
+        namespace OCIO=OCIO_NAMESPACE;
+        try {
+            const auto ocio=OCIO::Config::CreateFromFile(config_name.c_str());
+            const auto space=ocio->getColorSpace(standard);
+            declared=space && name==space->getName() && !space->isData() &&
+                space->getReferenceSpaceType()==OCIO::REFERENCE_SPACE_SCENE &&
+                (name==standard || std::string_view(space->getInteropID())==standard);
+        } catch(const OCIO::Exception& error) {
+            throw Failure("colour_config_failed",error.what());
+        }
+    }
+    if(!declared || name.empty() || config.get_color_interop_id(name)!=standard || config.isColorSpaceLinear(name))
+        throw Failure("colour_input_unsupported","ICC requires a declared standard srgb_rec709_scene OCIO bridge");
+    return name;
+}
+
 struct Engine::Impl {
     Engine::Observer observer;
     Engine::Control control;
     bool converting=false;
     struct Pin {Json key,request;bool named;};
     std::map<std::string,Pin> sequences;
-    std::map<std::string,std::unique_ptr<OIIO::ColorConfig>> configs;
-    OIIO::ColorConfig* config(const std::string& name) {
+    struct Config {
+        OIIO::ColorConfig colour;
+        std::string icc_bridge;
+        explicit Config(const std::string& name):colour(name) {}
+    };
+    std::map<std::string,std::unique_ptr<Config>> configs;
+    Config& config(const std::string& name) {
         auto found=configs.find(name);
-        if(found!=configs.end())return found->second.get();
-        auto value=std::make_unique<OIIO::ColorConfig>(name);
+        if(found!=configs.end())return *found->second;
+        auto value=std::make_unique<Config>(name);
         // Do not cache failed configs: geterror() clears the error, and a later
         // job must not accidentally reuse OIIO's fallback as a valid config.
-        if(value->has_error())throw Failure("colour_config_failed",value->geterror());
-        auto* result=value.get();configs.emplace(name,std::move(value));return result;
+        if(value->colour.has_error())throw Failure("colour_config_failed",value->colour.geterror());
+        auto* result=value.get();configs.emplace(name,std::move(value));return *result;
     }
 };
 Engine::Engine(Observer observer) : impl_(std::make_unique<Impl>()) {impl_->observer=std::move(observer);}
@@ -557,7 +586,8 @@ Json Engine::convert(const Job& job) {
             input_plan=detail::channel_plan(raw_cmyk,{0,1,2,3},false);
         }
         const bool icc_format=input_format=="png" || input_format=="jpeg" || input_format=="tiff" || input_format=="webp";
-        const bool use_icc=!data && !deep && icc_format && job.options.input_space=="auto" && (container_icc || spec.find_attribute("ICCProfile"));
+        const bool embedded_icc=container_icc || spec.find_attribute("ICCProfile");
+        const bool use_icc=!data && !deep && icc_format && job.options.input_space=="auto" && embedded_icc;
         if(crypto)input_plan.pixel_bytes=detail::crypto_source_pixel_bytes(*crypto_layout);
         std::optional<detail::SampledIdPlan> sampled;
         if(mapping.mode==detail::DataMode::id) {
@@ -574,9 +604,17 @@ Json Engine::convert(const Job& job) {
         }
         // Decide native storage from metadata before decode admission. The
         // pinned built-in colour contract is checked after admission, before IO.
-        std::string requested_config=job.options.ocio_config;
-        if(requested_config.empty()){const char* env=std::getenv("OCIO");requested_config=env?env:"";}
-        if(requested_config.empty())requested_config="ocio://default";
+        std::string config_name=job.options.ocio_config;
+        const char* config_basis="explicit";
+        if(config_name.empty()) {
+            const bool standalone_icc=use_icc && !cmyk && part_count==1 && spec.depth==1 &&
+                job.options.display.empty() && job.options.view.empty();
+            if(!standalone_icc) {
+                if(const char* environment=std::getenv("OCIO"))config_name=environment;
+            }
+            config_basis=config_name.empty()?"builtin":"environment";
+            if(config_name.empty())config_name="ocio://default";
+        }
         std::string requested_input=job.options.input_space;
         if(requested_input=="auto") {
             requested_input=spec.get_string_attribute("oiio:ColorSpace");
@@ -589,8 +627,8 @@ Json Engine::convert(const Job& job) {
             spec.channelnames==std::vector<std::string>({"R","G","B","A"}) && channels==std::vector<int>({0,1,2,3});
         const auto colour_plan=detail::colour_plan(spec,input_format,
             !impl_->control.reference_colour && !data && !deep && !cmyk &&
-            job.options.preset=="balanced" && requested_config=="ocio://default" && job.options.display.empty(),
-            plain_rgb || plain_rgba,container_icc || spec.find_attribute("ICCProfile"),use_icc,requested_input);
+            job.options.preset=="balanced" && config_name=="ocio://default" && job.options.display.empty(),
+            plain_rgb || plain_rgba,embedded_icc,use_icc,requested_input);
         const bool fast_srgb=colour_plan.route==detail::ColourPlan::Route::srgb8;
         const bool integer_linear=colour_plan.route==detail::ColourPlan::Route::integer_linear;
 #ifdef THUMBGEN_PNG_SCANLINE
@@ -701,24 +739,18 @@ Json Engine::convert(const Job& job) {
         std::string working_space,input_space,output_space;
         if(!data) {
             stage="colour";
-            const bool embedded_icc=container_icc || spec.find_attribute("ICCProfile");
             if(embedded_icc && job.options.input_space=="auto" && !use_icc)
                 throw Failure("colour_input_unsupported","ICC is unsupported on this input format or Deep input");
             if(embedded_icc && !use_icc)
                 r["warnings"].push_back("embedded ICC profile bypassed by explicit input_space; no ICC transform or profile validation performed");
-            std::string config_name=job.options.ocio_config,config_basis="explicit";
-            if(config_name.empty()) {
-                const char* environment=std::getenv("OCIO");
-                config_name=environment?environment:"";config_basis="environment";
-                if(config_name.empty()){config_name="ocio://default";config_basis="builtin";}
-            }
             r["colour"]={{"ocio_config",config_name},{"config_basis",config_basis},
                 {"input_requested",job.options.input_space},{"display",job.options.display},{"view",job.options.view}};
             TG_EXR_TICK(config_lookup_tick);
 #if defined(THUMBGEN_EXR_PROFILE) && THUMBGEN_EXR_PROFILE
             const bool reused_config=impl_->configs.find(config_name)!=impl_->configs.end();
 #endif
-            config=impl_->config(config_name);
+            auto& config_entry=impl_->config(config_name);
+            config=&config_entry.colour;
 #if defined(THUMBGEN_EXR_PROFILE) && THUMBGEN_EXR_PROFILE
             profile.add(reused_config?"exr_ocio_config_reuse_ms":"exr_ocio_config_create_ms",config_lookup_tick);
 #endif
@@ -735,14 +767,8 @@ Json Engine::convert(const Job& job) {
                 throw Failure("colour_working_space_invalid","scene_linear role must use a linear colour space");
             std::string from=job.options.input_space,basis="explicit";
             if(use_icc) {
-                from=std::string(config->resolve("srgb_rec709_scene"));basis="embedded_icc";
-                // Custom configs must explicitly declare this standardized
-                // scene sRGB bridge; arbitrary scene_linear is never relabeled.
-                bool declared=config_name=="ocio://default";
-                for(int i=0;i<config->getNumColorSpaces();++i)
-                    declared=declared || std::string(config->getColorSpaceNameByIndex(i))=="srgb_rec709_scene";
-                if(!declared || from.empty() || config->get_color_interop_id(from)!="srgb_rec709_scene")
-                    throw Failure("colour_input_unsupported","ICC requires a declared standard srgb_rec709_scene OCIO bridge");
+                if(config_entry.icc_bridge.empty())config_entry.icc_bridge=resolve_icc_bridge(*config,config_name);
+                from=config_entry.icc_bridge;basis="embedded_icc";
             } else if(from=="auto") {
                 from=spec.get_string_attribute("oiio:ColorSpace");basis="metadata";
                 if(from.empty()) {
@@ -755,7 +781,8 @@ Json Engine::convert(const Job& job) {
             input_space=space(from);
             if(deep && (!config->isColorSpaceLinear(input_space) || spec.get_int_attribute("oiio:UnassociatedAlpha",0)))
                 throw Failure("deep_colour_unsupported","Deep flattening requires associated samples in a verified linear input space");
-            if(job.options.display.empty())output_space=space("sRGB");
+            if(job.options.display.empty())
+                output_space=use_icc && config->getColorSpaceIndex("sRGB")<0?input_space:space("sRGB");
             else {
                 const auto displays=config->getDisplayNames();
                 if(std::find(displays.begin(),displays.end(),job.options.display)==displays.end())

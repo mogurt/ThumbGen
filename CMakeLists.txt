@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.24)
 project(ThumbGen VERSION 0.1.2 LANGUAGES CXX)
 
 find_package(OpenImageIO 3.2 CONFIG REQUIRED)
+find_package(OpenColorIO 2.5 CONFIG REQUIRED)
 find_package(Imath CONFIG REQUIRED)
 find_package(OpenEXR 3.5 CONFIG REQUIRED)
 find_package(nlohmann_json 3.11 CONFIG REQUIRED)
@@ -56,6 +57,7 @@ target_include_directories(thumbgen_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/incl
 target_include_directories(thumbgen_core PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
 target_link_libraries(thumbgen_core PUBLIC nlohmann_json::nlohmann_json PRIVATE OpenImageIO::OpenImageIO Imath::Imath OpenEXR::OpenEXRCore)
 target_link_libraries(thumbgen_core PRIVATE LittleCMS2::LittleCMS2)
+target_link_libraries(thumbgen_core PRIVATE OpenColorIO::OpenColorIO)
 target_link_libraries(thumbgen_core PRIVATE JPEG::JPEG)
 target_link_libraries(thumbgen_core PRIVATE ZLIB::ZLIB thumbgen_skcms)
 if(WIN32)
@@ -516,7 +518,7 @@ if(BUILD_TESTING)
                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_color_input.py --exe $<TARGET_FILE:thumbgen>
                 --probe-exe $<TARGET_FILE:thumbgen_color_input_probe> --schema-dir ${CMAKE_CURRENT_SOURCE_DIR}/schemas
                 --runtime-dir $<TARGET_FILE_DIR:OpenImageIO::OpenImageIO>)
-            # Budget the whole 20-method suite, including independent probe launches;
+            # Budget the whole suite, including independent probe launches;
             # each child still has its separate 45-second limit in the Python test.
             set_tests_properties(public_color_input PROPERTIES TIMEOUT 180 LABELS "protocol;colour")
             add_test(NAME public_sampled_id COMMAND ${Python3_EXECUTABLE}

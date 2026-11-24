@@ -16,7 +16,7 @@ Input space comes from `--input-space` first, otherwise file metadata. With no s
 
 ## Embedded ICC
 
-Supported single-image PNG, JPEG, TIFF and WebP inputs automatically use RGB / grayscale ICC profiles. An explicit input space overrides the embedded profile, so use it only when you know the source colors.
+Supported single-image PNG, JPEG, TIFF and WebP inputs automatically use RGB / grayscale ICC profiles. With automatic input space and no explicit config, display or view, these files use `ocio://default` regardless of `OCIO`. A project config used for ICC conversion must provide a `srgb_rec709_scene` bridge. An explicit input space overrides the embedded profile, so use it only when you know the source colors.
 
 Four-channel CMYK TIFF and supported 8-bit baseline Adobe CMYK/YCCK JPEG inputs with reliable ICC profiles can produce RGB previews. Missing profiles, unsupported ink layouts or damaged ICC data cause errors. Assigning an RGB space to CMYK is not a substitute for proper conversion.
 

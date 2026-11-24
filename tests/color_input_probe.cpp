@@ -13,6 +13,13 @@ static int emit(const nlohmann::json& result) {
 }
 int main(int argc,char** argv) {
     if(argc<2)return 2;
+    if(argc==3 && std::string(argv[1])=="--write-exr") {
+        auto out=OIIO::ImageOutput::create(argv[2]);if(!out)return 1;
+        OIIO::ImageSpec spec(8,8,3,OIIO::TypeDesc::FLOAT);
+        std::vector<float> values(spec.image_pixels()*spec.nchannels,0.25f);
+        if(!out->open(argv[2],spec) || !out->write_image(OIIO::TypeDesc::FLOAT,values.data()) || !out->close())return 1;
+        return emit({{"written",true}});
+    }
     if(argc==3 && std::string(argv[1])=="--write-webp") {
         auto out=OIIO::ImageOutput::create(argv[2]);if(!out)return 1;
         OIIO::ImageSpec spec(8,8,4,OIIO::TypeDesc::UINT8);spec.attribute("compression","lossless");
