@@ -278,7 +278,7 @@ static int test_main(const std::vector<std::string>& args) {
         auto c2normal=c2job("c2-normal");rows=run({c2normal,c2job("c2-crash"),c2job("c2-after-crash")});
         require(rows[0]["ok"]==true && rows[0]["colour"]["processing"]=="integer-linear-stream-v1" && rows[1]["error"]["code"]=="worker_crashed" && rows[2]["ok"]==true,rows.dump());
         rows=run({c2job("c2-partial",2),c2job("c2-protocol"),c2job("c2-after-protocol")});
-        require(rows[0]["colour"]["processing"]=="integer-linear-v1" && !fs::exists(root/"c2-partial"/"source.png.c2-allocated") && rows[0]["status"]=="partial" && rows[0]["outputs"][0]["status"]=="success" && rows[0]["outputs"][1]["error"]["code"]=="worker_crashed" && rows[1]["error"]["code"]=="worker_protocol_error" && rows[2]["ok"]==true,rows.dump());
+        require(rows[0]["colour"]["processing"]=="integer-linear-v1" && fs::exists(root/"c2-partial"/"source.png.c2-allocated") && rows[0]["status"]=="partial" && rows[0]["outputs"][0]["status"]=="success" && rows[0]["outputs"][1]["error"]["code"]=="worker_crashed" && rows[1]["error"]["code"]=="worker_protocol_error" && rows[2]["ok"]==true,rows.dump());
         auto c2changed=c2job("c2-source-change");rows=run({c2changed});require(rows[0]["error"]["code"]=="source_changed" && rows[0]["source_check"]["stable"]==false,rows.dump());
         {std::ofstream restore(fs::u8path(c2changed.input),std::ios::binary);restore<<originals.at(c2changed.input);}
         IsolationOptions c2timeout;c2timeout.task_timeout=std::chrono::milliseconds(500);rows=run({c2job("c2-sleep")},c2timeout);require(rows[0]["error"]["code"]=="worker_timeout",rows.dump());

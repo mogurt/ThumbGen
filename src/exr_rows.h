@@ -7,6 +7,8 @@
 #include <vector>
 
 namespace thumbgen::detail {
+bool preflight_exr_header(const std::string& path);
+
 struct ExrRowProbe {
     NativeReadPlan read;
     OIIO::TypeDesc sample_format;
@@ -22,4 +24,6 @@ std::optional<ExrRowProbe> probe_exr_rows(const std::string& path,const OIIO::Im
 
 void exr_rows_to_linear(const ExrRowProbe& probe,const OIIO::ColorProcessorHandle& processor,
     const void* source,float* destination,std::size_t pixels);
+void linearize_rows(const OIIO::ColorProcessorHandle& processor,float* pixels,
+    std::size_t count,int components,bool straight_alpha);
 }

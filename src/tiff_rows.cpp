@@ -221,13 +221,13 @@ private:
 };
 }
 
-void preflight_tiff_header(const std::filesystem::path& path,std::uint64_t budget) {
+bool preflight_tiff_header(const std::filesystem::path& path,std::uint64_t budget) {
     std::ifstream file(path,std::ios::binary);
     unsigned char h[4]{};
-    if(!file.read(reinterpret_cast<char*>(h),sizeof(h)))return;
+    if(!file.read(reinterpret_cast<char*>(h),sizeof(h)))return false;
     const bool little=h[0]=='I' && h[1]=='I' && (h[2]==42 || h[2]==43) && h[3]==0;
     const bool big=h[0]=='M' && h[1]=='M' && h[2]==0 && (h[3]==42 || h[3]==43);
-    if(!little && !big)return;
+    if(!little && !big)return false;
     file.close();
 
     bool denied=false;
@@ -247,6 +247,7 @@ void preflight_tiff_header(const std::filesystem::path& path,std::uint64_t budge
         } while(!denied && !TIFFLastDirectory(input.get()) && TIFFReadDirectory(input.get()));
     }
     if(denied)throw FileFailure("decode_limit_exceeded","TIFF directory metadata exceeds decode budget");
+    return true;
 }
 
 TiffRowPlan plan_tiff_rows(const std::filesystem::path& path,const OIIO::ImageSpec& spec,

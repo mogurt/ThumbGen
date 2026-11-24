@@ -8,6 +8,10 @@
 #include "c2_resize.h"
 #include "c2_png_rows.h"
 #include "jpeg_rows.h"
+#include "exr_rows.h"
+#include "png_rows.h"
+#include "tiff_rows.h"
+#include "other_rows.h"
 #ifdef THUMBGEN_C2_PNG_STREAM
 #include "c2_memory.h"
 #include "c2_png_metadata.h"
@@ -303,10 +307,18 @@ Json Engine::capabilities() {
 
 Json Engine::inspect(const std::string& input) {
     Json result{{"schema_version",1},{"type","inspection"},{"input",input},{"ok",false}};
+    std::optional<detail::OtherRowsProbe> other;
     try {
-        if(auto jpeg=detail::probe_jpeg(input,std::numeric_limits<std::uint64_t>::max())) {
-            auto part=spec_json(jpeg->spec,0);
-            part["candidates"]=candidates_json(jpeg->spec,0);
+        constexpr auto unlimited=std::numeric_limits<std::uint64_t>::max();
+        const auto jpeg=detail::probe_jpeg(input,unlimited);
+        std::error_code ec;
+        const auto bytes=jpeg?0:fs::file_size(fs::u8path(input),ec);
+        if(!jpeg && !ec)
+            other=detail::probe_other_rows(input,bytes,unlimited,OIIO::ImageSpec{},std::numeric_limits<std::size_t>::max());
+        const auto* spec=jpeg?&jpeg->spec:other && other->spec?&*other->spec:nullptr;
+        if(spec) {
+            auto part=spec_json(*spec,0);
+            part["candidates"]=candidates_json(*spec,0);
             result["parts"]=Json::array({std::move(part)});result["ok"]=true;
             return result;
         }
@@ -314,7 +326,14 @@ Json Engine::inspect(const std::string& input) {
         result["error"]={{"code","open_failed"},{"message",error.what()}};
         return result;
     }
-    auto in=OIIO::ImageInput::open(input);
+    auto in=other?OIIO::ImageInput::create(other->format):OIIO::ImageInput::open(input);
+    if(other && in) {
+        OIIO::ImageSpec ignored;
+        if(!in->open(input,ignored)) {
+            result["error"]={{"code","open_failed"},{"message",in->geterror()}};
+            return result;
+        }
+    }
     if(!in){result["error"]={{"code","open_failed"},{"message",OIIO::geterror()}};return result;}
     result["parts"]=Json::array();
     OIIO::ImageSpec spec;
@@ -383,21 +402,40 @@ Json Engine::convert(const Job& job) {
         const auto decode_budget=detail::checked_bytes_mul(job.options.max_decode_mib,detail::bounded_mib);
         bool container_icc=false;
         std::optional<detail::JpegProbe> jpeg;
+        std::optional<detail::OtherRowsProbe> other;
+        std::string probed_format;
         try {
             // OIIO opens progressive JPEGs by starting the decompressor.
             // Keep that allocation out of metadata preparation.
             const auto limit=!data && job.options.input_space=="auto"?detail::icc_profile_limit:std::numeric_limits<std::size_t>::max();
             jpeg=detail::probe_jpeg(job.input,decode_budget,limit);
+            if(jpeg)probed_format="jpeg";
+            else {
+                if(detail::preflight_png_header(source_path,decode_budget))probed_format="png";
+                else if(detail::preflight_tiff_header(source_path,decode_budget))probed_format="tiff";
+                else if(detail::preflight_exr_header(job.input))probed_format="openexr";
+                else if((other=detail::probe_other_rows(job.input,stamp.size,decode_budget,read_config,limit)))
+                    probed_format=other->format;
+            }
             container_icc=!data && (jpeg?jpeg->has_icc:detail::container_has_icc(job.input,limit));
         }
         catch(const detail::CmsFailure& error){throw Failure("colour_input_unsupported",error.what());}
         OIIO::ImageInput::unique_ptr in;
         auto open_input=[&] {
-            in=OIIO::ImageInput::open(job.input,&read_config);
+            if(probed_format.empty())in=OIIO::ImageInput::open(job.input,&read_config);
+            else {
+                in=OIIO::ImageInput::create(probed_format);
+                if(in) {
+                    OIIO::ImageSpec ignored;
+                    if(in->open(job.input,ignored,read_config))return;
+                    auto error=in->geterror();verify_source();throw Failure("open_failed",error);
+                }
+            }
             if(!in){auto error=OIIO::geterror();verify_source();throw Failure("open_failed",error);}
         };
-        if(!jpeg)open_input();
-        const std::string input_format=jpeg?"jpeg":in->format_name();
+        const bool deferred_other=other && other->spec.has_value();
+        if(!jpeg && !deferred_other)open_input();
+        const std::string input_format=jpeg?"jpeg":deferred_other?other->format:in->format_name();
         const bool can_auto_crypto=detail::auto_cryptomatte_allowed(job.options) && input_format=="openexr";
         const bool use_auto_exr_preferences=can_auto_crypto && job.options.selection_policy=="primary";
 #if defined(THUMBGEN_EXR_PROFILE) && THUMBGEN_EXR_PROFILE
@@ -435,9 +473,9 @@ Json Engine::convert(const Job& job) {
         }
         for(int p=0;;++p) {
             OIIO::ImageSpec scanned;
-            if(jpeg) {
+            if(jpeg || deferred_other) {
                 if(p!=0)break;
-                scanned=jpeg->spec;
+                scanned=jpeg?jpeg->spec:*other->spec;
             } else if(can_auto_crypto?std::size_t(p)>=crypto_parts.size():!in->seek_subimage(p,0,scanned))break;
             const auto& candidate=can_auto_crypto?crypto_parts[p]:scanned;
             if(!data && job.options.input_space=="auto" && p>0 && (container_icc || candidate.find_attribute("ICCProfile")))
@@ -643,12 +681,12 @@ Json Engine::convert(const Job& job) {
         const bool plain_rgb=spec.nchannels==3 && spec.alpha_channel==-1 &&
             spec.channelnames==std::vector<std::string>({"R","G","B"}) && channels==std::vector<int>({0,1,2});
         const bool plain_rgba=spec.nchannels==4 && spec.alpha_channel==3 &&
-            spec.get_int_attribute("oiio:UnassociatedAlpha",0)==1 &&
             spec.channelnames==std::vector<std::string>({"R","G","B","A"}) && channels==std::vector<int>({0,1,2,3});
+        const bool straight_alpha=spec.get_int_attribute("oiio:UnassociatedAlpha",0)!=0;
         const auto colour_plan=detail::colour_plan(spec,input_format,
             !impl_->control.reference_colour && !data && !deep && !cmyk &&
             job.options.preset=="balanced" && config_name=="ocio://default" && job.options.display.empty(),
-            plain_rgb || plain_rgba,embedded_icc,use_icc,requested_input);
+            plain_rgb || (plain_rgba && straight_alpha),embedded_icc,use_icc,requested_input);
         const bool fast_srgb=colour_plan.route==detail::ColourPlan::Route::srgb8;
         const bool integer_linear=colour_plan.route==detail::ColourPlan::Route::integer_linear;
 #ifdef THUMBGEN_PNG_SCANLINE
@@ -665,28 +703,21 @@ Json Engine::convert(const Job& job) {
         std::vector<std::pair<int,int>> c2_sizes;
         std::vector<OIIO::ImageBuf> c2_previews;
         std::vector<double> c2_resize_ms;
+        std::vector<std::exception_ptr> c2_output_errors;
         std::exception_ptr c2_preview_error;
         const detail::NativeReadPlan* bounded_source=nullptr;
         const auto cms_bytes=use_icc?detail::cms_reservation:0;
         const auto orientation=spec.get_int_attribute("Orientation",1);
         const bool transpose=orientation>=5 && orientation<=8;
+        const bool shifted_window=spec.x || spec.y || spec.full_x || spec.full_y ||
+            spec.width!=spec.full_width || spec.height!=spec.full_height;
+        const bool large=std::uint64_t(spec.width)*spec.height>=8000000;
+        const auto png=input_format=="png"?detail::plan_png_rows(source_path,*in,spec,decode_budget):detail::PngRowPlan{};
+        const auto tiff=input_format=="tiff"?detail::plan_tiff_rows(source_path,spec,part,decode_budget):detail::TiffRowPlan{};
+        std::optional<detail::ExrRowProbe> exr;
         const bool jpeg_gray=jpeg && spec.nchannels==1 && channels==std::vector<int>({0,0,0});
-        std::uint64_t source_codec_bytes=jpeg?jpeg->codec_bytes:0;
-        if(jpeg && jpeg->read.open && colour_plan.bounded_options && (plain_rgb || jpeg_gray) &&
-           std::uint64_t(spec.width)*spec.height>=8000000 && !job.outputs.empty() && job.outputs.size()<=2) {
-            for(const auto& output:job.outputs)
-                c2_sizes.push_back(detail::fit_preview(spec.width,spec.height,transpose?output.height:output.width,
-                    transpose?output.width:output.height));
-            // Large dual previews may exceed the experiment's workspace cap.
-            // Charge the exact workspace before opening either source route.
-            if(detail::C2Resize::workspace_plan(spec.width,spec.height,3,c2_sizes,c2_workspace_bytes,detail::bounded_sampler_limit)) {
-                const auto m=detail::bounded_read_memory(spec.width,spec.height,3,jpeg->read.pixel_bytes,
-                    jpeg->read.retained_bytes,jpeg->read.codec_bytes,cms_bytes,c2_workspace_bytes,c2_sizes);
-                if(detail::bounded_total(m)<=decode_budget)bounded_source=&jpeg->read;
-                else throw Failure("decode_limit_exceeded","bounded JPEG source and preview buffers exceed decode budget");
-            }
-            if(!bounded_source)c2_sizes.clear();
-        }
+        auto source_codec_bytes=jpeg?jpeg->codec_bytes:other?other->fallback_codec_bytes:
+            png.fallback_codec_bytes+tiff.fallback_codec_bytes;
 #ifdef THUMBGEN_C2_PNG_STREAM
         // A second output must allocate only after the first finishes/commits.
         // Its streaming consumer would need retired source rows: fall back
@@ -708,22 +739,55 @@ Json Engine::convert(const Job& job) {
             }
             if(c2_small_outputs){
                 const auto memory=detail::c2_memory(spec.width,spec.height,spec.nchannels,c2_largest_w,c2_largest_h,cms_bytes);
-                if(memory.dynamic()<=decode_budget){
+                if(detail::checked_bytes_add(memory.dynamic(),source_codec_bytes)<=decode_budget){
                     c2_active=detail::C2Resize::workspace_plan(spec.width,spec.height,spec.nchannels,c2_sizes,c2_workspace_bytes);
                 }
             }
         }
 #endif
+        if(!c2_active && !data && !deep && !impl_->control.reference_colour && job.options.preset=="balanced" &&
+           orientation>=1 && orientation<=8 && !job.outputs.empty() && job.outputs.size()<=2 &&
+           spec.full_width<=65536 && spec.full_height<=65536) {
+            const detail::NativeReadPlan* candidate=nullptr;
+            if(input_format=="openexr" && (large || shifted_window)) {
+                exr=detail::probe_exr_rows(job.input,spec,part,channels);
+                if(exr)candidate=&exr->read;
+            } else if(!shifted_window && large && (plain_rgb || plain_rgba || jpeg_gray)) {
+                if(jpeg && colour_plan.bounded_options)candidate=&jpeg->read;
+                else if(png.read.open)candidate=&png.read;
+                else if(tiff.read.open)candidate=&tiff.read;
+                else if(deferred_other)candidate=&other->read;
+            }
+            c2_sizes.clear();
+            if(candidate && candidate->open) {
+                for(const auto& output:job.outputs)
+                    c2_sizes.push_back(detail::fit_preview(spec.full_width,spec.full_height,
+                        transpose?output.height:output.width,transpose?output.width:output.height));
+                const auto components=unsigned(channels.size());
+                if(detail::C2Resize::workspace_plan(spec.full_width,spec.full_height,components,
+                       c2_sizes,c2_workspace_bytes,detail::bounded_sampler_limit) &&
+                   detail::bounded_total(detail::bounded_read_memory(spec.full_width,spec.full_height,components,
+                       candidate->pixel_bytes,candidate->retained_bytes,candidate->codec_bytes,cms_bytes,
+                       c2_workspace_bytes,c2_sizes))<=decode_budget) {
+                    bounded_source=candidate;
+                    source_codec_bytes=candidate->codec_bytes;
+                }
+            }
+            if(!bounded_source){exr.reset();c2_sizes.clear();}
+        }
         const bool streaming=c2_active || bounded_source;
-        if(jpeg && !bounded_source) {
+        // Noninterlaced PNG still checks its row scratch and decoded raster
+        // individually. The scheduler charges both, including for small images.
+        if(!streaming && source_codec_bytes && (input_format!="png" || png.retains_frame)) {
             // The complete-image plugin retains late APP entries during
             // multiscan decode. Reserve a node for every possible segment.
-            if(jpeg->multiscan)source_codec_bytes=detail::checked_bytes_add(source_codec_bytes,detail::checked_bytes_mul(stamp.size,32));
+            if(jpeg && jpeg->multiscan)source_codec_bytes=detail::checked_bytes_add(source_codec_bytes,detail::checked_bytes_mul(stamp.size,32));
             const auto pixel_bytes=integer_linear?channels.size()*(colour_plan.sample_bytes+2*sizeof(float)):
                 fast_srgb?channels.size():input_plan.pixel_bytes;
-            const auto full_source=detail::checked_bytes_mul(std::uint64_t(spec.width)*spec.height,pixel_bytes);
+            const auto full_source=sampled?sampled->peak_bytes:
+                detail::checked_bytes_mul(std::uint64_t(spec.width)*spec.height,pixel_bytes);
             if(detail::checked_bytes_add(detail::checked_bytes_add(full_source,source_codec_bytes),cms_bytes)>decode_budget)
-                throw Failure("decode_limit_exceeded","JPEG source and decoder scratch exceed decode budget");
+                throw Failure("decode_limit_exceeded","source and decoder scratch exceed decode budget");
         }
         if(impl_->control.planned) {
             auto span=std::minmax_element(channels.begin(),channels.end());
@@ -794,7 +858,7 @@ Json Engine::convert(const Job& job) {
                 if(from.empty()) {
                     auto ext=fs::u8path(job.input).extension().u8string();
                     std::transform(ext.begin(),ext.end(),ext.begin(),[](unsigned char c){return char(std::tolower(c));});
-                    from=ext==".exr"||ext==".hdr"?"linear":"sRGB";basis="format_assumption";
+                    from=input_format=="openexr"||input_format=="hdr"||ext==".exr"||ext==".hdr"?"linear":"sRGB";basis="format_assumption";
                     r["warnings"].push_back("input colour space assumed from format; override with input_space");
                 }
             }
@@ -832,7 +896,7 @@ Json Engine::convert(const Job& job) {
             }
             r["colour"]["working_space"]=working_space;
             r["colour"]["processing"]=c2_active?"integer-linear-stream-v1":colour_plan.processing();
-            if(!colour_plan.fallback.empty())r["colour"]["fallback_reason"]=colour_plan.fallback;
+            if(!bounded_source && !colour_plan.fallback.empty())r["colour"]["fallback_reason"]=colour_plan.fallback;
             if(use_icc)r["colour"]["icc"]={{"engine","LittleCMS2 2.20"},{"intent","relative_colorimetric"},{"black_point_compensation",false},
                 {"model",cmyk?"CMYK":chosen.candidate.kind=="grey"?"Gray":"RGB"},
                 {"bridge","srgb_rec709_scene"},{"profile_limit_bytes",detail::icc_profile_limit},{"cms_limit_bytes",detail::cms_memory_limit},
@@ -857,21 +921,22 @@ Json Engine::convert(const Job& job) {
         std::unique_ptr<float[]> exr_pixels;
 #endif
         detail::DeepImage deep_image;
-        if(jpeg && !bounded_source){
+        if((jpeg || deferred_other) && !bounded_source){
             jpeg.reset();
             open_input();
             OIIO::ImageSpec reopened;
             if(!in->seek_subimage(part,0,reopened) || reopened.width!=spec.width || reopened.height!=spec.height ||
-               reopened.nchannels!=spec.nchannels || reopened.format!=spec.format ||
-               reopened.get_int_attribute("Orientation",1)!=orientation)
-                throw Failure("decode_failed","JPEG layout changed after admission");
+               reopened.channelnames!=spec.channelnames || reopened.format!=spec.format ||
+               reopened.get_int_attribute("Orientation",1)!=orientation ||
+               reopened.get_int_attribute("oiio:UnassociatedAlpha",0)!=int(straight_alpha))
+                throw Failure("decode_failed","source layout changed after admission");
             // Keep plugin metadata for the complete-image path.
             spec=std::move(reopened);
         }
         if(integer_linear && use_icc) {
             const auto* profile=spec.find_attribute("ICCProfile");detail::CmsStats stats;
             try {
-                if(!profile)throw detail::CmsFailure("missing JPEG ICC profile after admission");
+                if(!profile)throw detail::CmsFailure("missing ICC profile after admission");
                 {detail::CmsInput validate(profile->data(),std::size_t(profile->datasize()),detail::CmsModel::rgb,stats);}
                 if(stats.live)throw detail::CmsFailure("CMS allocation ledger did not return to zero");
             } catch(const detail::CmsFailure& e){throw Failure("colour_input_unsupported",e.what());}
@@ -897,10 +962,12 @@ Json Engine::convert(const Job& job) {
                     if(!processor)throw Failure("colour_failed","failed to create the bounded colour processor");
                 }
                 auto open_tick=Clock::now();
+                if((exr || (bounded_source && input_format=="tiff")) && in)in.reset();
                 auto native=bounded_source?bounded_source->open():nullptr;
                 decode_ms+=ms(open_tick);
                 const auto pixel_bytes=bounded_source?bounded_source->pixel_bytes:spec.nchannels*colour_plan.sample_bytes;
-                detail::C2PngRows rows(spec.width,spec.height,components,pixel_bytes,
+                const auto row_width=spec.full_width,row_height=spec.full_height;
+                detail::C2PngRows rows(row_width,row_height,components,pixel_bytes,
                     [&](int first,int last,void* destination){
                         detail::output_fault("read",std::size_t(first));
                         auto start=Clock::now();
@@ -911,8 +978,19 @@ Json Engine::convert(const Job& job) {
                     },
                     [&](const void* source,float* out,std::size_t count){
                         auto start=Clock::now();
-                        if(integer_linear)colour_plan.transform(source,out,count,components);
-                        else if(fast_srgb)detail::c2_srgb8_to_linear(source,out,count*components);
+                        if(exr)detail::exr_rows_to_linear(*exr,processor,source,out,count);
+                        else if(integer_linear)colour_plan.transform(source,out,count,components);
+                        else if(fast_srgb) {
+                            detail::c2_srgb8_to_linear(source,out,count*components);
+                            if(components==4) {
+                                const auto* bytes=static_cast<const unsigned char*>(source);
+                                for(std::size_t i=0;i<count;++i) {
+                                    auto* pixel=out+i*4;
+                                    pixel[3]=float(bytes[i*4+3])*(1.f/255);
+                                    for(int c=0;c<3;++c)pixel[c]*=pixel[3];
+                                }
+                            }
+                        }
                         else {
                             if(jpeg_gray) {
                                 const auto* bytes=static_cast<const unsigned char*>(source);
@@ -920,37 +998,37 @@ Json Engine::convert(const Job& job) {
                                     std::fill_n(out+i*3,3,float(bytes[i])*(1.0f/255));
                             } else if(!OIIO::convert_pixel_values(spec.format,source,OIIO::TypeDesc::FLOAT,out,int(count*components)))
                                 throw Failure("decode_failed","cannot convert native colour block to float");
-                            if(cms)cms->apply(out,count,components,false);
-                            if(processor) {
-                                const auto pixel_stride=components*sizeof(float);
-                                processor->apply(out,int(count),1,components,sizeof(float),pixel_stride,count*pixel_stride);
-                                const auto error=OIIO::geterror();
-                                if(!error.empty())throw Failure("colour_failed",error);
-                            }
+                            if(cms)cms->apply(out,count,components,components==4 && !straight_alpha);
+                            detail::linearize_rows(processor,out,count,components,straight_alpha);
                         }
                         colour_ms+=ms(start);
                     });
                 std::exception_ptr source_error;
                 try {
                     if(impl_->observer)impl_->observer("c2_allocate",job);
-                    c2_previews.reserve(c2_sizes.size());
-                    std::vector<float*> previews;
-                    for(auto [w,h]:c2_sizes) {
-                        auto linear=spec;linear.set_format(OIIO::TypeDesc::FLOAT);
-                        linear.erase_attribute("ICCProfile");linear.attribute("oiio:UnassociatedAlpha",0);
-                        linear.nchannels=components;linear.default_channel_names();
-                        linear.x=linear.y=linear.z=linear.full_x=linear.full_y=linear.full_z=0;
-                        linear.width=linear.full_width=w;linear.height=linear.full_height=h;linear.depth=linear.full_depth=1;
-                        if(fast_srgb)linear=OIIO::ImageSpec(w,h,components,OIIO::TypeDesc::FLOAT);
-                        detail::output_fault_index(previews.size());
-                        c2_previews.emplace_back(detail::preview_storage(linear));
-                        if(!c2_previews.back().localpixels())throw std::bad_alloc();
-                        previews.push_back(static_cast<float*>(c2_previews.back().localpixels()));
+                    c2_previews.resize(c2_sizes.size());
+                    c2_output_errors.resize(c2_sizes.size());
+                    std::vector<float*> previews(c2_sizes.size());
+                    for(std::size_t i=0;i<c2_sizes.size();++i) {
+                        const auto [w,h]=c2_sizes[i];
+                        try {
+                            auto linear=fast_srgb?OIIO::ImageSpec(w,h,components,OIIO::TypeDesc::FLOAT):spec;
+                            linear.set_format(OIIO::TypeDesc::FLOAT);
+                            linear.channelformats.clear();
+                            linear.erase_attribute("ICCProfile");linear.attribute("oiio:UnassociatedAlpha",0);
+                            linear.nchannels=components;linear.default_channel_names();
+                            linear.alpha_channel=components==4?3:-1;linear.z_channel=-1;
+                            linear.x=linear.y=linear.z=linear.full_x=linear.full_y=linear.full_z=0;
+                            linear.width=linear.full_width=w;linear.height=linear.full_height=h;linear.depth=linear.full_depth=1;
+                            detail::output_fault_index(i);
+                            c2_previews[i]=detail::preview_storage(linear);
+                            previews[i]=static_cast<float*>(c2_previews[i].localpixels());
+                            if(!previews[i])throw std::bad_alloc();
+                            detail::output_fault("resize",i);
+                        } catch(...) {c2_output_errors[i]=std::current_exception();}
                     }
-                    detail::C2Resize resize(spec.width,spec.height,components,c2_sizes,c2_workspace_bytes);
-                    if(resize.workspace_bytes()!=c2_workspace_bytes)throw detail::C2ContractError("C2 admitted workspace differs from allocation");
+                    detail::C2Resize resize(row_width,row_height,components,c2_sizes,c2_workspace_bytes,&c2_output_errors);
                     detail::output_fault("invariant",0);
-                    detail::output_fault("resize",0);
                     c2_resize_ms=resize.execute([&](int y,float* row){
                         try {rows.get(y,row);}catch(...){source_error=std::current_exception();throw;}
                         detail::output_fault("resize_row",std::size_t(y));
@@ -978,7 +1056,7 @@ Json Engine::convert(const Job& job) {
                 if(stats.live)throw detail::CmsFailure("CMS allocation ledger did not return to zero");
                 if(use_icc && !integer_linear)r["colour"]["icc"]["peak_bytes"]=stats.peak;
                 if(jpeg)jpeg->read.open={};
-                r["decoded_mib"]=double(std::uint64_t(spec.width)*spec.height*pixel_bytes)/1048576;
+                r["decoded_mib"]=double(std::uint64_t(row_width)*row_height*pixel_bytes)/1048576;
             }catch(const detail::CmsFailure& error){throw Failure("colour_input_unsupported",error.what());}
             if(impl_->observer)impl_->observer("decoded",job);
             verify_source();
@@ -1236,6 +1314,10 @@ Json Engine::convert(const Job& job) {
                 TG_EXR_TICK(resize_tick);
                 if(streaming){
                     if(c2_preview_error)std::rethrow_exception(c2_preview_error);
+                    if(c2_output_errors[output_index]) {
+                        try {std::rethrow_exception(c2_output_errors[output_index]);}
+                        catch(const std::bad_alloc&){throw Failure("resize_failed","linear float resize failed");}
+                    }
                     preview=std::move(c2_previews[output_index]);
                     if(orientation!=1){
                         preview.specmod().attribute("Orientation",orientation);

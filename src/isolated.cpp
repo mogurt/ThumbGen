@@ -445,19 +445,25 @@ bool run_isolated(const std::vector<Job>& jobs,const std::string& executable,con
                                 shape.data_width && shape.data_height && shape.data_width<=65536 && shape.data_height<=65536 &&
                                 bounded["transpose"].is_boolean(),"invalid bounded reader footprint");
                             const bool transpose=bounded["transpose"].get<bool>();
-                            check(shape.display_width==(transpose?shape.data_height:shape.data_width) &&
-                                shape.display_height==(transpose?shape.data_width:shape.data_height),"bounded display footprint mismatch");
+                            const auto& source_info=base.at("source");
+                            const auto& window=source_info.at("display_window");
+                            check(window.is_array() && window.size()==4 &&
+                                shape.data_width==number(source_info.at("width"),65536) &&
+                                shape.data_height==number(source_info.at("height"),65536),"bounded source footprint mismatch");
+                            const auto row_width=number(window[2],65536),row_height=number(window[3],65536);
+                            check(row_width && row_height && shape.display_width==(transpose?row_height:row_width) &&
+                                shape.display_height==(transpose?row_width:row_height),"bounded display footprint mismatch");
                             std::vector<std::pair<int,int>> sizes;
                             for(const auto& output:job.outputs)
-                                sizes.push_back(fit_preview(int(shape.data_width),int(shape.data_height),
+                                sizes.push_back(fit_preview(int(row_width),int(row_height),
                                     transpose?output.height:output.width,transpose?output.width:output.height));
                             std::size_t workspace=0;
-                            check(C2Resize::workspace_plan(int(shape.data_width),int(shape.data_height),int(shape.selected_channels),
+                            check(C2Resize::workspace_plan(int(row_width),int(row_height),int(shape.selected_channels),
                                 sizes,workspace,bounded_sampler_limit),
                                 "invalid bounded sampler footprint");
                             const auto bytes=number(bounded["pixel_bytes"],32);
                             check(bytes>0,"invalid bounded native pixel size");
-                            shape.bounded=bounded_read_memory(shape.data_width,shape.data_height,unsigned(shape.selected_channels),unsigned(bytes),
+                            shape.bounded=bounded_read_memory(row_width,row_height,unsigned(shape.selected_channels),unsigned(bytes),
                                 number(bounded["retained_bytes"],decode_budget),shape.source_codec_bytes,shape.cms_buffer_bytes,workspace,sizes);
                             check(bounded_total(shape.bounded)<=decode_budget,"bounded decode footprint exceeds limit");
                         }

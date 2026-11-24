@@ -111,14 +111,15 @@ private:
 };
 }
 
-void preflight_png_header(const std::filesystem::path& path,std::uint64_t budget) {
+bool preflight_png_header(const std::filesystem::path& path,std::uint64_t budget) {
     const auto header=png_header(path);
-    if(!header)return;
+    if(!header)return false;
     const auto row=std::uint64_t(header->width)*header->channels*(header->bits==16?2:1);
     if(header->interlace)frame_bytes(row,header->height,budget);
     const auto info=metadata_bytes(path,header->interlace!=0,budget);
     if(checked_bytes_add(checked_bytes_mul(row,8),info)>budget)
         throw FileFailure("decode_limit_exceeded","PNG header and rows exceed decode budget");
+    return true;
 }
 
 PngRowPlan plan_png_rows(const std::filesystem::path& path,OIIO::ImageInput& input,
@@ -142,6 +143,7 @@ PngRowPlan plan_png_rows(const std::filesystem::path& path,OIIO::ImageInput& inp
     }
     PngRowPlan result;
     result.fallback_codec_bytes=checked_bytes_add(codec,frame);
+    result.retains_frame=frame!=0;
     if(result.fallback_codec_bytes>budget)
         throw FileFailure("decode_limit_exceeded","PNG frame and decoder scratch exceed decode budget");
 

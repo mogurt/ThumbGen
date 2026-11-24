@@ -10,6 +10,25 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 find_package(LittleCMS2 REQUIRED)
 find_package(JPEG REQUIRED)
 find_package(ZLIB REQUIRED)
+find_package(TIFF 4.7 REQUIRED)
+if(UNIX AND TARGET TIFF::tiff)
+    get_target_property(THUMBGEN_TIFF_TYPE TIFF::tiff TYPE)
+    if(THUMBGEN_TIFF_TYPE STREQUAL "STATIC_LIBRARY")
+        find_package(libdeflate CONFIG REQUIRED)
+        find_package(zstd CONFIG REQUIRED)
+        find_package(WebP CONFIG REQUIRED)
+        if(NOT TARGET Deflate::Deflate)
+            add_library(Deflate::Deflate ALIAS libdeflate::libdeflate_static)
+        endif()
+        if(NOT TARGET ZSTD::ZSTD)
+            add_library(ZSTD::ZSTD ALIAS zstd::libzstd_static)
+        endif()
+        if(NOT TARGET CMath::CMath)
+            add_library(CMath::CMath INTERFACE IMPORTED)
+            set_property(TARGET CMath::CMath PROPERTY INTERFACE_LINK_LIBRARIES m)
+        endif()
+    endif()
+endif()
 include(cmake/Skcms.cmake)
 option(THUMBGEN_VERIFY_DEPENDENCY_VERSIONS "Require the versions used by the locked SDKs" OFF)
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/dependencies/versions.json" THUMBGEN_DEPENDENCY_LOCK)
@@ -49,6 +68,8 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_
 
 add_library(thumbgen_core STATIC src/core.cpp src/colour_plan.cpp src/resize_srgb.cpp src/color_input.cpp src/cms_input.cpp src/cmyk_jpeg.cpp src/jpeg_rows.cpp src/selection.cpp src/files.cpp src/quantize.cpp src/data_preview.cpp src/data_image.cpp src/selected_input.cpp src/cryptomatte.cpp src/sampled_id.cpp src/deep_flatten.cpp src/deep_reader.cpp src/deep_selection.cpp)
 option(THUMBGEN_PNG_SCANLINE "Use bounded native PNG16 decode for eligible integer colour sources" ON)
+target_sources(thumbgen_core PRIVATE src/exr_rows.cpp src/png_rows.cpp src/tiff_rows.cpp
+    src/other_rows.cpp src/hdr_rows.cpp src/dpx_rows.cpp src/bmp_rows.cpp src/webp_rows.cpp src/tga_rows.cpp)
 if(THUMBGEN_PNG_SCANLINE)
     target_compile_definitions(thumbgen_core PRIVATE THUMBGEN_PNG_SCANLINE=1)
 endif()
@@ -59,7 +80,7 @@ target_link_libraries(thumbgen_core PUBLIC nlohmann_json::nlohmann_json PRIVATE 
 target_link_libraries(thumbgen_core PRIVATE LittleCMS2::LittleCMS2)
 target_link_libraries(thumbgen_core PRIVATE OpenColorIO::OpenColorIO)
 target_link_libraries(thumbgen_core PRIVATE JPEG::JPEG)
-target_link_libraries(thumbgen_core PRIVATE ZLIB::ZLIB thumbgen_skcms)
+target_link_libraries(thumbgen_core PRIVATE ZLIB::ZLIB TIFF::TIFF thumbgen_skcms)
 if(WIN32)
     get_filename_component(THUMBGEN_JPEG_PREFIX "${JPEG_INCLUDE_DIR}" DIRECTORY)
     find_file(THUMBGEN_JPEG_RUNTIME NAMES jpeg8.dll libjpeg-8.dll jpeg62.dll PATHS "${THUMBGEN_JPEG_PREFIX}/bin" NO_DEFAULT_PATH REQUIRED)
@@ -190,6 +211,18 @@ if(THUMBGEN_REQUIRE_FULL_TESTS)
     endif()
 endif()
 if(BUILD_TESTING)
+    add_executable(thumbgen_png_tiff_rows_tests tests/test_png_tiff_rows.cpp)
+    target_include_directories(thumbgen_png_tiff_rows_tests PRIVATE src)
+    target_link_libraries(thumbgen_png_tiff_rows_tests PRIVATE thumbgen_core OpenImageIO::OpenImageIO TIFF::TIFF ZLIB::ZLIB)
+    add_test(NAME core_png_tiff_rows COMMAND thumbgen_png_tiff_rows_tests)
+    add_executable(thumbgen_other_rows_tests tests/test_other_rows.cpp)
+    target_link_libraries(thumbgen_other_rows_tests PRIVATE thumbgen_core OpenImageIO::OpenImageIO)
+    add_test(NAME core_other_rows COMMAND thumbgen_other_rows_tests)
+    set_tests_properties(core_png_tiff_rows core_other_rows PROPERTIES TIMEOUT 120 LABELS "regression"
+        ENVIRONMENT_MODIFICATION
+        "PATH=path_list_prepend:$<TARGET_FILE_DIR:OpenImageIO::OpenImageIO>;LD_LIBRARY_PATH=path_list_prepend:$<TARGET_FILE_DIR:OpenImageIO::OpenImageIO>")
+    add_executable(thumbgen_bounded_exr_tests tests/test_bounded_exr.cpp)
+    target_link_libraries(thumbgen_bounded_exr_tests PRIVATE thumbgen_core OpenImageIO::OpenImageIO OpenEXR::OpenEXRCore)
     add_executable(thumbgen_exr_profile_tests tests/test_exr_profile.cpp)
     target_include_directories(thumbgen_exr_profile_tests PRIVATE src)
     target_link_libraries(thumbgen_exr_profile_tests PRIVATE thumbgen_core)
@@ -483,6 +516,10 @@ if(BUILD_TESTING)
         message(FATAL_ERROR "The explicit test Python is unavailable; refusing to omit public tests")
     endif()
     if(Python3_Interpreter_FOUND)
+        add_test(NAME core_bounded_exr COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_exr_pipeline.py --exe $<TARGET_FILE:thumbgen_bounded_exr_tests>)
+        set_tests_properties(core_bounded_exr PROPERTIES TIMEOUT 120 LABELS "exr;regression" ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:$<TARGET_FILE_DIR:OpenImageIO::OpenImageIO>;LD_LIBRARY_PATH=path_list_prepend:$<TARGET_FILE_DIR:OpenImageIO::OpenImageIO>")
         add_executable(thumbgen_cms_tests tests/test_cms_input.cpp src/cms_input.cpp)
         target_include_directories(thumbgen_cms_tests PRIVATE src)
         target_compile_features(thumbgen_cms_tests PRIVATE cxx_std_17)
@@ -510,6 +547,15 @@ if(BUILD_TESTING)
                 --fixture-exe $<TARGET_FILE:thumbgen_jpeg_rows_tests>
                 --schema-dir ${CMAKE_CURRENT_SOURCE_DIR}/schemas --runtime-dir $<TARGET_FILE_DIR:OpenImageIO::OpenImageIO>)
             set_tests_properties(public_bounded_jpeg PROPERTIES TIMEOUT 240 LABELS "protocol;colour;scheduler")
+            add_test(NAME public_bounded_png_tiff COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_bounded_png_tiff_cli.py --exe $<TARGET_FILE:thumbgen>
+                --reference-probe $<TARGET_FILE:thumbgen_colour_probe>
+                --schema-dir ${CMAKE_CURRENT_SOURCE_DIR}/schemas --runtime-dir $<TARGET_FILE_DIR:OpenImageIO::OpenImageIO>)
+            add_test(NAME public_bounded_other COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_bounded_other_cli.py --exe $<TARGET_FILE:thumbgen>
+                --schema-dir ${CMAKE_CURRENT_SOURCE_DIR}/schemas --runtime-dir $<TARGET_FILE_DIR:OpenImageIO::OpenImageIO>)
+            set_tests_properties(public_bounded_png_tiff public_bounded_other
+                PROPERTIES TIMEOUT 360 LABELS "protocol;colour;scheduler")
             add_test(NAME public_integer_colour COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_integer_cli.py --exe $<TARGET_FILE:thumbgen>
                 --schema-dir ${CMAKE_CURRENT_SOURCE_DIR}/schemas --runtime-dir $<TARGET_FILE_DIR:OpenImageIO::OpenImageIO>)
@@ -567,7 +613,7 @@ endif()
 
 
 option(THUMBGEN_BUILD_COLOUR_PROBE "Build the product API colour acceptance probe" OFF)
-if(THUMBGEN_BUILD_COLOUR_PROBE)
+if(THUMBGEN_BUILD_COLOUR_PROBE OR (BUILD_TESTING AND Python3_Interpreter_FOUND AND THUMBGEN_TEST_PROTOCOL))
     add_executable(thumbgen_colour_probe tests/tools/colour_probe.cpp)
     target_link_libraries(thumbgen_colour_probe PRIVATE thumbgen_core)
 endif()

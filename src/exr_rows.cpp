@@ -5,6 +5,7 @@
 #include <array>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <new>
 #include <string_view>
 
@@ -54,16 +55,16 @@ struct Context {
     Context(const Context&)=delete;
     Context& operator=(const Context&)=delete;
     ~Context(){if(value)exr_finish(&value);}
-    exr_result_t open(const std::string& path) {
+    exr_result_t open(const std::string& path,int max_dimension=dimension_limit) {
         exr_context_initializer_t options=EXR_DEFAULT_CONTEXT_INITIALIZER;
         options.alloc_fn=&allocate;
         options.free_fn=&release;
         options.error_handler_fn=&quiet_error;
         options.flags=EXR_CONTEXT_FLAG_DISABLE_CHUNK_RECONSTRUCTION;
-        options.max_image_width=dimension_limit;
-        options.max_image_height=dimension_limit;
-        options.max_tile_width=dimension_limit;
-        options.max_tile_height=dimension_limit;
+        options.max_image_width=max_dimension;
+        options.max_image_height=max_dimension;
+        options.max_tile_width=max_dimension;
+        options.max_tile_height=max_dimension;
         AllocationScope scope(ledger);
         return exr_start_read(&value,path.c_str(),&options);
     }
@@ -286,6 +287,18 @@ public:
 };
 }
 
+bool preflight_exr_header(const std::string& path) {
+    constexpr std::array<unsigned char,4> signature{{0x76,0x2f,0x31,0x01}};
+    std::array<unsigned char,4> magic{};
+    std::ifstream input(std::filesystem::u8path(path),std::ios::binary);
+    if(!input.read(reinterpret_cast<char*>(magic.data()),magic.size()) || magic!=signature)return false;
+    Context context;
+    context.open(path,0);
+    if(context.ledger.denied)
+        throw FileFailure("decode_limit_exceeded","OpenEXR metadata exceeds its allocation limit");
+    return true;
+}
+
 std::optional<ExrRowProbe> probe_exr_rows(const std::string& path,const OIIO::ImageSpec& spec,
     int part,const std::vector<int>& channels) {
     if(part<0 || spec.deep || spec.depth!=1 || spec.full_depth!=1 || spec.nchannels<3 ||
@@ -328,7 +341,12 @@ void exr_rows_to_linear(const ExrRowProbe& probe,const OIIO::ColorProcessorHandl
     const auto components=probe.components;
     if(!OIIO::convert_pixel_values(probe.sample_format,source,OIIO::TypeDesc::FLOAT,destination,int(pixels*components)))
         throw FileFailure("decode_failed","cannot convert native OpenEXR colour block to float");
-    const bool associate=components==4 && probe.unassociated_alpha;
+    linearize_rows(processor,destination,pixels,components,probe.unassociated_alpha);
+}
+
+void linearize_rows(const OIIO::ColorProcessorHandle& processor,float* destination,
+    std::size_t pixels,int components,bool straight_alpha) {
+    const bool associate=components==4 && straight_alpha;
     if(!associate && (!processor || processor->isNoOp()))return;
     // The complete-image path uses ImageBufAlgo's premult and colourconvert
     // conventions, including zero-alpha emission and RGB transforms that
