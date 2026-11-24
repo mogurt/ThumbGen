@@ -348,7 +348,7 @@ class CLI(unittest.TestCase):
         self.assertGreater(result["execution"]["admission_mib"], 1, result)
 
 
-def stress_job(command, timeout):
+def stress_batch(command, timeout):
     """Measure the Linux worker high-water RSS when procfs exposes children."""
     with subprocess.Popen(command, env=ENV, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                           text=True, encoding="utf-8") as process:
@@ -377,7 +377,7 @@ def stress_job(command, timeout):
         if sys.platform.startswith("linux"):
             monitor.start()
         try:
-            stdout, stderr = process.communicate(timeout=timeout + 20)
+            stdout, stderr = process.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
             process.kill()
             process.communicate()
@@ -387,43 +387,61 @@ def stress_job(command, timeout):
             if monitor.ident is not None:
                 monitor.join()
         assert process.returncode == 0, (command, stdout, stderr)
-        result = json.loads(stdout.splitlines()[0])
-        return result, peak_kib / 1024 if peak_kib else None
+        records = [json.loads(line) for line in stdout.splitlines()]
+        return records, peak_kib / 1024 if peak_kib else None
 
 
 def run_stress(task_timeout):
-    sizes = [(12000, 6000, 8, False), (16000, 8000, 16, True)]
+    sources = [(12000, 6000, 8, False), (16000, 8000, 16, True)]
+    sizes = [(960, 960), (425, 260)]
+    codecs = [(RAW, "raw"), (RLE, "packbits"), (ZIP, "zip"), (PREDICTED_ZIP, "predicted-zip")]
+    memory_budget = 2048
+    decode_budget = 512
     with tempfile.TemporaryDirectory(prefix="thumbgen-psd-stress-") as tmp:
         root = Path(tmp)
-        source = root / "synthetic.psd"
-        for width, height, depth, alpha in sizes:
-            reference = None
-            for codec in (RAW, RLE, ZIP, PREDICTED_ZIP):
+        jobs, dimensions = [], {}
+        for width, height, depth, alpha in sources:
+            for codec, name in codecs:
+                job_id = f"{width}-{depth}-{name}"
+                source = root / f"{job_id}.psd"
                 write_stress_psd(source, width, height, depth, codec, alpha)
-                previews = []
-                for budget in (512, 2048):
-                    output = root / f"preview-{budget}.png"
-                    command = [str(EXE), "convert", str(source), "--output", str(output), "--format", "png",
-                               "--size", "720x490", "--background", "transparent", "--threads", "1",
-                               "--thread-budget", "1", "--memory-budget-mib", str(budget),
-                               "--max-decode-mib", str(budget), "--task-timeout-ms", str(task_timeout * 1000),
-                               "--json"]
-                    result, peak = stress_job(command, task_timeout)
-                    execution = result["execution"]
-                    print(json.dumps(dict(width=width, height=height, depth=depth, compression=codec,
-                                          budget_mib=budget, admission_mib=execution.get("admission_mib"),
-                                          estimated_task_mib=execution.get("estimated_task_mib"),
-                                          sampled_worker_peak_mib=peak, wall_ms=execution.get("wall_ms"))), flush=True)
-                    assert result["ok"] and execution["admission_mib"] + execution["fixed_reserve_mib"] <= budget, result
-                    ow, oh, pixels_out = read_png(output)
-                    assert (ow, oh) == fitted(width, height, (720, 490)), result
-                    previews.append(pixels_out)
-                    output.unlink()
-                assert previews[0] == previews[1], (width, depth, codec)
-                if reference is None:
-                    reference = previews[0]
-                assert previews[0] == reference, (width, depth, codec)
-                source.unlink()
+                dimensions[job_id] = width, height
+                jobs.append(dict(id=job_id, input=str(source), outputs=[
+                    dict(path=str(root / f"{job_id}-{size[0]}.jpg"), size=list(size), format="jpeg")
+                    for size in sizes]))
+        manifest = root / "jobs.json"
+        manifest.write_text(json.dumps(dict(schema_version=1,
+            defaults=dict(threads=1, max_decode_mib=decode_budget, background="black"),
+            execution=dict(workers=1, thread_budget=1, memory_budget_mib=memory_budget,
+                           task_timeout_ms=task_timeout * 1000),
+            jobs=jobs)), encoding="utf-8")
+        command = [str(EXE), "batch", "--manifest", str(manifest), "--json"]
+        records, peak = stress_batch(command, len(jobs) * task_timeout + 20)
+        results = [record for record in records if record["type"] == "result"]
+        assert [result["id"] for result in results] == [job["id"] for job in jobs], records
+        assert records[-1]["type"] == "summary", records
+
+        reference = {}
+        for job, result in zip(jobs, results):
+            execution = result["execution"]
+            assert result["ok"] and len(result["outputs"]) == len(sizes), result
+            assert execution["admission_mib"] + execution["fixed_reserve_mib"] <= memory_budget, result
+            width, height = dimensions[job["id"]]
+            previews = []
+            for output, request in zip(result["outputs"], job["outputs"]):
+                assert output["status"] == "success" and Path(output["path"]) == Path(request["path"]), output
+                assert (output["width"], output["height"]) == fitted(width, height, request["size"]), output
+                jpeg = Path(output["path"]).read_bytes()
+                assert len(jpeg) > 4 and jpeg.startswith(b"\xff\xd8") and jpeg.endswith(b"\xff\xd9"), output
+                previews.append(jpeg)
+            for request, expected, actual in zip(job["outputs"], reference.setdefault(width, previews), previews):
+                assert actual == expected, (job["id"], request["size"])
+            print(json.dumps(dict(id=job["id"], width=width, height=height,
+                                  max_decode_mib=decode_budget, memory_budget_mib=memory_budget,
+                                  admission_mib=execution["admission_mib"],
+                                  estimated_task_mib=execution["estimated_task_mib"], wall_ms=execution["wall_ms"],
+                                  output_bytes=list(map(len, previews)))), flush=True)
+        print(json.dumps(dict(jobs=len(results), sampled_worker_peak_mib=peak)), flush=True)
 
 
 if __name__ == "__main__":
@@ -433,7 +451,7 @@ if __name__ == "__main__":
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--fixtures-only", action="store_true")
     mode.add_argument("--stress", action="store_true", help="run only the opt-in 12K/16K matrix")
-    parser.add_argument("--task-timeout-seconds", type=int, default=60, help="stress timeout per conversion")
+    parser.add_argument("--task-timeout-seconds", type=int, default=60, help="stress timeout per batch job")
     args, remaining = parser.parse_known_args()
     if args.fixtures_only:
         check_fixture_encoding()
