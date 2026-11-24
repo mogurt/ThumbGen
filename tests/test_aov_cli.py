@@ -135,9 +135,16 @@ class Aov(unittest.TestCase):
                 self.assertIn('unprefixed RGB',chosen['reason'])
                 self.assertNotIn('visualization',result)
         self.assertEqual((self.directory/'main-first.exr.png').read_bytes(),self.output.read_bytes())
+    def test_auto_keeps_single_part_root_rgb_with_named_light_groups(self):
+        result=self.invoke('convert',self.inputs['root-with-light-groups.exr'],'--visualize','auto','--ocio-config','ocio://default',
+                           '--output',self.output)[0]
+        selection=result['selection']
+        self.assertEqual({c['group'] for c in selection['candidates']},{'RGB','diffuse_direct'})
+        self.assertEqual(selection['chosen']['group'],'RGB')
+        self.assertEqual(selection['chosen']['channels'],['R','G','B'])
     def test_auto_rejects_other_colour_views_and_prefixed_rgb(self):
-        for source,code in [('other-view.exr','ambiguous_channels'),('two-roots.exr','ambiguous_parts'),
-                            ('prefixed-rgb.exr','ambiguous_parts')]:
+        for source,code in [('two-views.exr','ambiguous_channels'),('other-view.exr','ambiguous_parts'),
+                            ('two-roots.exr','ambiguous_parts'),('prefixed-rgb.exr','ambiguous_parts')]:
             with self.subTest(source=source):
                 result=self.invoke('convert',self.inputs[source],'--visualize','auto','--output',self.output,exit=4)[0]
                 self.assertEqual(result['error']['code'],code)
@@ -146,10 +153,11 @@ class Aov(unittest.TestCase):
         colour=self.invoke('convert',self.inputs['main-first.exr'],'--output',self.output,exit=4)[0]
         self.assertEqual(colour['error']['code'],'ambiguous_parts')
         for source,options,part,group in [
-            ('other-view.exr',['--selection-policy','root_rgb'],'main','RGB'),
-            ('other-view.exr',['--part','0'],'main','RGB'),
+            ('root-with-light-groups.exr',['--selection-policy','root_rgb'],'main','RGB'),
+            ('root-with-light-groups.exr',['--part','0'],'main','RGB'),
             ('main-first.exr',['--part-name','sHaDoW'],'sHaDoW','RGB'),
             ('main-first.exr',['--channels','Fresnel'],'passes','Fresnel'),
+            ('root-with-primary.exr',[],'main','Beauty'),
             ('named-primary.exr',[],'Beauty','RGB'),
         ]:
             with self.subTest(source=source,options=options):
@@ -157,7 +165,7 @@ class Aov(unittest.TestCase):
                                    '--output',self.output,*options)[0]
                 chosen=result['selection']['chosen']
                 self.assertEqual((chosen['part_name'],chosen['group']),(part,group))
-                self.assertEqual(chosen['primary'],part=='Beauty')
+                self.assertEqual(chosen['primary'],part=='Beauty' or group=='Beauty')
                 self.output.unlink()
     def test_auto_sequence_reuses_a_named_part_across_reordering_and_new_primary(self):
         jobs=[self.job(name,name+'.exr',{'visualization':'auto','ocio_config':'ocio://default'},'main')

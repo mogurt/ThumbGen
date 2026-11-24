@@ -476,7 +476,7 @@ Json Engine::convert(const Job& job) {
             }
             // Prefer root RGB within a part. Other parts still participate in
             // ambiguity checks; do not silently skip a part with several groups.
-            if(job.options.channels.empty() && !use_auto_exr_preferences) {
+            if(job.options.channels.empty()) {
                 bool primary=job.options.selection_policy=="primary" && std::any_of(eligible.begin(),eligible.end(),[&](const auto& c){return detail::is_primary(candidate,c);});
                 if(primary)eligible.erase(std::remove_if(eligible.begin(),eligible.end(),[&](const auto& c){return !detail::is_primary(candidate,c);}),eligible.end());
                 else {

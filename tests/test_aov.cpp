@@ -24,7 +24,8 @@ static OIIO::ImageSpec colour_part(const char* name,std::vector<std::string> cha
     return spec;
 }
 static void selection_fixtures(const fs::path& root,Json& files) {
-    const auto rgb=colour_part("main",{"R","G","B","A","Z","AO.R","AO.G","AO.B"});
+    const auto rgb=colour_part("main",{"R","G","B","A","Z","AO.R","AO.G","AO.B",
+        "diffuse_indirect.R","diffuse_indirect.G","diffuse_indirect.B"});
     const auto shadow=colour_part("sHaDoW",{"R","G","B"});
     const auto passes=colour_part("passes",{"Fresnel.R","Fresnel.G","Fresnel.B","Normal.R","Normal.G","Normal.B"});
     const auto alternate=colour_part("alternate",{"R","G","B"});
@@ -45,7 +46,10 @@ static void selection_fixtures(const fs::path& root,Json& files) {
     save("main-last.exr",{passes,shadow,rgb});
     save("named-primary.exr",{rgb,shadow,beauty});
     save("two-roots.exr",{rgb,alternate,shadow});
-    save("other-view.exr",{colour_part("main",{"R","G","B","ShadowCamera.R","ShadowCamera.G","ShadowCamera.B"})});
+    save("root-with-light-groups.exr",{colour_part("main",{"R","G","B","diffuse_direct.R","diffuse_direct.G","diffuse_direct.B"})});
+    save("root-with-primary.exr",{colour_part("main",{"R","G","B","Beauty.R","Beauty.G","Beauty.B"})});
+    save("other-view.exr",{rgb,colour_part("views",{"ShadowCamera.R","ShadowCamera.G","ShadowCamera.B"})});
+    save("two-views.exr",{colour_part("views",{"left.R","left.G","left.B","right.R","right.G","right.B"})});
     save("prefixed-rgb.exr",{colour_part("main",{"RGB.R","RGB.G","RGB.B"}),shadow});
 }
 static Json fixtures(const fs::path& root) {
