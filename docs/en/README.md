@@ -7,6 +7,7 @@
 | [Getting started](getting-started.md) | First conversion and common tasks |
 | [Installation](installation.md) | Program folder and runtime setup |
 | [Command reference](cli.md) | Sizes, formats, backgrounds and resources |
+| [Large previews](large-previews.md) | Bounded layouts, admission and fallback |
 | [Layers and sequences](selection.md) | Pick layers and keep frames consistent |
 | [Color management](color-cms.md) | OCIO, ICC and transparency |
 | [Data previews](data-preview.md) | Depth, normals, vectors and IDs |

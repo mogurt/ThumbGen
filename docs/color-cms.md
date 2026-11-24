@@ -16,7 +16,9 @@ thumbgen convert frame.exr --output preview.jpg --ocio-config config.ocio --inpu
 
 ## 嵌入 ICC
 
-受支持的单张 PNG、JPEG、TIFF、WebP 会自动应用 RGB / 灰度 ICC。自动选择输入空间且未指定配置、显示器或视图时，这类文件始终使用 `ocio://default`，不受 `OCIO` 环境变量影响。用于 ICC 转换的项目配置须提供 `srgb_rec709_scene` 桥接色彩空间。显式指定输入空间会覆盖嵌入配置，因此只应在确认源颜色含义时使用。
+受支持的单张 PNG、JPEG、TIFF、WebP 会自动应用 RGB 或灰度 ICC。自动选择输入空间且未指定配置、显示器或视图时，这类文件使用 `ocio://default`，不受 `OCIO` 环境变量影响。显式选择配置或显示器与视图时，遵循上文的项目配置规则。显式指定输入空间会覆盖嵌入配置。
+
+用于 ICC 转换的项目配置须能解析标准非线性场景参考空间 `srgb_rec709_scene`。可直接用标准名声明该色彩空间，也可声明对应别名并设置同名 interop ID。CMYK ICC 仍遵循显式指定或从环境继承的项目配置。
 
 带可靠 ICC 的四通道 CMYK TIFF，以及受支持的 8-bit baseline Adobe CMYK/YCCK JPEG，可以转为 RGB 预览。没有可靠 profile、分色布局不支持或 ICC 损坏时会报告错误；给 CMYK 强行指定 RGB 空间不能替代正确转换。
 

@@ -20,6 +20,8 @@ thumbgen convert multipart.exr --output preview.jpg --part-name beauty
 
 `--part N` 也可按从 0 开始的索引选择，但不能与 `--part-name` 同时使用。深度、法线、ID 等数据通道请使用[数据预览](data-preview.md)。
 
+`--visualize auto` 使用默认选择策略时，如果其他 part 的候选都是阴影或环境光遮蔽等已识别的辅助 AOV，可选用唯一一组无前缀 RGB(A)。没有颜色候选时，此模式可跨 part 预览 Cryptomatte 家族。多个家族中唯一的 `crypto_object` 或 `CryptoObject` 优先，名称不区分大小写。其他歧义需显式指定 part、通道组或 Cryptomatte 家族。
+
 ## 连续帧保持一致
 
 在批处理任务中使用相同的 `sequence_id`，即可固定同一组图层与通道。后续帧缺失或改变通道时报告错误，而不会悄悄选择另一张图。
