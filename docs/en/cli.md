@@ -42,7 +42,9 @@ thumbgen convert frame.exr --output preview.jpg --ocio-config config.ocio --inpu
 
 Data previews use `--visualize`, `--channels`, `--data-range MIN,MAX` and `--invalid-values black|magenta|error`. See [data previews](data-preview.md). For Deep color, use `--deep-mode flatten`; see [Deep EXR](public-deep.md).
 
-Use `--visualize auto` to apply the standard color selection rules in one conversion. When there are no color candidates, it can preview an unambiguous Cryptomatte family, reading its numbered layers across parts. Multiple families or an incomplete layout produce an error. Part, channel and Deep flattening options take precedence. Color management options apply only to color previews.
+Use `--visualize auto` to select a color or Cryptomatte preview in one conversion. For EXR with the default selection policy and no explicit part or channels, recognized primary images take priority. When color candidates compete, a single unprefixed RGB or RGBA group can also win if all other color candidates are recognized auxiliary passes such as shadow, ambient occlusion, or Fresnel.
+
+When there are no color candidates, automatic mode can preview a single Cryptomatte family across parts. Under the default selection policy, a unique `crypto_object` or `CryptoObject` family (case-insensitive) takes priority among multiple families. Ambiguous selections and invalid selected layouts produce errors. Part, channel and Deep flattening options take precedence. Color management options apply only to color previews.
 
 ## Resource budgets and timeouts
 

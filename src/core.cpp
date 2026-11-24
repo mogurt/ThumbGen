@@ -399,6 +399,7 @@ Json Engine::convert(const Job& job) {
         if(!jpeg)open_input();
         const std::string input_format=jpeg?"jpeg":in->format_name();
         const bool can_auto_crypto=detail::auto_cryptomatte_allowed(job.options) && input_format=="openexr";
+        const bool use_auto_exr_preferences=can_auto_crypto && job.options.selection_policy=="primary";
 #if defined(THUMBGEN_EXR_PROFILE) && THUMBGEN_EXR_PROFILE
         profile.enable(input_format=="openexr");
 #endif
@@ -475,7 +476,7 @@ Json Engine::convert(const Job& job) {
             }
             // Prefer root RGB within a part. Other parts still participate in
             // ambiguity checks; do not silently skip a part with several groups.
-            if(job.options.channels.empty()) {
+            if(job.options.channels.empty() && !use_auto_exr_preferences) {
                 bool primary=job.options.selection_policy=="primary" && std::any_of(eligible.begin(),eligible.end(),[&](const auto& c){return detail::is_primary(candidate,c);});
                 if(primary)eligible.erase(std::remove_if(eligible.begin(),eligible.end(),[&](const auto& c){return !detail::is_primary(candidate,c);}),eligible.end());
                 else {
@@ -485,17 +486,26 @@ Json Engine::convert(const Job& job) {
             }
             for(const auto& group:eligible)choices.push_back({p,candidate,group});
         }
+        bool preferred_object=false;
         if(can_auto_crypto && choices.empty() && !has_deep && !crypto_families.empty()) {
-            if(crypto_families.size()!=1)
-                throw Failure("ambiguous_channels","multiple Cryptomatte families; specify visualization and channels");
-            crypto_family=crypto_families.front();crypto=true;data=true;
+            auto family=crypto_families.begin();
+            if(crypto_families.size()>1) {
+                const auto end=crypto_families.end();
+                if(use_auto_exr_preferences)family=std::find_if(family,end,detail::is_object_crypto_family);
+                if(!use_auto_exr_preferences || family==end || std::any_of(family+1,end,detail::is_object_crypto_family))
+                    throw Failure("ambiguous_channels","multiple Cryptomatte families; specify visualization and channels");
+                preferred_object=true;
+            }
+            crypto_family=*family;crypto=true;data=true;
         }
         if(automatic)mapping.mode=crypto?detail::DataMode::cryptomatte:detail::DataMode::colour;
         if(crypto && part_exists) {
             crypto_layout=detail::crypto_layout(std::move(crypto_parts),crypto_family,crypto_part);
             const auto& first=crypto_layout->layers.front();
             const auto& first_spec=crypto_layout->parts.at(first.part);
-            detail::Candidate group{crypto_family,"data",automatic?"automatic Cryptomatte coverage overview":"explicit Cryptomatte coverage overview",first.channels};
+            const auto reason=preferred_object?"automatic Cryptomatte coverage overview for the object family":
+                automatic?"automatic Cryptomatte coverage overview":"explicit Cryptomatte coverage overview";
+            detail::Candidate group{crypto_family,"data",reason,first.channels};
             all_choices.push_back({first.part,first_spec,group});
             choices.push_back({first.part,first_spec,std::move(group)});
         }
@@ -503,6 +513,16 @@ Json Engine::convert(const Job& job) {
         if(job.options.channels.empty() && job.options.selection_policy=="primary" &&
            std::any_of(choices.begin(),choices.end(),[](const auto& c){return detail::is_primary(c.spec,c.candidate);}))
             choices.erase(std::remove_if(choices.begin(),choices.end(),[](const auto& c){return !detail::is_primary(c.spec,c.candidate);}),choices.end());
+        else if(use_auto_exr_preferences && choices.size()>1) {
+            auto auxiliary=[](const auto& choice){return detail::is_auxiliary_aov(choice.spec,choice.candidate);};
+            const auto root=std::find_if_not(choices.begin(),choices.end(),auxiliary);
+            if(root!=choices.end() && detail::is_root_rgb(root->spec,root->candidate) && std::all_of(root+1,choices.end(),auxiliary)) {
+                auto chosen=std::move(*root);
+                chosen.candidate.reason="unique unprefixed RGB group among auxiliary AOVs";
+                choices.clear();
+                choices.push_back(std::move(chosen));
+            }
+        }
         Json request=detail::selection_request(job);
         auto pin=impl_->sequences.find(job.sequence_id);
         auto describe=[&](const Choice& choice) {

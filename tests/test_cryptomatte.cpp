@@ -42,6 +42,52 @@ static void metadata(OIIO::ImageSpec& spec,const std::string& prefix="cryptomatt
     spec.attribute(prefix+"/name","Object");spec.attribute(prefix+"/hash","MurmurHash3_32");spec.attribute(prefix+"/conversion","uint32_to_float32");
     spec.attribute("DateTime","2000:01:01 00:00:00");
 }
+static void object_family_fixtures(const fs::path& root,Json& files) {
+    auto save=[&](const char* fixture,const char* object,const char* secondary) {
+        const std::string family=object,other_family=secondary,kind=fixture;
+        const auto path=(root/(kind+".exr")).u8string();
+        OIIO::ImageSpec parts[2];
+        for(int part=0;part<2;++part) {
+            std::vector<std::string> channels;
+            for(char c:std::string("RGBA"))channels.push_back(family+(part?"01.":"00.")+c);
+            if(part)for(char c:std::string("RGBA"))channels.push_back(other_family+"00."+c);
+            if(part && kind=="beauty_and_families")channels.insert(channels.end(),{"R","G","B"});
+            if(part && kind=="object_bad_layout")channels.erase(channels.begin()+3);
+            parts[part]=OIIO::ImageSpec(2,2,int(channels.size()),OIIO::TypeDesc::FLOAT);
+            parts[part].channelnames=std::move(channels);
+            parts[part].attribute("oiio:subimagename",part?"second":"first");
+        }
+        metadata(parts[0]);
+        parts[0].attribute("cryptomatte/test123/name",family);
+        if(kind=="object_bad_metadata")parts[0].attribute("cryptomatte/test123/hash","wrong_hash");
+        metadata(parts[1],"cryptomatte/test456");
+        parts[1].attribute("cryptomatte/test456/name",other_family);
+        auto out=OIIO::ImageOutput::create(path);require(bool(out),OIIO::geterror());
+        require(out->open(path,2,parts),out->geterror());
+        for(int part=0;part<2;++part) {
+            if(part)require(out->open(path,parts[part],OIIO::ImageOutput::AppendSubimage),out->geterror());
+            std::vector<float> pixels(4*parts[part].nchannels);
+            for(std::size_t c=0;c<pixels.size();++c) {
+                const auto& channel=parts[part].channelnames[c%parts[part].nchannels];
+                if(channel.find('.')==std::string::npos)pixels[c]=.5f;
+                else if(channel.back()=='R') {
+                    const auto id=channel.rfind(other_family,0)==0?other:bunny;
+                    std::memcpy(&pixels[c],&id,sizeof(id));
+                } else if(channel.back()=='G')pixels[c]=channel.rfind(other_family,0)==0?1.0f:.5f;
+            }
+            require(out->write_image(OIIO::TypeDesc::FLOAT,pixels.data()),out->geterror());
+        }
+        require(out->close(),out->geterror());
+        files[kind]=path;
+    };
+    save("object_underscore","CRYPTO_OBJECT","crypto_material");
+    save("object_camel","CryptoObject","CryptoMaterial");
+    save("mislabeled_object","Crypto_Object_Extra","CryptoMaterial");
+    save("two_objects","CryptoObject","crypto_object");
+    save("object_bad_metadata","CryptoObject","CryptoMaterial");
+    save("object_bad_layout","CryptoObject","CryptoMaterial");
+    save("beauty_and_families","CryptoObject","CryptoMaterial");
+}
 static Json fixtures(const fs::path& root) {
     require(fs::create_directory(root),"fixture directory already exists");Json result;
     for(const std::string kind:{"valid","with_beauty","multiple_families","bad","half_coverage","half_id","odd","gap","no_metadata","bad_hash","sidecar","legacy","many","window","oriented","missing_last","identity","strip_float","strip_half","strip_bad","strip_window","strip_tiled","strip_interleaved","strip_zips"}) {
@@ -120,7 +166,9 @@ static Json fixtures(const fs::path& root) {
     std::memcpy(pixels,&bunny,sizeof(bunny));pixels[1]=0.25f;
     require(output->write_image(OIIO::TypeDesc::FLOAT,pixels),output->geterror());require(output->open(path.u8string(),parts[1],OIIO::ImageOutput::AppendSubimage),output->geterror());
     std::memcpy(pixels,&other,sizeof(other));pixels[1]=0.75f;
-    require(output->write_image(OIIO::TypeDesc::FLOAT,pixels),output->geterror());require(output->close(),output->geterror());result["split"]=path.u8string();return result;
+    require(output->write_image(OIIO::TypeDesc::FLOAT,pixels),output->geterror());require(output->close(),output->geterror());result["split"]=path.u8string();
+    object_family_fixtures(root,result);
+    return result;
 }
 static int run(const std::vector<fs::path>& args) {
     try {
