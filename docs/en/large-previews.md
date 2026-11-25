@@ -19,6 +19,9 @@ The balanced preset can decode eligible sources once for up to two preview sizes
 | BMP | Uncompressed 24-bit RGB and 32-bit RGB(A). |
 | TGA | Uncompressed, non-interleaved 24-bit RGB and 32-bit RGBA. The decoder retains a native frame. |
 | WebP | Still lossy RGB/RGBA. The decoder retains compressed input and a native frame. Lossless and animated inputs use the checked full-image path where the layout fits its decoder limits. |
+| PSD | Stored 8- or 16-bit RGB composites in PSD v1, with optional merged transparency. Supports Raw, PackBits RLE, ZIP and ZIP with prediction. |
+
+PSD previews read the composite saved in the file. Other presets and custom color settings use the same decoder for supported composites through a budget-checked full-image path.
 
 The bounded layouts use extents of at most 65,536 pixels per axis, with smaller limits where the format requires them. EXR bounds include an 8 MiB metadata allocation limit, a 1,048,576-entry offset table and a 64 MiB unpacked chunk limit. Preview workspace is also capped. Unsupported layouts, other presets, additional output sizes, and data/Deep previews use the applicable existing path when its limits allow. If the file fails validation or its plan exceeds a limit, the affected job reports an error before writing a preview.
 

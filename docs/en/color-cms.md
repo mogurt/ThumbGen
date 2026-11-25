@@ -18,6 +18,8 @@ Input space comes from `--input-space` first, otherwise file metadata. With no s
 
 Supported single-image PNG, JPEG, TIFF and WebP inputs automatically use RGB or grayscale ICC profiles. With automatic input space and no explicit config, display or view, these files use `ocio://default` regardless of `OCIO`. An explicit config or display/view request follows the project configuration rules above. An explicit input space overrides the embedded profile.
 
+Supported PSD v1 RGB composites automatically use embedded RGB ICC profiles and follow the same configuration precedence. The stored composite counts as one image even when the PSD contains layers. An embedded profile selected automatically produces an error if it exceeds the profile limit, is damaged, or uses an incompatible color model.
+
 A project config used for ICC must resolve the standard nonlinear scene-referred `srgb_rec709_scene` bridge. Use the canonical color-space name or a declared alias with that interop ID. CMYK ICC continues to use the project's configuration when one is supplied or inherited.
 
 Four-channel CMYK TIFF and supported 8-bit baseline Adobe CMYK/YCCK JPEG inputs with reliable ICC profiles can produce RGB previews. Missing profiles, unsupported ink layouts or damaged ICC data cause errors. Assigning an RGB space to CMYK is not a substitute for proper conversion.

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(ThumbGen VERSION 0.1.3 LANGUAGES CXX)
+project(ThumbGen VERSION 0.1.4 LANGUAGES CXX)
 
 find_package(OpenImageIO 3.2 CONFIG REQUIRED)
 find_package(OpenColorIO 2.5 CONFIG REQUIRED)
@@ -68,7 +68,7 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_
 
 add_library(thumbgen_core STATIC src/core.cpp src/colour_plan.cpp src/resize_srgb.cpp src/color_input.cpp src/cms_input.cpp src/cmyk_jpeg.cpp src/jpeg_rows.cpp src/selection.cpp src/files.cpp src/quantize.cpp src/data_preview.cpp src/data_image.cpp src/selected_input.cpp src/cryptomatte.cpp src/sampled_id.cpp src/deep_flatten.cpp src/deep_reader.cpp src/deep_selection.cpp)
 option(THUMBGEN_PNG_SCANLINE "Use bounded native PNG16 decode for eligible integer colour sources" ON)
-target_sources(thumbgen_core PRIVATE src/exr_rows.cpp src/png_rows.cpp src/tiff_rows.cpp
+target_sources(thumbgen_core PRIVATE src/exr_rows.cpp src/png_rows.cpp src/tiff_rows.cpp src/psd_rows.cpp
     src/other_rows.cpp src/hdr_rows.cpp src/dpx_rows.cpp src/bmp_rows.cpp src/webp_rows.cpp src/tga_rows.cpp)
 if(THUMBGEN_PNG_SCANLINE)
     target_compile_definitions(thumbgen_core PRIVATE THUMBGEN_PNG_SCANLINE=1)
@@ -554,6 +554,10 @@ if(BUILD_TESTING)
             add_test(NAME public_bounded_other COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_bounded_other_cli.py --exe $<TARGET_FILE:thumbgen>
                 --schema-dir ${CMAKE_CURRENT_SOURCE_DIR}/schemas --runtime-dir $<TARGET_FILE_DIR:OpenImageIO::OpenImageIO>)
+            add_test(NAME public_bounded_psd COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_bounded_psd_cli.py --exe $<TARGET_FILE:thumbgen>
+                --runtime-dir $<TARGET_FILE_DIR:OpenImageIO::OpenImageIO>)
+            set_tests_properties(public_bounded_psd PROPERTIES TIMEOUT 120 LABELS "protocol;colour;scheduler")
             set_tests_properties(public_bounded_png_tiff public_bounded_other
                 PROPERTIES TIMEOUT 360 LABELS "protocol;colour;scheduler")
             add_test(NAME public_integer_colour COMMAND ${Python3_EXECUTABLE}

@@ -4,7 +4,7 @@
 
 使用适合平台的完整 ThumbGen 程序目录。Windows 需要保留随附 DLL；Linux 需要保留 bin/lib 相对位置和执行权限。不要只复制单个可执行文件。
 
-下载匹配平台的 `thumbgen-0.1.3-*.zip` 或 `.tar.gz`，先核对随附的 `SHA256SUMS`。两个压缩包都只有固定的 `ThumbGen/` 外层目录，里面直接是 `bin/`、`share/`、`licenses/`，Linux 另有 `lib/`；目录名不含版本或平台，无需解压后改名或移动。
+下载匹配平台的 `thumbgen-0.1.4-*.zip` 或 `.tar.gz`，先核对随附的 `SHA256SUMS`。两个压缩包都只有固定的 `ThumbGen/` 外层目录，里面直接是 `bin/`、`share/`、`licenses/`，Linux 另有 `lib/`；目录名不含版本或平台，无需解压后改名或移动。
 
 Windows 解压到 `%LOCALAPPDATA%/Programs/`，得到 `%LOCALAPPDATA%/Programs/ThumbGen/bin/thumbgen.exe`。PowerShell 可运行：
 
@@ -16,7 +16,7 @@ Linux 解压到 `$HOME/.local/opt/`，得到 `$HOME/.local/opt/ThumbGen/bin/thum
 
 ```sh
 mkdir -p "$HOME/.local/opt"
-tar -xzf thumbgen-0.1.3-linux-x86_64-glibc217.tar.gz -C "$HOME/.local/opt"
+tar -xzf thumbgen-0.1.4-linux-x86_64-glibc217.tar.gz -C "$HOME/.local/opt"
 "$HOME/.local/opt/ThumbGen/bin/thumbgen" --version --json
 ```
 
