@@ -22,6 +22,14 @@ key='PATH' if os.name=='nt' else 'LD_LIBRARY_PATH'
 environment[key]=str(args.runtime_dir.resolve())+os.pathsep+environment.get(key,'')
 validator=Draft202012Validator(json.loads((args.schema_dir/'protocol-v1.schema.json').read_text(encoding='utf-8')))
 manifest_validator=Draft202012Validator(json.loads((args.schema_dir/'jobs-v1.schema.json').read_text(encoding='utf-8')))
+fallback='TG_EXR_AUTO_SELECTION_FALLBACK'
+unresolved='TG_EXR_AUTO_SELECTION_UNRESOLVED'
+
+def markers(lines):
+    return [line for line in lines if line.startswith((fallback+' ',unresolved+' '))]
+
+def fallback_marker(part,group,count):
+    return f'{fallback} selected_part={part} selected_group={json.dumps(group)} candidate_count={count}'
 
 def png(path):
     data=Path(path).read_bytes()
@@ -71,6 +79,8 @@ class Aov(unittest.TestCase):
         records=[json.loads(line) for line in process.stdout.splitlines() if line.strip()]
         self.assertTrue(records)
         for record in records:validator.validate(record)
+        self.assertEqual(markers(process.stderr.splitlines()),
+                         markers(w for record in records for w in record.get('warnings',[])))
         return records
     def convert(self,source,mode,channels,*options,exit=0):
         return self.invoke('convert',self.inputs[source],'--output',self.output,'--visualize',mode,'--channels',channels,*options,exit=exit)
@@ -133,6 +143,7 @@ class Aov(unittest.TestCase):
                 self.assertEqual((chosen['part'],chosen['part_name'],chosen['group']),(part,'main','RGB'))
                 self.assertEqual(chosen['channels'],['R','G','B','A'])
                 self.assertIn('unprefixed RGB',chosen['reason'])
+                self.assertEqual(markers(result['warnings']),[])
                 self.assertNotIn('visualization',result)
         self.assertEqual((self.directory/'main-first.exr.png').read_bytes(),self.output.read_bytes())
     def test_auto_keeps_single_part_root_rgb_with_named_light_groups(self):
@@ -142,18 +153,69 @@ class Aov(unittest.TestCase):
         self.assertEqual({c['group'] for c in selection['candidates']},{'RGB','diffuse_direct'})
         self.assertEqual(selection['chosen']['group'],'RGB')
         self.assertEqual(selection['chosen']['channels'],['R','G','B'])
-    def test_auto_rejects_other_colour_views_and_prefixed_rgb(self):
+        self.assertEqual(markers(result['warnings']),[])
+    def test_strict_colour_rejects_other_colour_views_and_prefixed_rgb(self):
         for source,code in [('two-views.exr','ambiguous_channels'),('other-view.exr','ambiguous_parts'),
-                            ('two-roots.exr','ambiguous_parts'),('prefixed-rgb.exr','ambiguous_parts')]:
+                            ('two-roots.exr','ambiguous_parts'),('prefixed-rgb.exr','ambiguous_parts'),
+                            ('tied-primary.exr','ambiguous_channels')]:
             with self.subTest(source=source):
-                result=self.invoke('convert',self.inputs[source],'--visualize','auto','--output',self.output,exit=4)[0]
+                result=self.invoke('convert',self.inputs[source],'--visualize','colour','--output',self.output,exit=4)[0]
                 self.assertEqual(result['error']['code'],code)
+                self.assertEqual(markers(result['warnings']),[])
                 self.assertFalse(self.output.exists())
+    def test_auto_fallback_ranks_eligible_groups(self):
+        for source,part,group,kind,count,reason in [
+            ('lights-first.exr',1,'RGB','colour',3,'unique unprefixed RGB'),
+            ('lights-last.exr',0,'RGB','colour',3,'unique unprefixed RGB'),
+            ('two-roots.exr',0,'RGB','colour',3,'first eligible'),
+            ('no-root.exr',0,'light','grey',3,'first eligible'),
+            ('two-views.exr',0,'left','colour',2,'first eligible'),
+            ('tied-primary.exr',0,'Beauty','colour',2,'first eligible'),
+            ('quoted-group.exr',0,'a"\nview','colour',2,'first eligible'),
+        ]:
+            with self.subTest(source=source):
+                output=self.directory/(source+'.png')
+                result=self.invoke('convert',self.inputs[source],'--visualize','auto','--ocio-config','ocio://default',
+                                   '--output',output)[0]
+                chosen=result['selection']['chosen']
+                self.assertEqual((chosen['part'],chosen['group'],chosen['kind']),(part,group,kind))
+                self.assertIn(reason,chosen['reason'])
+                self.assertEqual(markers(result['warnings']),[fallback_marker(part,group,count)])
+                self.assertTrue(output.exists())
+    def test_auto_unresolved_preserves_selection_errors_only(self):
+        for source,options,code,warning in [
+            ('depth.exr',[],'visualization_required',True),
+            ('unknown.exr',[],'ambiguous_channels',True),
+            ('two-views.exr',['--part','0'],'ambiguous_channels',False),
+            ('two-roots.exr',['--channels','RGB'],'ambiguous_parts',False),
+            ('main-first.exr',['--ocio-config','missing.ocio'],'colour_config_failed',False),
+            ('missing.exr',[],'open_failed',False),
+        ]:
+            with self.subTest(source=source,options=options):
+                result=self.invoke('convert',self.inputs.get(source,self.directory/source),'--visualize','auto',
+                                   '--output',self.output,*options,exit=4)[0]
+                self.assertEqual(result['error']['code'],code)
+                self.assertEqual(markers(result['warnings']),[f'{unresolved} error_code={code}'] if warning else [])
+                self.assertFalse(self.output.exists())
+    def test_auto_does_not_retry_a_failed_selected_group(self):
+        source=self.directory/'truncated-root.exr'
+        # Truncate the last scanline chunk, which belongs to the root RGB part.
+        source.write_bytes(Path(self.inputs['lights-first.exr']).read_bytes()[:-4])
+        command=['convert',source,'--visualize','auto','--ocio-config','ocio://default','--output',self.output]
+        result=self.invoke(*command,exit=4)[0]
+        self.assertEqual(result['selection']['chosen']['group'],'RGB')
+        self.assertEqual(result['error']['code'],'decode_failed')
+        self.assertEqual(markers(result['warnings']),[fallback_marker(1,'RGB',3)])
+        self.assertFalse(self.output.exists())
+        alternate=self.invoke(*command,'--part','0','--channels','diffuse')[0]
+        self.assertEqual(alternate['selection']['chosen']['group'],'diffuse')
+        self.assertTrue(self.output.exists())
     def test_auto_keeps_primary_and_explicit_selection_priorities(self):
         colour=self.invoke('convert',self.inputs['main-first.exr'],'--output',self.output,exit=4)[0]
         self.assertEqual(colour['error']['code'],'ambiguous_parts')
         for source,options,part,group in [
             ('root-with-light-groups.exr',['--selection-policy','root_rgb'],'main','RGB'),
+            ('root-with-primary.exr',['--selection-policy','root_rgb'],'main','RGB'),
             ('root-with-light-groups.exr',['--part','0'],'main','RGB'),
             ('main-first.exr',['--part-name','sHaDoW'],'sHaDoW','RGB'),
             ('main-first.exr',['--channels','Fresnel'],'passes','Fresnel'),
@@ -166,7 +228,12 @@ class Aov(unittest.TestCase):
                 chosen=result['selection']['chosen']
                 self.assertEqual((chosen['part_name'],chosen['group']),(part,group))
                 self.assertEqual(chosen['primary'],part=='Beauty' or group=='Beauty')
+                self.assertEqual(markers(result['warnings']),[])
                 self.output.unlink()
+        result=self.invoke('convert',self.inputs['lights-first.exr'],'--visualize','auto','--selection-policy','root_rgb',
+                           '--ocio-config','ocio://default','--output',self.output)[0]
+        self.assertEqual(result['selection']['strategy'],'root_rgb')
+        self.assertEqual(markers(result['warnings']),[fallback_marker(1,'RGB',3)])
     def test_auto_sequence_reuses_a_named_part_across_reordering_and_new_primary(self):
         jobs=[self.job(name,name+'.exr',{'visualization':'auto','ocio_config':'ocio://default'},'main')
               for name in ['main-first','main-last','named-primary']]
@@ -176,6 +243,40 @@ class Aov(unittest.TestCase):
             chosen=results[name]['chosen']
             self.assertEqual((chosen['part'],chosen['part_name']),(part,'main'))
             self.assertEqual(results[name]['lock_status'],'reused')
+    def test_auto_batch_fallback_locks_first_eligible_mapping_and_emits_once(self):
+        opts={'visualization':'auto','ocio_config':'ocio://default'}
+        jobs=[self.job(id,source,opts,'camera') for id,source in [
+            ('data','depth.exr'),('anchor','lights-first.exr'),('reordered','lights-last.exr'),
+            ('removed','no-root.exr'),('new-primary','named-primary.exr')]]
+        jobs[1]['outputs'].append({'path':str(self.directory/'small.png'),'size':[2,1]})
+        records=self.batch(jobs,exit=3)
+        results={r['id']:r for r in records if r['type']=='result'}
+        self.assertEqual(markers(results['data']['warnings']),[f'{unresolved} error_code=visualization_required'])
+        anchor=results['anchor']
+        self.assertEqual(anchor['selection']['lock_status'],'created')
+        self.assertEqual(markers(anchor['warnings']),[fallback_marker(1,'RGB',3)])
+        self.assertEqual([out['status'] for out in anchor['outputs']],['success','success'])
+        self.assertEqual([png(out['path'])[:2] for out in anchor['outputs']],[(4,2),(2,1)])
+        for name in ['reordered','new-primary']:
+            self.assertEqual(results[name]['selection']['lock_status'],'reused')
+            self.assertEqual(results[name]['selection']['chosen']['part_name'],'main')
+            self.assertEqual(markers(results[name]['warnings']),[])
+            self.assertEqual(png(results[name]['outputs'][0]['path']),png(anchor['outputs'][0]['path']))
+        self.assertEqual(results['removed']['error']['code'],'sequence_selection_changed')
+        self.assertEqual(markers(results['removed']['warnings']),[f'{unresolved} error_code=sequence_selection_changed'])
+    def test_text_cli_prints_an_exact_standalone_marker_once(self):
+        cases=[('lights-first.exr',0,fallback_marker(1,'RGB',3)),
+               ('depth.exr',4,f'{unresolved} error_code=visualization_required')]
+        for source,status,marker in cases:
+            with self.subTest(source=source):
+                process=subprocess.run([str(args.exe),'convert',self.inputs[source],'--output-dir',str(self.directory),
+                    '--visualize','auto','--ocio-config','ocio://default','--size','4x2','--size','2x1','--format','png'],
+                    env=environment,capture_output=True,text=True,encoding='utf-8',timeout=60)
+                self.assertEqual(process.returncode,status,process.stdout+process.stderr)
+                self.assertEqual(markers(process.stderr.splitlines()),[marker])
+                self.assertEqual(process.stderr.count(marker.split()[0]),1)
+                self.assertNotIn(marker.split()[0],process.stdout)
+        self.assertEqual([png(self.directory/f'lights-first.exr.{size}.png')[:2] for size in ('4x2','2x1')],[(4,2),(2,1)])
     def test_required_and_incompatible_options(self):
         cases=[('depth','Z',[]),('vector','motion',[]),('id_rgb','matID',[]),('id','object_id',['--data-range','0,1']),
                ('normal','N',['--data-range','1,1']),('normal','N',['--data-range','0,nan']),

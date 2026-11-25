@@ -42,9 +42,7 @@ thumbgen convert frame.exr --output preview.jpg --ocio-config config.ocio --inpu
 
 数据预览使用 `--visualize`、`--channels`、`--data-range MIN,MAX` 和 `--invalid-values black|magenta|error`，详见[数据预览](data-preview.md)。Deep 颜色使用 `--deep-mode flatten`，详见[Deep EXR](public-deep.md)。
 
-使用 `--visualize auto` 在一次转换中选择颜色或 Cryptomatte 预览。默认策略优先选择明确命名的主画面，其次优先选择各 part 内的顶层 RGB。若未指定 part 或通道，且多个 EXR part 仍有颜色候选，自动模式可在其余候选都是阴影、环境光遮蔽或 Fresnel 等可识别的辅助通道组时，选用唯一一组无前缀的 RGB 或 RGBA。
-
-没有颜色候选时，自动模式可以跨 part 预览单个 Cryptomatte 家族。默认选择策略下，多个家族中唯一的 `crypto_object` 或 `CryptoObject` 优先（不区分大小写）。无法消除歧义或所选布局无效时会报错。指定 part、通道或 Deep 展平时，自动模式遵循显式选择。色彩管理选项只用于颜色预览。
+使用 `--visualize auto` 在一次转换中选择颜色或 Cryptomatte 预览。未指定 part 或通道时，自动模式会尽力从存在歧义的平面 EXR 颜色或灰度候选中选出预览，并为回退选择告警。需要严格选择颜色时使用 `--visualize colour`。选择顺序、错误和连续帧锁定详见[图层选择与告警标记](selection.md)。
 
 ## 执行预算与时限
 

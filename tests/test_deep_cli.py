@@ -126,6 +126,15 @@ class DeepCLI(unittest.TestCase):
     def test_missing_mapping_and_nonlinear_fail(self):
         self.assertEqual(self.convert('missing_alpha',exit=4)['error']['code'],'deep_channel_mapping_invalid')
         self.assertEqual(self.convert('scalar','--input-space','sRGB',exit=4)['error']['code'],'deep_colour_unsupported')
+    def test_auto_deep_marks_only_unresolved_selection(self):
+        rejected=self.invoke('convert',self.inputs['scalar'],'--output',self.output,'--visualize','auto',exit=4)[0]
+        invalid=self.convert('missing_alpha','--visualize','auto',exit=4)
+        for result,code in [(rejected,'deep_requires_flattening'),(invalid,'deep_channel_mapping_invalid')]:
+            self.assertEqual(result['error']['code'],code)
+            self.assertEqual(result['warnings'],[f'TG_EXR_AUTO_SELECTION_UNRESOLVED error_code={code}'])
+        failed=self.convert('scalar','--visualize','auto','--input-space','sRGB',exit=4)
+        self.assertEqual(failed['error']['code'],'deep_colour_unsupported')
+        self.assertEqual(failed['warnings'],[])
     def test_sample_limit_and_parent_admission(self):
         self.assertEqual(self.convert('scalar','--deep-samples-per-pixel','1',exit=4)['error']['code'],'deep_sample_limit_exceeded')
         r=self.convert('scalar','--memory-budget-mib','512',exit=4)

@@ -3,6 +3,7 @@
 #include "files.h"
 #include "isolated.h"
 #include "data_preview.h"
+#include "selection_request.h"
 #include <algorithm>
 #include <atomic>
 #include <csignal>
@@ -410,9 +411,22 @@ static int execute(const std::vector<std::string>& args) {
                 else if(out["status"]=="cancelled")++outputs_cancelled;
                 else ++outputs_failed;
             }
+            auto is_exr_marker=[](const Json& item) {
+                const auto& warning=item.get_ref<const std::string&>();
+                return warning.rfind(thumbgen::detail::exr_auto_fallback,0)==0 || warning.rfind(thumbgen::detail::exr_auto_unresolved,0)==0;
+            };
+            for(const auto& warning:r["warnings"])
+                if(is_exr_marker(warning))std::cerr<<warning.get_ref<const std::string&>()<<'\n';
             if(json_mode)std::cout<<r.dump(-1,' ',false,Json::error_handler_t::replace)<<std::endl;
-            else std::cout<<r["input"].get<std::string>()<<": "<<r["status"].get<std::string>()<<'\n';
-            if(!r["ok"].get<bool>()&&!json_mode)std::cerr<<r.dump(2)<<'\n';
+            else {
+                std::cout<<r["input"].get<std::string>()<<": "<<r["status"].get<std::string>()<<'\n';
+                if(!r["ok"].get<bool>()) {
+                    auto diagnostic=r;
+                    auto& warnings=diagnostic["warnings"].get_ref<Json::array_t&>();
+                    warnings.erase(std::remove_if(warnings.begin(),warnings.end(),is_exr_marker),warnings.end());
+                    std::cerr<<diagnostic.dump(2)<<'\n';
+                }
+            }
         },execution);
         Json end{{"schema_version",1},{"type","summary"},{"total",jobs.size()},
                  {"success",success},{"partial",partial},{"failed",failed},{"skipped",skipped},{"cancelled",cancelled},{"interrupted",interrupted},

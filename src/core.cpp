@@ -393,6 +393,14 @@ Json Engine::convert(const Job& job) {
     detail::ExrProfile profile(r);
 #endif
     std::string stage="open";
+    bool automatic_exr_selection=false;
+    auto warn_unresolved=[&](const std::string& code) {
+        if(automatic_exr_selection)r["warnings"].push_back(std::string(detail::exr_auto_unresolved)+"error_code="+code);
+    };
+    auto selection_failure=[&](const char* code,const char* message) {
+        warn_unresolved(code);
+        return Failure(code,message);
+    };
     try {
         detail::DataMapping mapping;
         try {mapping=detail::data_mapping(job.options.visualization,job.options.data_range,job.options.invalid_values);}
@@ -487,6 +495,8 @@ Json Engine::convert(const Job& job) {
         const std::string input_format=deferred_spec?probed_format:in->format_name();
         const bool can_auto_crypto=detail::auto_cryptomatte_allowed(job.options) && input_format=="openexr";
         const bool use_auto_exr_preferences=can_auto_crypto && job.options.selection_policy=="primary";
+        automatic_exr_selection=automatic && input_format=="openexr" && job.options.part<0 &&
+            job.options.part_name.empty() && job.options.channels.empty();
 #if defined(THUMBGEN_EXR_PROFILE) && THUMBGEN_EXR_PROFILE
         profile.enable(input_format=="openexr");
 #endif
@@ -580,14 +590,15 @@ Json Engine::convert(const Job& job) {
                 const auto end=crypto_families.end();
                 if(use_auto_exr_preferences)family=std::find_if(family,end,detail::is_object_crypto_family);
                 if(!use_auto_exr_preferences || family==end || std::any_of(family+1,end,detail::is_object_crypto_family))
-                    throw Failure("ambiguous_channels","multiple Cryptomatte families; specify visualization and channels");
+                    throw selection_failure("ambiguous_channels","multiple Cryptomatte families; specify visualization and channels");
                 preferred_object=true;
             }
             crypto_family=*family;crypto=true;data=true;
         }
         if(automatic)mapping.mode=crypto?detail::DataMode::cryptomatte:detail::DataMode::colour;
         if(crypto && part_exists) {
-            crypto_layout=detail::crypto_layout(std::move(crypto_parts),crypto_family,crypto_part);
+            try {crypto_layout=detail::crypto_layout(std::move(crypto_parts),crypto_family,crypto_part);}
+            catch(const Failure& e){warn_unresolved(e.code);throw;}
             const auto& first=crypto_layout->layers.front();
             const auto& first_spec=crypto_layout->parts.at(first.part);
             const auto reason=preferred_object?"automatic Cryptomatte coverage overview for the object family":
@@ -630,24 +641,34 @@ Json Engine::convert(const Job& job) {
         };
         if(!job.sequence_id.empty() && pin!=impl_->sequences.end()) {
             r["selection"]["lock_status"]="reused";r["selection"]["locked"]=pin->second.key;
-            if(request!=pin->second.request)throw Failure("sequence_selection_conflict","selection options differ within sequence_id");
+            if(request!=pin->second.request)throw selection_failure("sequence_selection_conflict","selection options differ within sequence_id");
             choices.clear();
             if(pin->second.named || part_count==1)
                 for(const auto& choice:all_choices)if(key(choice)==pin->second.key)choices.push_back(choice);
-            if(choices.size()!=1)throw Failure("sequence_selection_changed","locked part/group/channel mapping is missing or ambiguous; no fallback");
+            if(choices.size()!=1)throw selection_failure("sequence_selection_changed","locked part/group/channel mapping is missing or ambiguous; no fallback");
         }
-        if(!part_exists)throw Failure("part_not_found","requested part does not exist");
+        if(!part_exists)throw selection_failure("part_not_found","requested part does not exist");
         if(choices.empty()) {
-            if(has_deep)throw Failure(job.options.deep_mode=="flatten"?"deep_layout_unsupported":"deep_requires_flattening","Deep data requires an explicit supported colour mapping and flatten mode");
-            if(has_data)throw Failure("visualization_required","data AOV requires dedicated visualization; colour selection cannot override it");
+            if(has_deep)throw selection_failure(job.options.deep_mode=="flatten"?"deep_layout_unsupported":"deep_requires_flattening","Deep data requires an explicit supported colour mapping and flatten mode");
+            if(has_data)throw selection_failure("visualization_required","data AOV requires dedicated visualization; colour selection cannot override it");
             if(!job.options.channels.empty() && !matched_group)throw Failure("channels_not_found","requested channel group does not exist");
-            throw Failure("ambiguous_channels","no recognized colour or luminance layout; inspect candidates");
+            throw selection_failure("ambiguous_channels","no recognized colour or luminance layout; inspect candidates");
         }
+        // Any reused lock has already resolved to exactly one choice or failed.
+        std::size_t chosen_index=0;
         if(choices.size()!=1) {
-            bool same=std::all_of(choices.begin(),choices.end(),[&](const auto& c){return c.part==choices[0].part;});
-            throw Failure(same?"ambiguous_channels":"ambiguous_parts","multiple colour candidates; specify part and/or channels");
+            if(!automatic_exr_selection || crypto || std::any_of(choices.begin(),choices.end(),[](const auto& c){return c.spec.deep;})) {
+                const bool same=std::all_of(choices.begin(),choices.end(),[&](const auto& c){return c.part==choices[0].part;});
+                throw selection_failure(same?"ambiguous_channels":"ambiguous_parts","multiple colour candidates; specify part and/or channels");
+            }
+            auto is_root=[](const auto& c){return detail::is_root_rgb(c.spec,c.candidate);};
+            const auto root=std::find_if(choices.begin(),choices.end(),is_root);
+            const bool unique_root=root!=choices.end() && std::none_of(root+1,choices.end(),is_root);
+            if(unique_root)chosen_index=std::size_t(root-choices.begin());
+            choices[chosen_index].candidate.reason=unique_root?"automatic fallback: unique unprefixed RGB group among multiple candidates":
+                "automatic fallback: first eligible colour or luminance group among multiple candidates";
         }
-        auto chosen=std::move(choices[0]);const Json chosen_key=key(chosen);
+        auto chosen=std::move(choices[chosen_index]);const Json chosen_key=key(chosen);
         r["selection"]["chosen"]=describe(chosen);
         part=chosen.part;spec=std::move(chosen.spec);channels=chosen.candidate.channels;
         std::optional<detail::DeepSelection> deep;
@@ -657,10 +678,14 @@ Json Engine::convert(const Job& job) {
         if(crypto_layout)r["cryptomatte"]=crypto_layout->info();
         if(!job.sequence_id.empty() && pin==impl_->sequences.end()) {
             bool named=!spec.get_string_attribute("oiio:subimagename").empty();
-            if(!named && part_count!=1)throw Failure("sequence_part_identity_required","sequence selection requires unique named parts for multipart files");
+            if(!named && part_count!=1)throw selection_failure("sequence_part_identity_required","sequence selection requires unique named parts for multipart files");
             impl_->sequences.emplace(job.sequence_id,Impl::Pin{chosen_key,request,named});
             r["selection"]["lock_status"]="created";r["selection"]["locked"]=chosen_key;
         }
+        if(choices.size()>1)r["warnings"].push_back(std::string(detail::exr_auto_fallback)+"selected_part="+std::to_string(part)+
+            " selected_group="+Json(chosen.candidate.group).dump(-1,' ',true,Json::error_handler_t::replace)+
+            " candidate_count="+std::to_string(choices.size()));
+        automatic_exr_selection=false;
         r["source"]=spec_json(spec,part);
         if(psd)r["source"]["compression"]=psd_compression_name(psd->compression);
         if(deep)r["deep"]={{"mode","flatten"},{"policy","deep-colour-sweep-v1"},{"mapping",deep->identity()},
@@ -1525,6 +1550,7 @@ Json Engine::convert(const Job& job) {
         r["ok"]=successes+skips==job.outputs.size();
         r["status"]=skips==job.outputs.size()?"skipped":r["ok"].get<bool>()?"success":successes+skips?"partial":"failed";
     }catch(const detail::DeepFailure& e){
+        warn_unresolved(e.code);
         r["error"]={{"code",e.code},{"message",e.what()},{"stage",stage},{"retryable",false}};
     }catch(const Failure& e){
         if(e.code=="source_changed" && r.contains("source_check"))r["source_check"]["stable"]=false;

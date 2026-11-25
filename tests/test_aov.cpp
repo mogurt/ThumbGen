@@ -36,7 +36,8 @@ static void selection_fixtures(const fs::path& root,Json& files) {
         require(output->open(path,int(parts.size()),parts.data()),output->geterror());
         for(std::size_t part=0;part<parts.size();++part) {
             if(part)require(output->open(path,parts[part],OIIO::ImageOutput::AppendSubimage),output->geterror());
-            std::vector<float> pixels(8*parts[part].nchannels,.5f);
+            const auto part_name=parts[part].get_string_attribute("oiio:subimagename");
+            std::vector<float> pixels(8*parts[part].nchannels,part_name=="lights"?.9f:.5f);
             require(output->write_image(OIIO::TypeDesc::FLOAT,pixels.data()),output->geterror());
         }
         require(output->close(),output->geterror());
@@ -51,6 +52,13 @@ static void selection_fixtures(const fs::path& root,Json& files) {
     save("other-view.exr",{rgb,colour_part("views",{"ShadowCamera.R","ShadowCamera.G","ShadowCamera.B"})});
     save("two-views.exr",{colour_part("views",{"left.R","left.G","left.B","right.R","right.G","right.B"})});
     save("prefixed-rgb.exr",{colour_part("main",{"RGB.R","RGB.G","RGB.B"}),shadow});
+    const auto lights=colour_part("lights",{"diffuse.R","diffuse.G","diffuse.B","gloss.R","gloss.G","gloss.B"});
+    save("lights-first.exr",{lights,rgb});
+    save("lights-last.exr",{rgb,lights});
+    save("no-root.exr",{colour_part("luma",{"light.Y","Normal.R","Normal.G","Normal.B","unrecognized.X"}),lights});
+    save("unknown.exr",{colour_part("payload",{"arbitrary"})});
+    save("quoted-group.exr",{colour_part("views",{"a\"\nview.R","a\"\nview.G","a\"\nview.B","zview.R","zview.G","zview.B"})});
+    save("tied-primary.exr",{colour_part("views",{"Beauty.R","Beauty.G","Beauty.B","Combined.R","Combined.G","Combined.B"})});
 }
 static Json fixtures(const fs::path& root) {
     require(fs::create_directory(root),"fixture directory exists");

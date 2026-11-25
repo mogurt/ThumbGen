@@ -8,7 +8,7 @@ ThumbGen makes thumbnails from standard images and complex EXRs, fast. Decode on
 
 Fast, EXR-aware previews for production pipelines.
 
-`0.1.4` · [Apache-2.0](LICENSE)
+`0.1.5` · [Apache-2.0](LICENSE)
 
 ## Where it fits
 

@@ -33,6 +33,8 @@ For a batch of color and Cryptomatte inputs, set `"defaults": {"visualization": 
 
 `--json` streams UTF-8 JSON lines to stdout and diagnostics to stderr. Each job produces one `type: result`; the final record is `type: summary`. Concurrent results arrive in completion order, so match by `id`, not line number.
 
+[Automatic EXR selection markers](selection.md#monitor-automatic-selection) appear in the result's `warnings` array and as standalone stderr lines. Use the stderr lines when counting warning events.
+
 | status | Meaning |
 | --- | --- |
 | success | Conversion completed |
