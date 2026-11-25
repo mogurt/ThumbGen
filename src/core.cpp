@@ -236,10 +236,13 @@ void Engine::restore_sequence_lock(const std::string& id,const Json& lock) {
     const bool auto_request=request.is_object() && request.contains("auto_preview");
     const bool explicit_data=request.is_object() && request.contains("data");
     const bool data=explicit_data || (auto_request && key["kind"]=="data");
-    valid(!key["group"].get<std::string>().empty() && (data?key["kind"]=="data":(key["kind"]=="colour" || key["kind"]=="grey")));
+    const bool opacity=key["kind"]=="deep";
+    valid(!key["group"].get<std::string>().empty() && (data?key["kind"]=="data":(key["kind"]=="colour" || key["kind"]=="grey" || (opacity && deep))));
     valid(named?!key["part_name"].get<std::string>().empty():key["part_name"]=="");
     if(named)valid(!key.contains("part"));else valid(key.contains("part") && key["part"].is_number_integer() && key["part"]==0);
-    valid(key.contains("channels") && key["channels"].is_array() && (data?key["channels"].size()>=1:(key["channels"].size()==3 || key["channels"].size()==4)));
+    valid(key.contains("channels") && key["channels"].is_array());
+    const auto count=key["channels"].size();
+    valid(data?count>=1:opacity?(count==2 || count==3):(count==3 || count==4));
     for(const auto& channel:key["channels"])valid(channel.is_string() && !channel.get<std::string>().empty());
     const bool deep_request=request.is_object() && request.contains("deep_mode");
     valid(request.is_object() && request.size()==4u+(explicit_data?1u:0u)+(auto_request?1u:0u)+(deep_request?1u:0u));
@@ -249,7 +252,20 @@ void Engine::restore_sequence_lock(const std::string& id,const Json& lock) {
         if(data)valid(key["channels"].size()>=2 && key["channels"].size()%2==0);
     }
     if(deep_request)valid(!data && request["deep_mode"]=="flatten");
-    if(deep) {
+    if(opacity) {
+        const auto& mapping=key["deep"];
+        valid(auto_request && !deep_request && key["group"]=="A" && mapping.is_object() && mapping.size()==4 &&
+            mapping.contains("policy") && mapping["policy"]=="deep-opacity-mapping-v1" &&
+            mapping.contains("alpha") && mapping["alpha"]==key["channels"][0] &&
+            mapping.contains("z") && mapping["z"]==key["channels"][1] &&
+            mapping.contains("zback") && mapping["zback"]==(count==3?key["channels"][2]:Json("")));
+        const std::array<const char*,3> components{"a","z","zback"};
+        for(size_t i=0;i<count;++i) {
+            auto name=key["channels"][i].get<std::string>();
+            std::transform(name.begin(),name.end(),name.begin(),[](unsigned char c){return char(std::tolower(c));});
+            valid(name==components[i]);
+        }
+    } else if(deep) {
         valid(deep_request && !data && key["channels"].size()==3);
         const auto& mapping=key["deep"];
         valid(mapping.is_object() && mapping.size()==6 && mapping.contains("policy") && mapping["policy"]=="deep-mapping-v2");
@@ -280,7 +296,7 @@ void Engine::restore_sequence_lock(const std::string& id,const Json& lock) {
         for(const auto& number:options["range"])valid(number.is_number());
         auto mapping=detail::data_mapping(options["mode"].get<std::string>(),options["range"].get<std::vector<double>>(),options["invalid_values"].get<std::string>());
         valid(mapping.mode!=detail::DataMode::colour && mapping.mode!=detail::DataMode::automatic);
-        auto count=key["channels"].size();valid(mapping.mode==detail::DataMode::cryptomatte?(count>=2 && count%2==0):mapping.mode==detail::DataMode::normal || mapping.mode==detail::DataMode::id_rgb?count==3:mapping.mode==detail::DataMode::vector?(count==2 || count==3):count==1);
+        valid(mapping.mode==detail::DataMode::cryptomatte?(count>=2 && count%2==0):mapping.mode==detail::DataMode::normal || mapping.mode==detail::DataMode::id_rgb?count==3:mapping.mode==detail::DataMode::vector?(count==2 || count==3):count==1);
     }
     for(const char* field:{"part_name","channels","strategy"})valid(request.contains(field) && request[field].is_string());
     valid(request["strategy"]=="primary" || request["strategy"]=="root_rgb");
@@ -290,7 +306,7 @@ void Engine::restore_sequence_lock(const std::string& id,const Json& lock) {
     valid(request["part_name"]=="" || request["part_name"]==key["part_name"]);
     valid(request["channels"]=="" || request["channels"]==key["group"]);
     if(explicit_data)valid(request["channels"]!="");
-    if(auto_request && data)valid(part==-1 && request["part_name"]=="" && request["channels"]=="");
+    if(auto_request && (data || opacity))valid(part==-1 && request["part_name"]=="" && request["channels"]=="");
     valid(named || part<=0);
     auto previous=sequence_lock(id);
     if(!previous.is_null()) {valid(previous==lock);return;}
@@ -410,7 +426,8 @@ Json Engine::convert(const Job& job) {
         const bool categorical=mapping.mode==detail::DataMode::id || mapping.mode==detail::DataMode::id_rgb;
         bool crypto=mapping.mode==detail::DataMode::cryptomatte;
         std::string crypto_family=job.options.channels;
-        if((job.options.deep_mode!="reject" && job.options.deep_mode!="flatten") || job.options.deep_samples_per_pixel<1 || job.options.deep_samples_per_pixel>1048576 || (data && job.options.deep_mode!="reject"))
+        if((!job.options.deep_mode.empty() && job.options.deep_mode!="reject" && job.options.deep_mode!="flatten") ||
+            job.options.deep_samples_per_pixel<1 || job.options.deep_samples_per_pixel>1048576 || (data && job.options.deep_mode=="flatten"))
             throw Failure("deep_options_invalid","invalid Deep options or non-colour visualization");
         if(data && (job.options.channels.empty() || job.options.input_space!="auto" || !job.options.ocio_config.empty() || !job.options.display.empty() || !job.options.view.empty()))
             throw Failure("visualization_options_invalid","data visualization needs explicit channels and does not accept colour transform options");
@@ -512,7 +529,7 @@ Json Engine::convert(const Job& job) {
         r["selection"]={{"policy","v2"},{"strategy",job.options.selection_policy},{"basis",selection_basis},{"lock_status","none"},
             {"candidates",Json::array()}};
         struct Choice {int part;OIIO::ImageSpec spec;detail::Candidate candidate;};
-        std::vector<Choice> choices,all_choices;
+        std::vector<Choice> choices,all_choices,opacity_choices;
         int part_count=0,crypto_part=-1;
         const bool explicit_part=job.options.part>=0 || !job.options.part_name.empty();
         bool part_exists=false,has_deep=false,has_data=false,matched_group=false;
@@ -530,6 +547,7 @@ Json Engine::convert(const Job& job) {
             std::sort(crypto_families.begin(),crypto_families.end());
             crypto_families.erase(std::unique(crypto_families.begin(),crypto_families.end()),crypto_families.end());
         }
+        const bool can_auto_opacity=automatic_exr_selection && detail::auto_deep_opacity_allowed(job.options) && crypto_families.empty();
         for(int p=0;;++p) {
             OIIO::ImageSpec scanned;
             if(deferred_spec) {
@@ -545,7 +563,9 @@ Json Engine::convert(const Job& job) {
             if(!data && detail::separated_colour(candidate) && !supported_cmyk)
                 throw Failure("colour_input_unsupported","CMYK/separated input requires an external profile-aware conversion to RGB; input_space cannot undo decoder conversion");
             ++part_count;
-            auto groups=candidate.deep && job.options.deep_mode=="flatten"?detail::deep_colour_candidates(candidate):
+            auto opacity_group=can_auto_opacity?detail::deep_opacity_candidate(candidate):std::optional<detail::Candidate>{};
+            auto groups=opacity_group?std::vector<detail::Candidate>{*opacity_group}:
+                candidate.deep && job.options.deep_mode=="flatten"?detail::deep_colour_candidates(candidate):
                 can_auto_crypto?detail::classify(candidate,crypto_families):detail::classify(candidate);
             for(const auto& group:groups)r["selection"]["candidates"].push_back(detail::candidate_json(candidate,group,p));
             const bool matches_part=(job.options.part<0 || p==job.options.part) &&
@@ -559,6 +579,7 @@ Json Engine::convert(const Job& job) {
                 crypto_parts.push_back(std::move(scanned));continue;
             }
             if(!matches_part)continue;
+            if(opacity_group)opacity_choices.push_back({p,candidate,std::move(*opacity_group)});
             std::vector<detail::Candidate> eligible;
             for(const auto& group:groups) {
                 bool literal=data && std::any_of(group.channels.begin(),group.channels.end(),[&](int c){return candidate.channelnames[c]==job.options.channels;});
@@ -621,6 +642,9 @@ Json Engine::convert(const Job& job) {
                 choices.push_back(std::move(chosen));
             }
         }
+        if(choices.empty() && opacity_choices.size()==1)choices.push_back(opacity_choices.front());
+        for(auto& choice:opacity_choices)all_choices.push_back(std::move(choice));
+        opacity_choices.clear();
         Json request=detail::selection_request(job);
         auto pin=impl_->sequences.find(job.sequence_id);
         auto describe=[&](const Choice& choice) {
@@ -673,6 +697,9 @@ Json Engine::convert(const Job& job) {
         part=chosen.part;spec=std::move(chosen.spec);channels=chosen.candidate.channels;
         std::optional<detail::DeepSelection> deep;
         if(spec.deep)deep=detail::deep_selection(spec,chosen.candidate);
+        const bool opacity=deep && deep->opacity;
+        const bool transparent=job.options.background=="transparent";
+        const bool white_background=!opacity && job.options.background=="white";
         if(spec.width<1 || spec.height<1 || spec.depth!=1 || spec.full_width<1 || spec.full_height<1)
             throw Failure("invalid_dimensions","unsupported image dimensions");
         if(crypto_layout)r["cryptomatte"]=crypto_layout->info();
@@ -685,10 +712,11 @@ Json Engine::convert(const Job& job) {
         if(choices.size()>1)r["warnings"].push_back(std::string(detail::exr_auto_fallback)+"selected_part="+std::to_string(part)+
             " selected_group="+Json(chosen.candidate.group).dump(-1,' ',true,Json::error_handler_t::replace)+
             " candidate_count="+std::to_string(choices.size()));
+        if(opacity)r["warnings"].push_back(std::string(detail::exr_auto_deep_opacity)+"selected_part="+std::to_string(part)+" preview=grayscale_coverage");
         automatic_exr_selection=false;
         r["source"]=spec_json(spec,part);
         if(psd)r["source"]["compression"]=psd_compression_name(psd->compression);
-        if(deep)r["deep"]={{"mode","flatten"},{"policy","deep-colour-sweep-v1"},{"mapping",deep->identity()},
+        if(deep)r["deep"]={{"mode","flatten"},{"policy",opacity?"deep-opacity-sweep-v1":"deep-colour-sweep-v1"},{"mapping",deep->identity()},
             {"sample_limit",job.options.deep_samples_per_pixel},{"buffer_limit_bytes",job.options.max_decode_mib*1024ULL*1024ULL},
             {"samples",0},{"chunks",0},{"peak_buffer_bytes",0}};
         r["selected_channels"]=r["selection"]["chosen"]["channels"];
@@ -911,7 +939,7 @@ Json Engine::convert(const Job& job) {
         TG_EXR_TICK(config_setup_tick);
         OIIO::ColorConfig* config=nullptr;
         std::string working_space,input_space,output_space;
-        if(!data) {
+        if(!data && !opacity) {
             stage="colour";
             if(embedded_icc && job.options.input_space=="auto" && !use_icc)
                 throw Failure("colour_input_unsupported","ICC is unsupported on this input format or Deep input");
@@ -992,10 +1020,10 @@ Json Engine::convert(const Job& job) {
                 {"bridge","srgb_rec709_scene"},{"profile_limit_bytes",detail::icc_profile_limit},{"cms_limit_bytes",detail::cms_memory_limit},
                 {"reservation_bytes",detail::cms_reservation},{"peak_bytes",0}};
         } else {
-            const auto mode=crypto?"cryptomatte":job.options.visualization;
+            const auto mode=opacity?"deep_opacity":crypto?"cryptomatte":job.options.visualization;
             r["colour"]={{"input_space","data"},{"input_requested",mode},{"basis","data_visualization"},
                 {"working_space","display-referred"},{"output_space","sRGB"},{"ocio_config",""},{"config_basis","none"},{"display",""},{"view",""}};
-            r["visualization"]={{"mode",mode},{"policy","v1"},{"range",mapping.mode==detail::DataMode::id || crypto?Json::array():Json::array({mapping.minimum,mapping.maximum})},
+            if(!opacity)r["visualization"]={{"mode",mode},{"policy","v1"},{"range",mapping.mode==detail::DataMode::id || crypto?Json::array():Json::array({mapping.minimum,mapping.maximum})},
                 {"invalid_values",job.options.invalid_values},{"invalid_pixels",0},{"clipped_components",0}};
         }
         TG_EXR_TOCK(config_setup_tick,"exr_ocio_setup_ms");
@@ -1227,8 +1255,8 @@ Json Engine::convert(const Job& job) {
         } else if(deep) {
             stage="decode";tick=Clock::now();in->close();verify_source();
             detail::DeepReadOutput output;
-            output.mode=job.options.background=="transparent"?detail::DeepOutputMode::associated_rgba:detail::DeepOutputMode::opaque_rgba;
-            if(job.options.background=="white") {
+            output.mode=transparent?detail::DeepOutputMode::associated_rgba:detail::DeepOutputMode::opaque_rgba;
+            if(white_background) {
                 // White is specified in the working linear basis. Transform a
                 // single opaque pixel back to source before Deep composition.
                 OIIO::ImageSpec bs(1,1,3,OIIO::TypeDesc::FLOAT);OIIO::ImageBuf background(bs),converted;
@@ -1252,7 +1280,7 @@ Json Engine::convert(const Job& job) {
             auto flat=spec;flat.deep=false;flat.nchannels=4;flat.format=OIIO::TypeDesc::FLOAT;flat.channelformats.clear();flat.channelnames={"R","G","B","A"};flat.alpha_channel=3;flat.z_channel=-1;
             flat.attribute("oiio:UnassociatedAlpha",0);
             working=OIIO::ImageBuf(flat,deep_image.pixels.get());order={0,1,2,3};
-            if(job.options.background=="transparent")for(std::size_t p=0;p<deep_image.bytes/sizeof(float);p+=4)
+            if(transparent)for(std::size_t p=0;p<deep_image.bytes/sizeof(float);p+=4)
                 if(deep_image.pixels[p+3]==0 && (deep_image.pixels[p]!=0 || deep_image.pixels[p+1]!=0 || deep_image.pixels[p+2]!=0))
                     throw Failure("deep_transparency_unsupported","Straight PNG/WebP cannot represent zero-alpha Deep emission; choose an opaque background");
         } else {
@@ -1389,7 +1417,7 @@ Json Engine::convert(const Job& job) {
         TG_EXR_TOCK(canvas_tick,"exr_canvas_orientation_ms");
         stage="colour";tick=Clock::now();
         TG_EXR_TICK(working_tick);
-        if(!data && !streaming && !colour_plan.linear() && input_space!=working_space)
+        if(!data && !opacity && !streaming && !colour_plan.linear() && input_space!=working_space)
             check(iba::colorconvert(working,working,input_space,working_space,true,"","",config),working,"colour_failed");
         TG_EXR_TOCK(working_tick,"exr_ocio_working_apply_ms");
         r["timings_ms"]["working_colour"]=ms(tick);
@@ -1444,13 +1472,13 @@ Json Engine::convert(const Job& job) {
                 result["resize_ms"]=ms(tick);tick=Clock::now();
                 if(streaming)result["resize_ms"]=c2_resize_ms[output_index];
                 TG_EXR_TICK(finish_tick);
-                if(job.options.background!="transparent" && preview.nchannels()==4) {
+                if(!transparent && preview.nchannels()==4) {
                     OIIO::ImageSpec bs(w,h,4,OIIO::TypeDesc::FLOAT);bs.alpha_channel=3;
-                    OIIO::ImageBuf background(bs),composite;
-                    float value=job.options.background=="white"?1.0f:0.0f;
+                    OIIO::ImageBuf backdrop(bs),composite;
+                    float value=white_background?1.0f:0.0f;
                     std::vector<float> colour{value,value,value,1.0f};
-                    check(iba::fill(background,colour),background,"alpha_failed");
-                    check(iba::over(composite,preview,background),composite,"alpha_failed");preview=std::move(composite);
+                    check(iba::fill(backdrop,colour),backdrop,"alpha_failed");
+                    check(iba::over(composite,preview,backdrop),composite,"alpha_failed");preview=std::move(composite);
                     // A fully opaque background has alpha=1 even when a
                     // negative-lobe filter produced alpha outside [0,1].
                     // Do not let that residual alpha reweight the subsequent
@@ -1458,14 +1486,14 @@ Json Engine::convert(const Job& job) {
                     check(iba::fill(preview,colour,OIIO::ROI(0,w,0,h,0,1,3,4),job.options.threads),preview,"alpha_failed");
                 }
                 TG_EXR_TICK(output_colour_tick);
-                if(!data) {
+                if(!data && !opacity) {
                     if(job.options.display.empty())
                         check(iba::colorconvert(preview,preview,working_space,output_space,true,"","",config),preview,"colour_failed");
                     else
                         check(iba::ociodisplay(preview,preview,job.options.display,job.options.view,working_space,"",true,false,"","",config),preview,"colour_failed");
                 }
                 TG_EXR_TOCK(output_colour_tick,"exr_ocio_output_apply_sum_ms");
-                if(job.options.background=="transparent" && preview.nchannels()==4) {
+                if(transparent && preview.nchannels()==4) {
                     if(deep) {
                         const auto* p=static_cast<const float*>(preview.localpixels());
                         if(!p || !preview.contiguous())throw Failure("deep_transparency_unsupported","Deep transparent preview must be contiguous RGBA");
@@ -1478,7 +1506,7 @@ Json Engine::convert(const Job& job) {
                     check(iba::unpremult(preview,preview),preview,"alpha_failed");
                     preview.specmod().attribute("oiio:UnassociatedAlpha",1);
                 }
-                if(job.options.background!="transparent" || out.format=="jpeg") {
+                if(!transparent || out.format=="jpeg") {
                     OIIO::ImageBuf rgb;std::vector<int> rgb_order{0,1,2};
                     check(iba::channels(rgb,preview,3,rgb_order),rgb,"channels_failed");preview=std::move(rgb);
                 }
@@ -1493,7 +1521,7 @@ Json Engine::convert(const Job& job) {
                 if(out.format=="jpeg" || out.format=="webp")
                     preview.specmod().attribute("compression",out.format+":"+std::to_string(out.quality));
                 preview.specmod().attribute("CompressionQuality",out.quality);
-                preview.specmod().attribute("oiio:ColorSpace",job.options.display.empty()?"sRGB":"display-referred");
+                preview.specmod().attribute("oiio:ColorSpace",opacity || job.options.display.empty()?"sRGB":"display-referred");
                 TG_EXR_TICK(reserve_tick);
                 fs::path temporary;
                 if(impl_->control.reserve) {
@@ -1513,7 +1541,7 @@ Json Engine::convert(const Job& job) {
                 TG_EXR_TOCK(reserve_tick,"exr_output_reserve_sum_ms");
                 detail::output_fault("encode",output_index);
                 write_preview(preview,temporary,job.options.threads,
-                    !data && job.options.background=="transparent" && preview.nchannels()==4 TG_EXR_PROFILE_ARG);
+                    !data && transparent && preview.nchannels()==4 TG_EXR_PROFILE_ARG);
                 if(impl_->observer)impl_->observer("encoded",job);
                 verify_source();
                 TG_EXR_TICK(commit_tick);

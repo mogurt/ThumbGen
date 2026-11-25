@@ -109,7 +109,7 @@ bool is_auxiliary_aov(const OIIO::ImageSpec& spec,const Candidate& candidate) {
 Json selection_request(const Job& job) {
     const auto& o=job.options;
     Json request{{"part",o.part},{"part_name",o.part_name},{"channels",o.channels},{"strategy",o.selection_policy}};
-    if(o.deep_mode!="reject")request["deep_mode"]=o.deep_mode;
+    if(o.deep_mode=="flatten")request["deep_mode"]=o.deep_mode;
     if(o.visualization=="auto")request["auto_preview"]=o.invalid_values;
     else if(o.visualization!="colour") {
         auto mapping=data_mapping(o.visualization,o.data_range,o.invalid_values);

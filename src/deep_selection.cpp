@@ -52,13 +52,41 @@ std::vector<Candidate> deep_colour_candidates(const OIIO::ImageSpec& spec) {
     }
     return candidates;
 }
+std::optional<Candidate> deep_opacity_candidate(const OIIO::ImageSpec& spec) {
+    if(!spec.deep || (spec.nchannels!=2 && spec.nchannels!=3))return {};
+    validate_spec(spec);
+    std::vector<int> channels(spec.nchannels,-1);
+    for(int c=0;c<spec.nchannels;++c) {
+        const auto name=lower(spec.channelnames[c]);
+        const int slot=name=="a"?0:name=="z"?1:name=="zback" && spec.nchannels==3?2:-1;
+        const auto type=spec.channelformat(c);
+        if(slot<0 || channels[slot]>=0 || (type!=OIIO::TypeDesc::HALF && type!=OIIO::TypeDesc::FLOAT))return {};
+        channels[slot]=c;
+    }
+    return Candidate{"A","deep","automatic Deep opacity coverage",std::move(channels)};
+}
 Json DeepSelection::identity() const {
+    if(opacity)return {{"policy","deep-opacity-mapping-v1"},{"alpha",channels.alpha[0]},{"z",channels.z},{"zback",channels.zback}};
     return {{"policy","deep-mapping-v2"},{"colour",channels.colour},{"alpha",channels.alpha},
         {"z",channels.z},{"zback",channels.zback},{"shared_alpha",shared_alpha}};
 }
 DeepSelection deep_selection(const OIIO::ImageSpec& spec,const Candidate& colour) {
     validate_spec(spec);
-    if(!spec.deep || (colour.kind!="colour" && colour.kind!="grey") || colour.channels.size()<3)
+    if(colour.kind=="deep") {
+        const auto candidate=deep_opacity_candidate(spec);
+        if(!candidate || candidate->channels!=colour.channels)
+            throw DeepFailure("deep_channel_mapping_invalid","Invalid Deep opacity mapping");
+        DeepSelection result;
+        result.opacity=result.shared_alpha=true;
+        // Associated white uses A as RGB and alpha. The reader deduplicates
+        // those requests, so each sample needs only one opacity plane.
+        result.channels.alpha.fill(spec.channelnames[colour.channels[0]]);
+        result.channels.colour=result.channels.alpha;
+        result.channels.z=spec.channelnames[colour.channels[1]];
+        if(colour.channels.size()==3)result.channels.zback=spec.channelnames[colour.channels[2]];
+        return result;
+    }
+    if((colour.kind!="colour" && colour.kind!="grey") || colour.channels.size()<3)
         throw DeepFailure("deep_channel_mapping_invalid","Deep selection requires a colour or luminance candidate");
     DeepSelection result;
     std::string group;

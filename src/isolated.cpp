@@ -119,16 +119,20 @@ void base_check(const Json& value,const Job& job) {
     if(value.contains("error"))error_check(value["error"]);
     const auto mode=effective_visualization(value,job);
     const bool automatic=job.options.visualization=="auto";
+    bool opacity=false;
     if(automatic && value.contains("source")) {
         const auto& chosen=value.at("selection").at("chosen");
-        check(chosen["kind"]=="colour" || chosen["kind"]=="grey" || chosen["kind"]=="data","invalid worker automatic selection");
+        opacity=chosen["kind"]=="deep";
+        check(chosen["kind"]=="colour" || chosen["kind"]=="grey" || chosen["kind"]=="data" ||
+            (opacity && auto_deep_opacity_allowed(job.options)),"invalid worker automatic selection");
         check((chosen["kind"]=="data")==value.contains("cryptomatte"),"worker automatic selection does not match its preview mode");
     }
-    if(value.contains("source") && value["source"].value("deep",false) && job.options.deep_mode=="flatten")
+    if(opacity || (value.contains("source") && value["source"].value("deep",false) && job.options.deep_mode=="flatten"))
         check(value.contains("deep"),"missing worker Deep diagnostics");
     if(value.contains("deep")) {
         const auto& deep=value["deep"];fields(deep,{"mode","policy","mapping","sample_limit","buffer_limit_bytes","samples","chunks","peak_buffer_bytes"});
-        check(job.options.deep_mode=="flatten" && mode=="colour" && deep["mode"]=="flatten" && deep["policy"]=="deep-colour-sweep-v1" &&
+        check((opacity || job.options.deep_mode=="flatten") && mode=="colour" && deep["mode"]=="flatten" &&
+            deep["policy"]==(opacity?"deep-opacity-sweep-v1":"deep-colour-sweep-v1") &&
             deep["sample_limit"]==job.options.deep_samples_per_pixel && deep["buffer_limit_bytes"]==job.options.max_decode_mib*1024ULL*1024ULL &&
             value.contains("source") && value["source"].value("deep",false),"worker Deep settings mismatch");
         number(deep["samples"],64ULL*1024*1024);number(deep["chunks"],std::numeric_limits<std::uint64_t>::max());
@@ -525,7 +529,9 @@ bool run_isolated(const std::vector<Job>& jobs,const std::string& executable,con
                     check(!queued,"worker returned a result while awaiting admission");
                     fields(payload,{"record","pin"});result=payload["record"];base_check(result,job);accept_pin(payload["pin"]);
                     if(planned && job.options.visualization=="auto")
-                        check(result.value("cryptomatte",Json{})==base.value("cryptomatte",Json{}),"worker automatic preview changed after admission");
+                        check(result.value("cryptomatte",Json{})==base.value("cryptomatte",Json{}) &&
+                            result.value("deep",Json::object()).value("mapping",Json{})==base.value("deep",Json::object()).value("mapping",Json{}),
+                            "worker automatic preview changed after admission");
                     if(result.contains("colour") && result["colour"].contains("processing"))
                         check((result["colour"]["processing"]=="integer-linear-stream-v1")==task.c2_stream,"worker result processing changed after admission");
                     check(result.contains("outputs") && result["outputs"].is_array(),"invalid worker outputs");

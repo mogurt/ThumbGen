@@ -2,7 +2,7 @@
 
 [文档目录](README.md) · [English](en/public-deep.md)
 
-Deep 文件需要先展平才能生成普通图片。使用 `--deep-mode flatten` 明确开启；默认不自动展平。
+要生成 Deep 彩色预览，需用 `--deep-mode flatten` 明确开启展平。
 
 ```sh
 thumbgen convert deep.exr --output preview.png --deep-mode flatten --input-space linear
@@ -10,6 +10,20 @@ thumbgen convert deep.exr --output preview.jpg --deep-mode flatten --background 
 ```
 
 输入应为关联颜色，并使用正确的线性色彩空间。项目空间不是 `linear` 时，请换成实际配置里的名称。
+
+## 自动不透明度预览
+
+```sh
+thumbgen convert coverage.exr --output preview.jpg --visualize auto
+```
+
+常规选择找不到可用图像时，自动模式可预览唯一符合条件的 Deep part。该 part 只能含根层级的 `A`、`Z` 和可选的 `ZBack`（不区分大小写），且通道必须是 HALF 或 FLOAT。预览沿用 Deep 彩色展平的原生解码器、样本合成算法和限额。额外通道、分层通道、多个不透明度候选和声明了 Cryptomatte 系列的文件均不触发此回退。RGB Deep 仍需明确启用彩色展平。
+
+批处理中，默认项和任务选项均省略 `deep_mode` 时才启用此回退。显式设置 `reject` 会关闭它，包括从批处理默认项继承的设置。显式指定 part 或通道、使用 `--visualize colour` 或 `--deep-mode flatten` 也会关闭此回退。
+
+累计覆盖率直接映射到灰度。零覆盖为黑，完全覆盖为白，50% 覆盖在 8 位输出中约为 128。画布以显示窗口为准，数据窗口外的覆盖率为零。黑底和白底设置使用同一灰度刻度。透明 PNG 或 WebP 使用白色，Alpha 为覆盖率。覆盖率不经过 OCIO 处理，包括继承或显式配置的变换。
+
+结果包含 `deep.policy = "deep-opacity-sweep-v1"` 及 `TG_EXR_AUTO_DEEP_OPACITY` 告警。参见[图层选择与告警标记](selection.md)。
 
 ## 支持范围
 
