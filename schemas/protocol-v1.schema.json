@@ -1530,7 +1530,8 @@
           "enum": [
             "colour",
             "grey",
-            "data"
+            "data",
+            "deep"
           ]
         },
         "channels": {
@@ -1539,9 +1540,7 @@
             "type": "string"
           }
         },
-        "deep": {
-          "$ref": "#/$defs/deep_mapping"
-        }
+        "deep": {}
       },
       "required": [
         "part_name",
@@ -1550,6 +1549,19 @@
         "channels"
       ],
       "allOf": [
+        {
+          "if": {"properties": {"kind": {"const": "deep"}}},
+          "then": {
+            "required": ["deep"],
+            "properties": {"deep": {"$ref": "#/$defs/deep_opacity_mapping"}}
+          },
+          "else": {
+            "properties": {"deep": {"$ref": "#/$defs/deep_mapping"}},
+            "dependentSchemas": {
+              "deep": {"properties": {"kind": {"enum": ["colour", "grey"]}}}
+            }
+          }
+        },
         {
           "if": {
             "properties": {
@@ -1826,6 +1838,17 @@
         }
       }
     },
+    "deep_opacity_mapping": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["policy", "alpha", "z", "zback"],
+      "properties": {
+        "policy": {"const": "deep-opacity-mapping-v1"},
+        "alpha": {"type": "string", "pattern": "^[Aa]$"},
+        "z": {"type": "string", "pattern": "^[Zz]$"},
+        "zback": {"type": "string", "pattern": "^([Zz][Bb][Aa][Cc][Kk])?$"}
+      }
+    },
     "deep_result": {
       "type": "object",
       "additionalProperties": false,
@@ -1844,11 +1867,9 @@
           "const": "flatten"
         },
         "policy": {
-          "const": "deep-colour-sweep-v1"
+          "enum": ["deep-colour-sweep-v1", "deep-opacity-sweep-v1"]
         },
-        "mapping": {
-          "$ref": "#/$defs/deep_mapping"
-        },
+        "mapping": {},
         "sample_limit": {
           "type": "integer",
           "minimum": 1,
@@ -1873,7 +1894,10 @@
           "minimum": 0,
           "maximum": 17179869184
         }
-      }
+      },
+      "if": {"properties": {"policy": {"const": "deep-opacity-sweep-v1"}}},
+      "then": {"properties": {"mapping": {"$ref": "#/$defs/deep_opacity_mapping"}}},
+      "else": {"properties": {"mapping": {"$ref": "#/$defs/deep_mapping"}}}
     }
   }
 }

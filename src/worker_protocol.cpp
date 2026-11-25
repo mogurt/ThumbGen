@@ -78,7 +78,7 @@ Job job_from_wire(const Json& value) {
     o.part=integer(options["part"],-1,std::numeric_limits<int>::max());require(o.part<0 || o.part_name.empty(),"conflicting part selectors");
     o.threads=integer(options["threads"],1,256);o.max_decode_mib=size_t(integer(options["max_decode_mib"],1,16384));
     o.visualization=text(options["visualization"]);member(o.visualization,{"auto","colour","depth","normal","vector","id","id_rgb","cryptomatte"});
-    o.deep_mode=text(options["deep_mode"]);member(o.deep_mode,{"reject","flatten"});
+    o.deep_mode=text(options["deep_mode"]);member(o.deep_mode,{"","reject","flatten"});
     o.deep_samples_per_pixel=integer(options["deep_samples_per_pixel"],1,1048576);
     require(o.deep_mode!="flatten" || o.visualization=="colour" || o.visualization=="auto","Deep flattening requires colour or auto visualization");
     o.invalid_values=text(options["invalid_values"]);member(o.invalid_values,{"black","magenta","error"});

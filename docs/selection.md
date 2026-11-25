@@ -22,7 +22,7 @@ thumbgen convert multipart.exr --output preview.jpg --part-name beauty
 
 使用 `--visualize auto` 且未指定 part 或通道时，ThumbGen 尽力从平面 EXR 的颜色或灰度候选中选出预览。它先应用指定的选择策略。默认策略下，如果其他候选都是阴影、环境光遮蔽或 Fresnel 等已识别的辅助 AOV，可直接使用唯一一组无前缀 RGB(A)，无需告警。如果仍有多个候选，则优先使用唯一一组无前缀 RGB(A)，否则按现有 part 和通道组顺序使用第一个合适的候选。出现回退告警时，预览可能与预期画面不同。可查看 `selection.candidates` 和 `selection.chosen.reason`，或显式指定所需画面的 part 和通道组。
 
-没有颜色候选时，自动模式可跨 part 预览 Cryptomatte 家族。默认策略优先多个家族中唯一的 `crypto_object` 或 `CryptoObject`，名称不区分大小写。自动模式无法选出受支持的映射时，任务以原错误失败。纯数据输入需要专用预览模式，未知布局需要检查通道或在上游转换。色彩管理、解码和输出失败沿用各自的错误诊断。失败后不会切换映射或尝试其他候选。
+没有颜色候选时，自动模式可跨平面 part 预览 Cryptomatte 家族。默认策略优先多个家族中唯一的 `crypto_object` 或 `CryptoObject`，名称不区分大小写。省略 `deep_mode` 时，自动模式也可选择唯一的 [Deep 不透明度映射](public-deep.md)。自动模式无法选出受支持的映射时，任务以原错误失败。纯数据输入需要专用预览模式，未知布局需要检查通道或在上游转换。色彩管理、解码和输出失败沿用各自的错误诊断。失败后不会切换映射或尝试其他候选。
 
 ### 监控自动选择
 
@@ -31,12 +31,13 @@ thumbgen convert multipart.exr --output preview.jpg --part-name beauty
 ```text
 TG_EXR_AUTO_SELECTION_FALLBACK selected_part=1 selected_group="RGB" candidate_count=3
 TG_EXR_AUTO_SELECTION_UNRESOLVED error_code=visualization_required
+TG_EXR_AUTO_DEEP_OPACITY selected_part=0 preview=grayscale_coverage
 ```
 
-`selected_part` 是从 0 开始的索引，`selected_group` 是 JSON 字符串，`candidate_count` 是应用选择策略后剩余的合格候选数。可用以下命令从捕获的标准错误中筛选两类告警。
+`selected_part` 是从 0 开始的索引，`selected_group` 是 JSON 字符串，`candidate_count` 是应用选择策略后剩余的合格候选数。不透明度告警每个任务记录一次，即使任务有多个输出，或在选择后出现解码或输出错误。
 
 ```sh
-grep -E '^TG_EXR_AUTO_SELECTION_(FALLBACK|UNRESOLVED) ' thumbgen.stderr.log
+grep -E '^TG_EXR_AUTO_(SELECTION_(FALLBACK|UNRESOLVED)|DEEP_OPACITY) ' thumbgen.stderr.log
 ```
 
 受支持的 PSD v1 文件在未指定 part 或通道组、自动选择颜色图像时使用存储的合成图。也可使用 `--part 0` 直接选择合成图，按需附加通道组。Raw 和 RLE 文件的 `inspect` 仍会列出可用图层，可按索引或名称显式选择。ZIP 和带预测的 ZIP 文件的 `inspect` 仅显示受支持的合成图。

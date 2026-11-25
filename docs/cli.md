@@ -42,7 +42,7 @@ thumbgen convert frame.exr --output preview.jpg --ocio-config config.ocio --inpu
 
 数据预览使用 `--visualize`、`--channels`、`--data-range MIN,MAX` 和 `--invalid-values black|magenta|error`，详见[数据预览](data-preview.md)。Deep 颜色使用 `--deep-mode flatten`，详见[Deep EXR](public-deep.md)。
 
-使用 `--visualize auto` 在一次转换中选择颜色或 Cryptomatte 预览。未指定 part 或通道时，自动模式会尽力从存在歧义的平面 EXR 颜色或灰度候选中选出预览，并为回退选择告警。需要严格选择颜色时使用 `--visualize colour`。选择顺序、错误和连续帧锁定详见[图层选择与告警标记](selection.md)。
+使用 `--visualize auto` 在一次转换中选择颜色、Cryptomatte 或 [Deep 不透明度预览](public-deep.md)。未指定 part 或通道时，自动模式会尽力从存在歧义的平面 EXR 颜色或灰度候选中选出预览，并为回退选择告警。需要严格选择颜色时使用 `--visualize colour`。选择顺序、错误和连续帧锁定详见[图层选择与告警标记](selection.md)。
 
 ## 执行预算与时限
 

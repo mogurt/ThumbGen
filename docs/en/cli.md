@@ -42,7 +42,7 @@ thumbgen convert frame.exr --output preview.jpg --ocio-config config.ocio --inpu
 
 Data previews use `--visualize`, `--channels`, `--data-range MIN,MAX` and `--invalid-values black|magenta|error`. See [data previews](data-preview.md). For Deep color, use `--deep-mode flatten`; see [Deep EXR](public-deep.md).
 
-Use `--visualize auto` to select a color or Cryptomatte preview in one conversion. With no explicit part or channels, auto mode makes a best-effort choice among ambiguous flat EXR color or grayscale candidates and reports that choice as a warning. Use `--visualize colour` to require a strict color selection. See [layer selection and warning markers](selection.md) for ranking, errors and sequence locks.
+Use `--visualize auto` to select a color, Cryptomatte or [Deep opacity preview](public-deep.md#automatic-opacity-preview) in one conversion. With no explicit part or channels, auto mode makes a best-effort choice among ambiguous flat EXR color or grayscale candidates and reports that choice as a warning. Use `--visualize colour` to require a strict color selection. See [layer selection and warning markers](selection.md) for ranking, errors and sequence locks.
 
 ## Resource budgets and timeouts
 

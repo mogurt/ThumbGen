@@ -120,7 +120,6 @@ static void validate_options(const Options& o) {
     if(o.background!="black"&&o.background!="white"&&o.background!="transparent")throw std::invalid_argument("invalid background");
     if(o.threads<1||o.threads>256)throw std::invalid_argument("threads must be in 1..256");
     if(o.max_decode_mib<1||o.max_decode_mib>16384)throw std::invalid_argument("max_decode_mib must be in 1..16384");
-    if(o.deep_mode!="reject" && o.deep_mode!="flatten")throw std::invalid_argument("invalid deep_mode");
     if(o.deep_samples_per_pixel<1 || o.deep_samples_per_pixel>1048576)throw std::invalid_argument("deep_samples_per_pixel must be in 1..1048576");
     if(o.deep_mode=="flatten" && o.visualization!="colour" && o.visualization!="auto")throw std::invalid_argument("Deep flattening requires colour or auto visualization");
     if(o.part < -1)throw std::invalid_argument("part must be nonnegative");
@@ -151,7 +150,11 @@ static Options options(const Json& values,bool partial=false) {
         if(n<minimum||n>bound.second)throw std::invalid_argument(std::string(bound.first)+" out of range");
     }
     Options o;
-    o.deep_mode=values.value("deep_mode",o.deep_mode);o.deep_samples_per_pixel=values.value("deep_samples_per_pixel",o.deep_samples_per_pixel);
+    if(values.contains("deep_mode")) {
+        o.deep_mode=values.at("deep_mode").get<std::string>();
+        if(o.deep_mode!="reject" && o.deep_mode!="flatten")throw std::invalid_argument("invalid deep_mode");
+    }
+    o.deep_samples_per_pixel=values.value("deep_samples_per_pixel",o.deep_samples_per_pixel);
     o.visualization=values.value("visualization",o.visualization);o.invalid_values=values.value("invalid_values",o.invalid_values);
     if(values.contains("data_range")) {
         const auto& range=values["data_range"];
@@ -413,7 +416,8 @@ static int execute(const std::vector<std::string>& args) {
             }
             auto is_exr_marker=[](const Json& item) {
                 const auto& warning=item.get_ref<const std::string&>();
-                return warning.rfind(thumbgen::detail::exr_auto_fallback,0)==0 || warning.rfind(thumbgen::detail::exr_auto_unresolved,0)==0;
+                return warning.rfind(thumbgen::detail::exr_auto_fallback,0)==0 || warning.rfind(thumbgen::detail::exr_auto_unresolved,0)==0 ||
+                    warning.rfind(thumbgen::detail::exr_auto_deep_opacity,0)==0;
             };
             for(const auto& warning:r["warnings"])
                 if(is_exr_marker(warning))std::cerr<<warning.get_ref<const std::string&>()<<'\n';
