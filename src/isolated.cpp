@@ -34,8 +34,10 @@ namespace {
 // Test-only: the notification tests install a hook that the controller thread
 // runs at the no-progress scan/wait boundary. Never set outside test builds.
 std::function<void(const std::shared_ptr<ProcessWakeup>&)> test_scan_hook;
+std::function<void(const std::string&,const std::string&,Json&)> test_worker_message_hook;
 }
 void set_test_scan_hook(std::function<void(const std::shared_ptr<ProcessWakeup>&)> hook){test_scan_hook=std::move(hook);}
+void set_test_worker_message_hook(std::function<void(const std::string&,const std::string&,Json&)> hook){test_worker_message_hook=std::move(hook);}
 #endif
 namespace {
 namespace fs=std::filesystem;
@@ -108,6 +110,12 @@ Json task_base(const Job& job) {
 std::string effective_visualization(const Json& value,const Job& job) {
     if(job.options.visualization=="auto")return value.contains("cryptomatte")?"cryptomatte":"colour";
     return job.options.visualization;
+}
+Json automatic_preview_mapping(const Json& record) {
+    if(!record.contains("cryptomatte") && !record.contains("deep"))return nullptr;
+    return {{"cryptomatte",record.value("cryptomatte",Json{})},
+        {"deep",record.contains("deep")?record.at("deep").at("mapping"):Json{}},
+        {"chosen",record.at("selection").at("chosen")},{"channels",record.at("selected_channels")}};
 }
 void base_check(const Json& value,const Job& job) {
     allowed(value,{"schema_version","type","id","input","ok","status","outputs","warnings","error","selection","source","selected_channels","colour","decoded_mib","preset","filter","timings_ms","sequence_id","source_check","visualization","cryptomatte","source_read","deep"});
@@ -258,7 +266,17 @@ int serve_worker(const std::string& token,const std::string& worker,unsigned thr
             if(message.type!=type || message.task_id!=task)session.reject("unexpected worker control state");
             return message.payload;
         };
-        auto send=[&](const std::string& type,const std::string& task,const Json& payload){std::cout<<session.encode(type,task,payload)<<'\n'<<std::flush;if(!std::cout)session.reject("worker stdout failed");};
+        auto send=[&](const std::string& type,const std::string& task,const Json& payload) {
+#if defined(THUMBGEN_TEST_HOOKS)
+            if(test_worker_message_hook) {
+                auto modified=payload;
+                test_worker_message_hook(type,task,modified);
+                std::cout<<session.encode(type,task,modified)<<'\n'<<std::flush;
+            } else
+#endif
+            std::cout<<session.encode(type,task,payload)<<'\n'<<std::flush;
+            if(!std::cout)session.reject("worker stdout failed");
+        };
         auto hello=receive("hello","");fields(hello,{"identity","threads","parent_pid"});check(hello["identity"]==identity() && number(hello["threads"],256)==threads,"worker hello mismatch");
         check(number(hello["parent_pid"],4294967295ULL)>0,"invalid worker parent pid");
 #ifndef _WIN32
@@ -327,7 +345,7 @@ bool run_isolated(const std::vector<Job>& jobs,const std::string& executable,con
     if(memory>fixed_reserve*1048576)budget=std::make_unique<BudgetQueue>(BudgetLimits{workers,thread_budget,memory,fixed_reserve*1048576});
     struct Task {
         Job job;size_t index;Clock::time_point started=Clock::now(),deadline,queued_at;
-        Json base,result;std::optional<double> estimate_mib,admission_mib;std::string worker_id;
+        Json base,result,planned_automatic_preview;std::optional<double> estimate_mib,admission_mib;std::string worker_id;
         std::vector<std::optional<Json>> ledger;
         struct Owned {std::string id;std::unique_ptr<TemporaryOutput> file;};
         std::map<size_t,Owned> owned;std::set<size_t> reserved;std::optional<SourceStamp> source;
@@ -363,6 +381,10 @@ bool run_isolated(const std::vector<Job>& jobs,const std::string& executable,con
             auto& ledger=task.ledger;auto& owned=task.owned;auto& reserved=task.reserved;auto& source=task.source;
             auto& planned=task.planned;auto& ran=task.ran;auto& admitted=task.admitted;auto& sent=task.sent;auto& queued=task.queued;
             auto& deadline=task.deadline;auto& estimate_mib=task.estimate_mib;auto& worker_id=task.worker_id;auto started=task.started;
+            auto check_automatic_preview=[&](const Json& record) {
+                if(planned && job.options.visualization=="auto")
+                    check(automatic_preview_mapping(record)==task.planned_automatic_preview,"worker automatic preview changed after admission");
+            };
             auto accept_pin=[&](const Json& pin) {
                 if(job.sequence_id.empty()){check(pin.is_null(),"unexpected sequence pin");return;}
                 if(!pin.is_null()) {
@@ -406,6 +428,7 @@ bool run_isolated(const std::vector<Job>& jobs,const std::string& executable,con
                 check(message.task_id==job.id,"worker task id mismatch");const auto& payload=message.payload;
                 if(message.type=="planned") {
                     check(!planned,"duplicate worker plan");fields(payload,{"base","source_stamp","footprint","sequence_pin"});base_check(payload["base"],job);base=payload["base"];planned=true;accept_pin(payload["sequence_pin"]);
+                    if(job.options.visualization=="auto")task.planned_automatic_preview=automatic_preview_mapping(base);
                     Json reply=Json::object();
                     try {
                         try {source=source_stamp(fs::u8path(job.input));}
@@ -509,13 +532,17 @@ bool run_isolated(const std::vector<Job>& jobs,const std::string& executable,con
                 } else if(message.type=="encoded") {
                     check(planned && ran,"encoded output before run");fields(payload,{"output_index","temporary_id","encoded"});auto index=size_t(number(payload["output_index"],job.outputs.size()-1));
                     check(owned.count(index) && payload["temporary_id"]==owned.at(index).id && !ledger[index],"unknown or repeated encoded output");
-                    const auto& encoded=payload["encoded"];fields(encoded,{"base","output"});base_check(encoded["base"],job);base=encoded["base"];
-                    const bool stream_result=base.contains("colour") && base["colour"].value("processing",std::string{})=="integer-linear-stream-v1";
+                    const auto& encoded=payload["encoded"];fields(encoded,{"base","output"});
+                    const auto& encoded_base=encoded["base"];
+                    base_check(encoded_base,job);
+                    check_automatic_preview(encoded_base);
+                    const bool stream_result=encoded_base.contains("colour") && encoded_base["colour"].value("processing",std::string{})=="integer-linear-stream-v1";
                     check(stream_result==task.c2_stream,"worker C2 processing changed after admission");
                     Json output=encoded["output"];check(output.value("path",std::string{})==job.outputs[index].path && output.value("status",std::string{})=="success" &&
                         output.value("format",std::string{})==job.outputs[index].format && output.value("existing_policy",std::string{})==job.outputs[index].existing,"encoded output identity mismatch");
                     output_check(output,job.outputs[index]);
                     check(number(output["width"],job.outputs[index].width)>0 && number(output["height"],job.outputs[index].height)>0,"encoded output dimensions mismatch");
+                    base=encoded_base;
                     Json reply{{"output_index",index}};
                     try {
                         if(cancelled())throw FileFailure("task_cancelled","controller accepted interruption");
@@ -527,11 +554,10 @@ bool run_isolated(const std::vector<Job>& jobs,const std::string& executable,con
                     cleanup(index);channel->send("committed",job.id,reply);
                 } else if(message.type=="result") {
                     check(!queued,"worker returned a result while awaiting admission");
-                    fields(payload,{"record","pin"});result=payload["record"];base_check(result,job);accept_pin(payload["pin"]);
-                    if(planned && job.options.visualization=="auto")
-                        check(result.value("cryptomatte",Json{})==base.value("cryptomatte",Json{}) &&
-                            result.value("deep",Json::object()).value("mapping",Json{})==base.value("deep",Json::object()).value("mapping",Json{}),
-                            "worker automatic preview changed after admission");
+                    fields(payload,{"record","pin"});result=payload["record"];
+                    base_check(result,job);
+                    check_automatic_preview(result);
+                    accept_pin(payload["pin"]);
                     if(result.contains("colour") && result["colour"].contains("processing"))
                         check((result["colour"]["processing"]=="integer-linear-stream-v1")==task.c2_stream,"worker result processing changed after admission");
                     check(result.contains("outputs") && result["outputs"].is_array(),"invalid worker outputs");

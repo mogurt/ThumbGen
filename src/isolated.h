@@ -24,6 +24,8 @@ Json execution_configuration(const std::vector<Job>& jobs,const IsolationOptions
 // the no-progress scan/wait boundary of run_isolated with its shared wakeup,
 // so tests can interleave a notification exactly there. Reset after use.
 void set_test_scan_hook(std::function<void(const std::shared_ptr<ProcessWakeup>&)> hook={});
+// Test-only mutation of a worker message just before it is serialized.
+void set_test_worker_message_hook(std::function<void(const std::string&,const std::string&,Json&)> hook);
 #endif
 // Internal server entry, also used by dedicated fault-injection test workers.
 int serve_worker(const std::string& token,const std::string& worker,unsigned threads,Engine::Observer observer={});

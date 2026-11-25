@@ -1,6 +1,7 @@
 #include "child_process.h"
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <future>
 #include <iostream>
 #include <stdexcept>
@@ -12,6 +13,7 @@
 #endif
 #if defined(THUMBGEN_TEST_HOOKS)
 #include "isolated.h"
+#include <OpenImageIO/imagebuf.h>
 #include <OpenImageIO/imageio.h>
 #include <atomic>
 #include <random>
@@ -78,10 +80,76 @@ static void controller_scan_hook(const std::vector<std::string>& args) {
     require(gap_us.load()<50000,"controller wait did not return promptly after the interleaved notification");
     fs::remove_all(root);
 }
+static void change_preview_mapping(const std::string& type,const std::string& task,Json& message) {
+    if(type=="encoded" && task=="changed-cryptomatte") {
+        message.at("encoded").at("base").at("cryptomatte").at("metadata_key")="cryptomatte/test456";
+        return;
+    }
+    Json* record=nullptr;
+    if(type=="encoded" && task=="changed-encoded")record=&message.at("encoded").at("base");
+    if(type=="result" && task=="changed-result")record=&message.at("record");
+    if(!record)return;
+    // Removing ZBack gives a different but well-formed point-sample mapping.
+    const Json channels={"A","Z"};
+    record->at("deep").at("mapping").at("zback")="";
+    record->at("selection").at("chosen").at("channels")=channels;
+    record->at("selected_channels")=channels;
+}
+static void check_automatic_preview_admission(const std::string& worker,const fs::path& root) {
+    OIIO::ImageSpec spec(1,1,3,OIIO::TypeDesc::FLOAT);
+    spec.deep=true;spec.channelnames={"A","Z","ZBack"};spec.alpha_channel=0;spec.z_channel=1;
+    spec.attribute("compression","zips");
+    OIIO::ImageBuf input(spec);
+    input.set_deep_samples(0,0,0,1);
+    input.set_deep_value(0,0,0,0,0,0.5f);
+    input.set_deep_value(0,0,0,1,0,1.0f);
+    input.set_deep_value(0,0,0,2,0,2.0f);
+    Job job;job.input=(root/"coverage.exr").u8string();job.options.visualization="auto";
+    require(input.write(job.input),input.geterror().c_str());
+    const auto coverage=job.input;
+    OIIO::ImageSpec crypto_spec(1,1,4,OIIO::TypeDesc::FLOAT);
+    crypto_spec.channelnames={"Object00.R","Object00.G","Object00.B","Object00.A"};
+    crypto_spec.attribute("cryptomatte/test123/name","Object");
+    crypto_spec.attribute("cryptomatte/test123/hash","MurmurHash3_32");
+    crypto_spec.attribute("cryptomatte/test123/conversion","uint32_to_float32");
+    OIIO::ImageBuf crypto(crypto_spec);
+    const float ranks[]{0.1f,0.5f,0.0f,0.0f};crypto.setpixel(0,0,ranks);
+    const auto matte=(root/"matte.exr").u8string();
+    require(crypto.write(matte),crypto.geterror().c_str());
+    for(const std::string type:{"encoded","result","cryptomatte"}) {
+        job.id="changed-"+type;
+        job.input=type=="cryptomatte"?matte:coverage;
+        const auto path=root/(type+".png");
+        const std::string previous="existing synthetic output";
+        if(type=="result") {
+            // Force a result without encoding or committing an output.
+            std::ofstream output(path);output<<previous;
+            require(bool(output),"cannot prepare an existing synthetic target");
+        }
+        job.outputs={{path.u8string(),"png",1,1,90}};
+        Json result;
+        run_isolated({job},worker,[&](const Json& value){result=value;});
+        if(type!="result")require(!fs::exists(path),"a mismatched automatic preview published an output");
+        else {
+            std::ifstream output(path);std::string content;std::getline(output,content);
+            require(content==previous,"the existing synthetic output changed");
+        }
+        require((result.at("status")=="failed" && result.at("error").at("code")=="worker_protocol_error" &&
+            result.at("error").at("message").get<std::string>().find("worker automatic preview changed after admission")!=std::string::npos),
+            result.dump().c_str());
+        require(type=="cryptomatte"?result.at("cryptomatte").at("metadata_key")=="cryptomatte/test123":
+            result.at("deep").at("mapping").at("zback")=="ZBack","the approved preview mapping changed");
+    }
+    for(const auto& entry:fs::directory_iterator(root))
+        require(entry.path().filename().u8string().rfind(".thumbgen-tmp-",0)!=0,"mismatched automatic preview left a staging file");
+}
 #endif
 static int test_main(const std::vector<std::string>& args){try {
 #if defined(THUMBGEN_TEST_HOOKS)
-    if(args.size()==5 && args[1]=="--internal-worker")return serve_worker(args[2],args[3],unsigned(std::stoi(args[4])));
+    if(args.size()==5 && args[1]=="--internal-worker") {
+        set_test_worker_message_hook(change_preview_mapping);
+        return serve_worker(args[2],args[3],unsigned(std::stoi(args[4])));
+    }
 #endif
     require(args.size()==2,"notification test requires process helper executable");const auto exe=std::filesystem::absolute(std::filesystem::u8path(args[1])).u8string();
     auto wakeup=std::make_shared<ProcessWakeup>();
@@ -165,6 +233,10 @@ static int test_main(const std::vector<std::string>& args){try {
     for(int i=0;i<50;++i){auto owner=std::make_shared<ProcessWakeup>();ChildProcess child(exe,{"--queue"},{},owner);owner.reset();child.stop();}
 #if defined(THUMBGEN_TEST_HOOKS)
     controller_scan_hook(args);
+    const auto root=fs::temp_directory_path()/("thumbgen-preview-plan-"+std::to_string(Clock::now().time_since_epoch().count()));
+    require(fs::create_directory(root),"cannot create synthetic preview test directory");
+    struct Cleanup {fs::path root;~Cleanup(){std::error_code ec;fs::remove_all(root,ec);}} cleanup{root};
+    check_automatic_preview_admission(fs::absolute(fs::u8path(args[0])).u8string(),root);
 #endif
     std::cout<<"notification: pre-wait, scan races, deadline boundaries, empty wakes, concurrent children, EOF/fault, stop and lifetime passed";
 #if defined(THUMBGEN_TEST_HOOKS)

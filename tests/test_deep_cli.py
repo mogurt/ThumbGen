@@ -160,6 +160,9 @@ class DeepCLI(unittest.TestCase):
                 self.assertEqual(r['colour']['config_basis'],'none')
                 # 1 - (1 - 0.5) * (1 - 0.25), directly encoded as coverage.
                 self.pixels((159,159,159))
+        self.output=self.directory/'overlap-transparent.png'
+        self.auto_opacity('opacity_overlap','--background','transparent')
+        self.pixels((255,255,255,159))
     def test_auto_opacity_windows_and_backgrounds(self):
         for background in ('black','white','transparent'):
             self.output=self.directory/(background+'.png')
@@ -253,6 +256,8 @@ class DeepCLI(unittest.TestCase):
             self.assertEqual(results[i]['error']['code'],'sequence_selection_changed')
             self.assertNotIn(opacity_marker,results[i]['warnings'])
             self.assertTrue(all(not Path(out['path']).exists() for out in jobs[i]['outputs']))
+        self.assertEqual(results[3]['selection']['locked'],pin)
+        self.assertNotIn('chosen',results[3]['selection'])
     def test_auto_opacity_batch_default_reject(self):
         manifest=dict(schema_version=1,defaults=dict(visualization='auto',deep_mode='reject'),
             jobs=[dict(id='reject',input=self.inputs['opacity_points'],outputs=[dict(path=str(self.output))])])

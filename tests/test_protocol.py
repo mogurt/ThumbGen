@@ -176,6 +176,25 @@ class Protocol(unittest.TestCase):
             with self.assertRaises(ValidationError):validator.validate(altered)
         error={'schema_version':1,'type':'error','error':{'code':'invented_code','message':'x'}}
         with self.assertRaises(ValidationError):validator.validate(error)
+    def test_schema_selection_lock_kind_matches_mapping(self):
+        lock_validator=Draft202012Validator({'$defs':schema['$defs'],'$ref':'#/$defs/selection_key'})
+        opacity=dict(part=0,part_name='',kind='deep',group='A',channels=['A','Z'],
+                     deep=dict(policy='deep-opacity-mapping-v1',alpha='A',z='Z',zback=''))
+        colour=dict(part_name='image',kind='colour',group='RGB',channels=['R','G','B'],
+                     deep=dict(policy='deep-mapping-v2',colour=['R','G','B'],alpha=['A']*3,
+                               z='Z',zback='ZBack',shared_alpha=True))
+        flat={key:value for key,value in colour.items() if key!='deep'}
+        grey=dict(colour,kind='grey',group='GRAY',channels=['Y']*3,deep=dict(colour['deep'],colour=['Y']*3))
+        data=dict(flat,kind='data',group='Z',channels=['Z'])
+        for record in (opacity,colour,grey,flat,data):
+            lock_validator.validate(record)
+        for record in (
+            {key:value for key,value in opacity.items() if key!='deep'},
+            dict(opacity,deep=colour['deep']),
+            *(dict(record,deep=opacity['deep']) for record in (colour,grey,data)),
+            dict(data,deep=colour['deep']),
+        ):
+            with self.subTest(record=record),self.assertRaises(ValidationError):lock_validator.validate(record)
     def test_native_classification_records(self):
         cases=['z','normal','normal_part','id','crypto','explicit_data','unknown','grey','lowercase',
                'beauty_z','beauty_normal','beauty_crypto','root_priority','ambiguous','explicit',
