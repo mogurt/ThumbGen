@@ -33,6 +33,8 @@ thumbgen batch --manifest jobs.json --json
 
 `--json` 将 UTF-8 JSON 按行输出到 stdout，诊断文字写到 stderr。每个任务一条 `type: result`，最后一条 `type: summary`。并行时按完成顺序返回，使用 `id` 关联，不要依赖行号。
 
+[EXR 自动选择标记](selection.md#监控自动选择)同时出现在结果的 `warnings` 数组和 stderr 独立行中。统计告警事件时请使用 stderr 中的独立行。
+
 | status | 含义 |
 | --- | --- |
 | success | 转换成功 |

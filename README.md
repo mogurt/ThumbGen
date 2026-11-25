@@ -8,7 +8,7 @@ ThumbGen 为普通图片和复杂 EXR 快速生成缩略图。一次解码输出
 
 为制作管线提供快速、懂 EXR 的预览能力。
 
-`0.1.4` · [Apache-2.0](LICENSE)
+`0.1.5` · [Apache-2.0](LICENSE)
 
 ## 适用场景
 

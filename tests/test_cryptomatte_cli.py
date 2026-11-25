@@ -166,6 +166,7 @@ class Cryptomatte(unittest.TestCase):
             with self.subTest(source=source):
                 result=self.invoke('convert',self.inputs[source],'--visualize','auto','--output',self.output,exit=4)[0]
                 self.assertEqual(result['error']['code'],code)
+                self.assertEqual(result['warnings'],[f'TG_EXR_AUTO_SELECTION_UNRESOLVED error_code={code}'])
                 self.assertFalse(self.output.exists())
     def test_auto_prefers_semantic_object_family_and_combines_parts(self):
         for source,family in [('object_underscore','CRYPTO_OBJECT'),('object_camel','CryptoObject')]:
@@ -176,6 +177,7 @@ class Cryptomatte(unittest.TestCase):
                 chosen=result['selection']['chosen']
                 self.assertEqual(chosen['group'],family)
                 self.assertIn('object family',chosen['reason'])
+                self.assertEqual(result['warnings'],[])
                 self.assertEqual(png(self.output),(2,2,[EXPECTED[0]]*4))
     def test_auto_rejects_ambiguous_or_malformed_object_families(self):
         cases=[('mislabeled_object','ambiguous_channels'),('two_objects','ambiguous_channels'),
